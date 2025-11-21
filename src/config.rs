@@ -29,7 +29,7 @@ impl Config {
             // Merge settings
             if let Some(user_settings_value) = user_config.get("Setting") {
                 // Deserialize to temp settings to merge
-                let mut temp_settings: Settings = serde_json::from_value(user_settings_value.clone())?;
+                let temp_settings: Settings = serde_json::from_value(user_settings_value.clone())?;
                 // This is a basic merge, a more robust merge would iterate and update fields
                 // For now, this overwrites if present in user_settings_value
                 settings = temp_settings;
@@ -38,7 +38,7 @@ impl Config {
             // Merge keymaps
             if let Some(user_keymap_value) = user_config.get("Keymap") {
                 // Deserialize to temp keymaps to merge
-                let mut temp_keymaps: CfgDefaultKeymaps = serde_json::from_value(user_keymap_value.clone())?;
+                let temp_keymaps: CfgDefaultKeymaps = serde_json::from_value(user_keymap_value.clone())?;
                 keymap_user_dict = temp_keymaps;
             }
         } else {

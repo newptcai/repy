@@ -9,7 +9,7 @@ use clap::Parser;
 )]
 pub struct Cli {
     /// Print reading history
-    #[clap(short, long)]
+    #[clap(short = 'r', long)]
     pub history: bool,
 
     /// Dump the content of the ebook
