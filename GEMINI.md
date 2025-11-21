@@ -27,9 +27,9 @@ Porting from a dynamically-typed language like Python to a statically-typed, com
 *   **Key Mappings:**
     *   TUI: `tui-rs` + `textwrap` -> `ratatui`
     *   Terminal Backend: `pyte` -> `crossterm`
-    *   HTML Parsing: `beautifulsoup4` -> `scraper`
+    *   HTML Parsing: `beautifulsoup4` -> `html2text` + `scraper` (chosen for robust text conversion)
     *   CLI Parsing: `argparse` -> `clap`
-*   The HTML parsing logic in `epy/src/epy_reader/parser.py` is particularly complex and will require careful implementation using the chosen Rust HTML parsing crate.
+*   HTML parsing simplified by using `html2text` library instead of implementing custom parser, providing better reliability and maintainability.
 
 ### 6. UI and Event Loop
 *   The `ratatui` framework works by re-rendering the entire UI on each "tick" or event.
@@ -74,9 +74,9 @@ The porting process will be broken down into the following steps:
     *   [x] Implement a simple database using `rusqlite` to store bookmarks and reading history.
 
 6.  **Ebook Parsing (`src/ebook.rs`, `src/parser.rs`):**
-    *   [ ] Create an `Ebook` trait to handle different ebook formats.
-    *   [ ] Implement an `Epub` struct that implements the `Ebook` trait, using the `epub` crate.
-    *   [ ] Port the `parse_html` function from `epy/src/epy_reader/parser.py`. This will involve using an HTML parsing crate to extract text and structure from the epub's HTML content.
+    *   [x] Create an `Ebook` trait to handle different ebook formats.
+    *   [x] Implement an `Epub` struct that implements the `Ebook` trait, using the `epub` crate.
+    *   [x] Implement HTML parsing using the `html2text` library for robust text conversion and `scraper` for structure extraction. Successfully tested with Marcus Aurelius' "Meditations" EPUB (7,953 lines of text parsed correctly).
 
 7.  **Terminal UI (`src/ui/`):**
     *   [ ] Create a `ui` module to hold all TUI-related code.

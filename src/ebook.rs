@@ -1,7 +1,8 @@
-use crate::models::{BookMetadata, TocEntry, TextStructure};
+use crate::models::{BookMetadata, TextStructure, TocEntry};
+use crate::parser::parse_html;
 use eyre::Result;
 use epub::doc::EpubDoc;
-use std::collections::HashMap;
+use std::collections::HashSet;
 
 pub trait Ebook {
     fn path(&self) -> &str;
@@ -13,6 +14,9 @@ pub trait Ebook {
     fn get_raw_text(&mut self, content_id: &str) -> Result<String>;
     fn get_img_bytestr(&mut self, path: &str) -> Result<(String, Vec<u8>)>;
     fn cleanup(&mut self) -> Result<()>;
+
+    fn get_parsed_content(&mut self, content_id: &str, text_width: usize, starting_line: usize) -> Result<TextStructure>;
+    fn get_all_parsed_content(&mut self, text_width: usize) -> Result<Vec<TextStructure>>;
 }
 
 pub struct Epub {
@@ -53,7 +57,7 @@ impl Ebook for Epub {
     }
 
     fn initialize(&mut self) -> Result<()> {
-        let mut doc = EpubDoc::new(&self.path)?;
+        let doc = EpubDoc::new(&self.path)?;
         self.contents = doc.spine.iter().map(|item| item.idref.clone()).collect();
         
         let mut toc_entries = Vec::new();
@@ -103,7 +107,7 @@ impl Ebook for Epub {
         if let Some(ref mut doc) = self.doc {
             if let Some(index) = self.contents.iter().position(|id| id == content_id) {
                 if doc.set_current_chapter(index) {
-                    if let Some((content, _)) = doc.get_current_str().ok() {
+                    if let Some((content, _)) = doc.get_current_str() {
                         return Ok(content);
                     }
                 }
@@ -114,7 +118,10 @@ impl Ebook for Epub {
 
     fn get_img_bytestr(&mut self, path: &str) -> Result<(String, Vec<u8>)> {
         if let Some(ref mut doc) = self.doc {
-            if let Ok((bytes, mime)) = doc.get_resource_by_path(path) {
+            if let Some(bytes) = doc.get_resource_by_path(path) {
+                // For now, assume it's an image and use a generic MIME type
+                // In a real implementation, we'd determine the MIME type from the file extension
+                let mime = "image/jpeg".to_string(); // Default assumption
                 return Ok((mime, bytes));
             }
         }
@@ -124,5 +131,33 @@ impl Ebook for Epub {
     fn cleanup(&mut self) -> Result<()> {
         self.doc = None;
         Ok(())
+    }
+
+    fn get_parsed_content(&mut self, content_id: &str, text_width: usize, starting_line: usize) -> Result<TextStructure> {
+        let raw_html = self.get_raw_text(content_id)?;
+
+        // Collect section IDs from table of contents
+        let section_ids: HashSet<String> = self.toc_entries()
+            .iter()
+            .filter_map(|entry| entry.section.clone())
+            .collect();
+
+        parse_html(&raw_html, Some(text_width), Some(section_ids), starting_line)
+    }
+
+    fn get_all_parsed_content(&mut self, text_width: usize) -> Result<Vec<TextStructure>> {
+        let mut all_content = Vec::new();
+        let mut starting_line = 0;
+
+        // Collect all content IDs first to avoid borrowing issues
+        let content_ids: Vec<String> = self.contents().clone();
+
+        for content_id in content_ids {
+            let parsed_content = self.get_parsed_content(&content_id, text_width, starting_line)?;
+            starting_line += parsed_content.text_lines.len();
+            all_content.push(parsed_content);
+        }
+
+        Ok(all_content)
     }
 }

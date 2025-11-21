@@ -17,7 +17,7 @@ impl Config {
 
         let default_settings = Settings::default();
         let default_keymaps_str = CfgDefaultKeymaps::default();
-        let builtin_keymaps_u16 = CfgBuiltinKeymaps::default();
+        let _builtin_keymaps_u16 = CfgBuiltinKeymaps::default();
 
         let mut settings = default_settings;
         let mut keymap_user_dict = default_keymaps_str;

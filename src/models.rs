@@ -64,7 +64,7 @@ pub struct LettersCount {
     pub cumulative: Vec<usize>,
 }
 
-#[derive(Debug, Clone, PartialEq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct CharPos {
     pub row: u16,
     pub col: u16,
@@ -76,7 +76,7 @@ pub struct TextMark {
     pub end: Option<CharPos>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct TextSpan {
     pub start: CharPos,
     pub n_letters: u16,

@@ -5,7 +5,6 @@ use std::path::PathBuf;
 
 // Re-use the get_app_data_prefix from config.rs
 use crate::config::get_app_data_prefix;
-use crate::ebook;
 
 pub struct State {
     conn: Connection,
