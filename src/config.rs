@@ -96,7 +96,7 @@ impl Config {
     }
 }
 
-fn get_app_data_prefix() -> Result<PathBuf> {
+pub fn get_app_data_prefix() -> Result<PathBuf> {
     // This function corresponds to AppData's prefix logic in Python
     // Will implement this logic properly. For now, a placeholder.
     // It should check XDG_CONFIG_HOME first, then HOME/.config, then HOME.
@@ -106,7 +106,7 @@ fn get_app_data_prefix() -> Result<PathBuf> {
         let path = PathBuf::from(config_home).join("repy");
         return Ok(path);
     } else if let Some(home) = std::env::var_os("HOME") {
-        let path = PathBuf::from(home).join(".config").join("repy");
+        let path = PathBuf::from(home.clone()).join(".config").join("repy");
         if path.exists() {
             return Ok(path);
         } else {

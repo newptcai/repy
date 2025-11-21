@@ -1,10 +1,20 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, PartialEq, Copy)]
-pub enum DoubleSpreadPadding {
-    Left = 10,
-    Middle = 7,
-    Right = 10,
+#[derive(Debug, Clone, PartialEq, Copy, Serialize, Deserialize)]
+pub struct DoubleSpreadPadding {
+    pub left: u16,
+    pub middle: u16,
+    pub right: u16,
+}
+
+impl Default for DoubleSpreadPadding {
+    fn default() -> Self {
+        Self {
+            left: 10,
+            middle: 7,
+            right: 10,
+        }
+    }
 }
 
 pub const VIEWER_PRESET_LIST: &[&str] = &[
@@ -151,10 +161,10 @@ impl Default for CfgBuiltinKeymaps {
             scroll_up: vec![259], // curses.KEY_UP
             scroll_down: vec![258], // curses.KEY_DOWN
             page_up: vec![262, 260], // curses.KEY_PPAGE, curses.KEY_LEFT
-            page_down: vec![263, ' '.into(), 261], // curses.KEY_NPAGE, ord(" "), curses.KEY_RIGHT
+            page_down: vec![263, ' ' as u16, 261], // curses.KEY_NPAGE, ord(" "), curses.KEY_RIGHT
             beginning_of_ch: vec![268], // curses.KEY_HOME
             end_of_ch: vec![360], // curses.KEY_END
-            table_of_contents: vec![9, '\t'.into()], // 9, ord("\t")
+            table_of_contents: vec![9, '\t' as u16], // 9, ord("\t")
             follow: vec![10], // 10
             quit: vec![3, 27, 304], // 3, 27, 304
         }

@@ -7,6 +7,12 @@ pub enum Direction {
     Backward,
 }
 
+impl Default for Direction {
+    fn default() -> Self {
+        Direction::Forward
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct InlineStyle {
     pub row: u16,

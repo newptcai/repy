@@ -1,3 +1,11 @@
+mod cli;
+mod config;
+mod ebook;
+mod models;
+mod settings;
+mod state;
+
+use clap::Parser;
 use crossterm::{
     event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode},
     execute,
@@ -11,7 +19,12 @@ use ratatui::{
 };
 use std::{io, time::{Duration, Instant}};
 
+use crate::cli::Cli;
+
 fn main() -> Result<()> {
+    let cli = Cli::parse();
+    println!("{:?}", cli);
+
     // setup terminal
     enable_raw_mode()?;
     let mut stdout = io::stdout();
