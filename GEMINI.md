@@ -2,6 +2,43 @@
 
 This document outlines the plan for porting the Python-based epub reader `epy` to a Rust-based equivalent, `repy`.
 
+## Key Porting Considerations & Challenges
+
+Porting from a dynamically-typed language like Python to a statically-typed, compiled language like Rust involves more than a direct translation of code. The following points highlight key architectural and idiomatic shifts to consider:
+
+### 1. From Dynamic to Static Typing
+*   **Data Structures:** Python's flexible `dict`s and dynamic objects must be mapped to explicit Rust `struct`s and `enum`s. This requires analyzing the data flow in `epy` to define clear, typed contracts.
+*   **Signaling:** Python patterns like the `NoUpdate` class are used for signaling. In Rust, these should be replaced with idiomatic types like `Option<T>` (to represent presence or absence) and `Result<T, E>` (for operations that can succeed or fail), which provide compile-time safety.
+
+### 2. Error Handling Strategy
+*   The port will move from Python's exception-based error handling (`try...except`) to Rust's `Result`-based model.
+*   Using the `eyre` crate, as planned, is a good choice. It will allow for creating a centralized, context-rich error reporting system that is more ergonomic than manually propagating `Result` types everywhere.
+
+### 3. Object-Oriented to Trait-Based Design
+*   `epy` uses class inheritance for polymorphism (e.g., for different ebook formats or text-to-speech speakers).
+*   The idiomatic Rust approach is to use `trait`s. Defining an `Ebook` trait, for instance, will allow different parsers (for Epub, Mobi, etc.) to be used interchangeably by the application logic.
+
+### 4. State Management and Ownership
+*   This is a primary challenge in Rust TUI applications. The central application `State` needs to be safely accessed and modified by various components (UI, event handler, etc.).
+*   Patterns involving `Rc<RefCell<T>>` will likely be necessary to allow shared, mutable access to state in a single-threaded context, satisfying the borrow checker. An alternative could be a more centralized message-passing architecture where components send events to update a single state owner.
+
+### 5. Dependency Ecosystem Mapping
+*   Each Python dependency from `pyproject.toml` must be mapped to a suitable Rust crate.
+*   **Key Mappings:**
+    *   TUI: `tui-rs` + `textwrap` -> `ratatui`
+    *   Terminal Backend: `pyte` -> `crossterm`
+    *   HTML Parsing: `beautifulsoup4` -> `scraper`
+    *   CLI Parsing: `argparse` -> `clap`
+*   The HTML parsing logic in `epy/src/epy_reader/parser.py` is particularly complex and will require careful implementation using the chosen Rust HTML parsing crate.
+
+### 6. UI and Event Loop
+*   The `ratatui` framework works by re-rendering the entire UI on each "tick" or event.
+*   The core of the application will be a main loop that:
+    1.  Waits for an input event from `crossterm`.
+    2.  Updates the application state based on the event.
+    3.  Draws the entire UI based on the new state.
+*   This is a different model from many other UI paradigms and will be a foundational piece of the architecture.
+
 ## Porting Steps
 
 The porting process will be broken down into the following steps:
