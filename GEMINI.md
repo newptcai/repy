@@ -49,20 +49,20 @@ The porting process will be broken down into the following steps:
     *   [x] Research and add dependencies for epub parsing (`epub` crate seems promising) and HTML parsing (`scraper` or `html5ever`).
 
 2.  **Basic Structure and Error Handling:**
-    *   [ ] Set up the main application entry point in `src/main.rs`.
-    *   [ ] Implement a global error handling solution using `eyre`.
+    *   [x] Set up the main application entry point in `src/main.rs`.
+    *   [x] Implement a global error handling solution using `eyre`.
 
 3.  **Data Models (`src/models.rs`):**
-    *   [ ] Port all data classes from `epy/src/epy_reader/models.py` to Rust structs. This includes:
-        *   `Direction` (as an enum)
-        *   `InlineStyle`
-        *   `Key`
-        *   `LettersCount`
-        *   `NoUpdate` (might be replaced by `Option` or `Result`)
-        *   `ReadingState`
-        *   `SearchData`
-        *   `TextStructure`
-        *   `TocEntry`
+    *   [x] Port all data classes from `epy/src/epy_reader/models.py` to Rust structs. This includes:
+        *   [x] `Direction` (as an enum)
+        *   [x] `InlineStyle`
+        *   [x] `Key` (functionality to be handled by `crossterm`'s native key handling)
+        *   [x] `LettersCount`
+        *   [x] `NoUpdate` (might be replaced by `Option` or `Result`)
+        *   [x] `ReadingState`
+        *   [x] `SearchData`
+        *   [x] `TextStructure`
+        *   [x] `TocEntry`
 
 4.  **Configuration (`src/config.rs`):**
     *   [ ] Port the `Config` class from `epy/src/epy_reader/config.py`.

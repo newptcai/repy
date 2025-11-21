@@ -11,4 +11,5 @@ epub = "2.1.5"
 scraper = "0.24.0"
 clap = { version = "4.5.53", features = ["derive"] }
 rusqlite = "0.37.0"
+chrono = { version = "0.4.42", features = ["serde"] }
 
