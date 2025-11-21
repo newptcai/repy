@@ -4,7 +4,11 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-ratatui = "0.26.1"
-crossterm = "0.27.0"
-eyre = "0.6.8"
+ratatui = "0.30.0-beta.0"
+crossterm = "0.29.0"
+eyre = "0.6.12"
+epub = "2.1.5"
+scraper = "0.24.0"
+clap = { version = "4.5.53", features = ["derive"] }
+rusqlite = "0.37.0"
 

@@ -9,7 +9,7 @@ The porting process will be broken down into the following steps:
 1.  **Project Setup:**
     *   [x] Initialize a new Rust project.
     *   [x] Add core dependencies to `Cargo.toml`: `ratatui`, `crossterm`, `eyre`.
-    *   [ ] Research and add dependencies for epub parsing (`epub` crate seems promising) and HTML parsing (`scraper` or `html5ever`).
+    *   [x] Research and add dependencies for epub parsing (`epub` crate seems promising) and HTML parsing (`scraper` or `html5ever`).
 
 2.  **Basic Structure and Error Handling:**
     *   [ ] Set up the main application entry point in `src/main.rs`.
