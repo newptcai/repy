@@ -65,9 +65,9 @@ The porting process will be broken down into the following steps:
         *   [x] `TocEntry`
 
 4.  **Configuration (`src/config.rs`):**
-    *   [ ] Port the `Config` class from `epy/src/epy_reader/config.py`.
-    *   [ ] Port the settings from `epy/src/epy_reader/settings.py`.
-    *   [ ] Implement loading/saving of configuration from/to a file (e.g., TOML or JSON).
+    *   [x] Port the `Config` class from `epy/src/epy_reader/config.py`.
+    *   [x] Port the settings from `epy/src/epy_reader/settings.py`.
+    *   [x] Implement loading/saving of configuration from/to a file (e.g., TOML or JSON).
 
 5.  **Application State (`src/state.rs`):**
     *   [ ] Port the `State` class from `epy/src/epy_reader/state.py`.
