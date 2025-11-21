@@ -70,8 +70,8 @@ The porting process will be broken down into the following steps:
     *   [x] Implement loading/saving of configuration from/to a file (e.g., TOML or JSON).
 
 5.  **Application State (`src/state.rs`):**
-    *   [ ] Port the `State` class from `epy/src/epy_reader/state.py`.
-    *   [ ] Implement a simple database using `rusqlite` to store bookmarks and reading history.
+    *   [x] Port the `State` class from `epy/src/epy_reader/state.py`.
+    *   [x] Implement a simple database using `rusqlite` to store bookmarks and reading history.
 
 6.  **Ebook Parsing (`src/ebook.rs`, `src/parser.rs`):**
     *   [ ] Create an `Ebook` trait to handle different ebook formats.
@@ -95,7 +95,7 @@ The porting process will be broken down into the following steps:
         *   [ ] Search input and results
 
 8.  **Command-Line Interface (`src/cli.rs`):**
-    *   [ ] Port the argument parsing logic from `epy/src/epy_reader/cli.py` using the `clap` crate.
+    *   [x] Port the argument parsing logic from `epy/src/epy_reader/cli.py` using the `clap` crate.
     *   [ ] Handle starting the TUI or dumping book content based on arguments.
 
 9.  **Utilities (`src/utils.rs`):**
