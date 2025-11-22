@@ -1,14 +1,12 @@
 use crate::models::{LibraryItem, ReadingState};
 use eyre::Result;
 use rusqlite::{Connection, params};
-use std::path::PathBuf;
 
 // Re-use the get_app_data_prefix from config.rs
 use crate::config::get_app_data_prefix;
 
 pub struct State {
     conn: Connection,
-    filepath: PathBuf,
 }
 
 impl State {
@@ -27,7 +25,7 @@ impl State {
             Self::init_db(&conn)?;
         }
 
-        Ok(Self { conn, filepath })
+        Ok(Self { conn })
     }
 
     fn init_db(conn: &Connection) -> Result<()> {
@@ -133,7 +131,13 @@ impl State {
 
                 Ok(reading_state) => Ok(reading_state),
 
-                Err(rusqlite::Error::QueryReturnedNoRows) => Ok(ReadingState::default()),
+                Err(rusqlite::Error::QueryReturnedNoRows) => Ok(ReadingState {
+                    content_index: 0,
+                    textwidth: 80,
+                    row: 0,
+                    rel_pctg: None,
+                    section: None,
+                }),
 
                 Err(e) => Err(e.into()),
 
@@ -292,4 +296,566 @@ impl State {
             Ok(())
 
         }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ebook::Ebook;
+    use crate::models::{BookMetadata, TocEntry, TextStructure};
+    use tempfile::TempDir;
+
+    // Mock Ebook implementation for testing
+    #[derive(Debug)]
+    struct MockEbook {
+        path_str: String,
+        metadata: BookMetadata,
+        contents: Vec<String>,
+        toc_entries: Vec<TocEntry>,
+    }
+
+    impl MockEbook {
+        fn new(path: &str, title: &str, author: &str) -> Self {
+            Self {
+                path_str: path.to_string(),
+                metadata: BookMetadata {
+                    title: Some(title.to_string()),
+                    creator: Some(author.to_string()),
+                    language: Some("en".to_string()),
+                    publisher: Some("Test Publisher".to_string()),
+                    identifier: Some("test-id".to_string()),
+                    ..Default::default()
+                },
+                contents: vec!["chapter1".to_string(), "chapter2".to_string()],
+                toc_entries: vec![
+                    TocEntry {
+                        label: "Chapter 1".to_string(),
+                        content_index: 0,
+                        section: Some("chapter1".to_string()),
+                    },
+                    TocEntry {
+                        label: "Chapter 2".to_string(),
+                        content_index: 1,
+                        section: Some("chapter2".to_string()),
+                    },
+                ],
+            }
+        }
+    }
+
+    impl Ebook for MockEbook {
+        fn path(&self) -> &str {
+            &self.path_str
+        }
+
+        fn contents(&self) -> &Vec<String> {
+            &self.contents
+        }
+
+        fn toc_entries(&self) -> &Vec<TocEntry> {
+            &self.toc_entries
+        }
+
+        fn get_meta(&self) -> &BookMetadata {
+            &self.metadata
+        }
+
+        fn initialize(&mut self) -> Result<()> {
+            // No initialization needed for mock
+            Ok(())
+        }
+
+        fn get_raw_text(&mut self, _content_id: &str) -> Result<String> {
+            Ok("Mock text content for testing purposes.".to_string())
+        }
+
+        fn get_img_bytestr(&mut self, _path: &str) -> Result<(String, Vec<u8>)> {
+            Ok(("image/jpeg".to_string(), vec![0xFF, 0xD8, 0xFF])) // Mock JPEG header
+        }
+
+        fn cleanup(&mut self) -> Result<()> {
+            // No cleanup needed for mock
+            Ok(())
+        }
+
+        fn get_parsed_content(&mut self, _content_id: &str, _text_width: usize, _starting_line: usize) -> Result<TextStructure> {
+            Ok(TextStructure::default())
+        }
+
+        fn get_all_parsed_content(&mut self, _text_width: usize) -> Result<Vec<TextStructure>> {
+            Ok(vec![TextStructure::default()])
+        }
+    }
+
+    fn setup_test_state() -> (State, TempDir) {
+        let temp_dir = TempDir::new().unwrap();
+        let db_path = temp_dir.path().join("test_states.db");
+
+        // Create a test state by manually opening a connection
+        let conn = Connection::open(&db_path).unwrap();
+
+        // Initialize the database
+        conn.execute_batch(
+            "
+            PRAGMA foreign_keys = ON;
+
+            CREATE TABLE IF NOT EXISTS reading_states (
+                filepath TEXT PRIMARY KEY,
+                content_index INTEGER,
+                textwidth INTEGER,
+                row INTEGER,
+                rel_pctg REAL
+            );
+
+            CREATE TABLE IF NOT EXISTS library (
+                last_read DATETIME DEFAULT (datetime('now')),
+                filepath TEXT PRIMARY KEY,
+                title TEXT,
+                author TEXT,
+                reading_progress REAL,
+                FOREIGN KEY (filepath) REFERENCES reading_states(filepath)
+                ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS bookmarks (
+                id TEXT PRIMARY KEY,
+                filepath TEXT,
+                name TEXT,
+                content_index INTEGER,
+                textwidth INTEGER,
+                row INTEGER,
+                rel_pctg REAL,
+                FOREIGN KEY (filepath) REFERENCES reading_states(filepath)
+                ON DELETE CASCADE
+            );
+            ",
+        ).unwrap();
+
+        let state = State {
+            conn,
+        };
+
+        (state, temp_dir)
+    }
+
+    #[test]
+    fn test_state_database_initialization() {
+        let temp_dir = TempDir::new().unwrap();
+        let db_path = temp_dir.path().join("test_init.db");
+
+        // Ensure database doesn't exist initially
+        assert!(!db_path.exists());
+
+        // Create state (should initialize database)
+        let conn = Connection::open(&db_path).unwrap();
+        State::init_db(&conn).unwrap();
+
+        // Verify database was created
+        assert!(db_path.exists());
+
+        // Verify tables exist
+        let mut stmt = conn.prepare("SELECT name FROM sqlite_master WHERE type='table'").unwrap();
+        let tables: Vec<String> = stmt.query_map([], |row| row.get(0)).unwrap()
+            .map(|r| r.unwrap())
+            .collect();
+
+        assert!(tables.contains(&"reading_states".to_string()));
+        assert!(tables.contains(&"library".to_string()));
+        assert!(tables.contains(&"bookmarks".to_string()));
+
+        // Verify foreign keys are enabled
+        let mut stmt = conn.prepare("PRAGMA foreign_keys").unwrap();
+        let foreign_keys: i32 = stmt.query_row([], |row| row.get(0)).unwrap();
+        assert_eq!(foreign_keys, 1);
+    }
+
+    #[test]
+    fn test_get_from_history_empty() {
+        let (state, _temp_dir) = setup_test_state();
+        let history = state.get_from_history().unwrap();
+        assert!(history.is_empty());
+    }
+
+    #[test]
+    fn test_library_management() {
+        let (state, _temp_dir) = setup_test_state();
+
+        let ebook1 = MockEbook::new("/path/to/book1.epub", "Book One", "Author One");
+        let ebook2 = MockEbook::new("/path/to/book2.epub", "Book Two", "Author Two");
+
+        // Add books to library (must create reading states first due to foreign key constraint)
+        let default_state = ReadingState {
+            content_index: 0,
+            textwidth: 80,
+            row: 0,
+            rel_pctg: None,
+            section: None,
+        };
+        state.set_last_reading_state(&ebook1, &default_state).unwrap();
+        state.set_last_reading_state(&ebook2, &default_state).unwrap();
+        state.update_library(&ebook1, Some(0.25)).unwrap();
+
+        // Small delay to ensure different timestamps (SQLite datetime('now') may be the same)
+        std::thread::sleep(std::time::Duration::from_millis(10));
+
+        state.update_library(&ebook2, Some(0.75)).unwrap();
+
+        // Test get_from_history
+        let history = state.get_from_history().unwrap();
+        assert_eq!(history.len(), 2);
+
+        // Both books should be in the history (order may vary due to timestamp resolution)
+        let book2_found = history.iter().any(|item|
+            item.filepath == "/path/to/book2.epub" &&
+            item.title == Some("Book Two".to_string()) &&
+            item.author == Some("Author Two".to_string()) &&
+            item.reading_progress == Some(0.75)
+        );
+        let book1_found = history.iter().any(|item|
+            item.filepath == "/path/to/book1.epub" &&
+            item.title == Some("Book One".to_string()) &&
+            item.author == Some("Author One".to_string()) &&
+            item.reading_progress == Some(0.25)
+        );
+
+        assert!(book2_found, "Book 2 should be found in history");
+        assert!(book1_found, "Book 1 should be found in history");
+
+        // Test get_last_read (should be one of our books)
+        let last_read = state.get_last_read().unwrap();
+        assert!(last_read.is_some(), "Should have a last read book");
+        assert!(last_read.unwrap().contains("book"), "Should be one of our test books");
+
+        // Test delete_fromlibrary
+        state.delete_from_library("/path/to/book1.epub").unwrap();
+        let history = state.get_from_history().unwrap();
+        assert_eq!(history.len(), 1);
+        assert!(history[0].filepath.contains("book2"), "Should be book 2 remaining");
+    }
+
+    #[test]
+    fn test_reading_state_management() {
+        let (state, _temp_dir) = setup_test_state();
+        let ebook = MockEbook::new("/path/to/test.epub", "Test Book", "Test Author");
+
+        // Test getting reading state for non-existent book
+        let reading_state = state.get_last_reading_state(&ebook).unwrap();
+        assert_eq!(reading_state.content_index, 0);
+        assert_eq!(reading_state.textwidth, 80);
+        assert_eq!(reading_state.row, 0);
+        assert_eq!(reading_state.rel_pctg, None);
+
+        // Test setting reading state
+        let new_state = ReadingState {
+            content_index: 5,
+            textwidth: 100,
+            row: 42,
+            rel_pctg: Some(0.678),
+            section: None,
+        };
+        state.set_last_reading_state(&ebook, &new_state).unwrap();
+
+        // Test retrieving reading state
+        let retrieved_state = state.get_last_reading_state(&ebook).unwrap();
+        assert_eq!(retrieved_state.content_index, 5);
+        assert_eq!(retrieved_state.textwidth, 100);
+        assert_eq!(retrieved_state.row, 42);
+        assert_eq!(retrieved_state.rel_pctg, Some(0.678));
+        assert_eq!(retrieved_state.section, None);
+
+        // Test updating reading state
+        let updated_state = ReadingState {
+            content_index: 10,
+            textwidth: 120,
+            row: 100,
+            rel_pctg: Some(0.890),
+            section: None,
+        };
+        state.set_last_reading_state(&ebook, &updated_state).unwrap();
+
+        let final_state = state.get_last_reading_state(&ebook).unwrap();
+        assert_eq!(final_state.content_index, 10);
+        assert_eq!(final_state.textwidth, 120);
+        assert_eq!(final_state.row, 100);
+        assert_eq!(final_state.rel_pctg, Some(0.890));
+    }
+
+    #[test]
+    fn test_bookmark_management() {
+        let (state, _temp_dir) = setup_test_state();
+        let ebook = MockEbook::new("/path/to/test.epub", "Test Book", "Test Author");
+
+        // Test getting bookmarks for non-existent book
+        let bookmarks = state.get_bookmarks(&ebook).unwrap();
+        assert!(bookmarks.is_empty());
+
+        // Must create reading state first due to foreign key constraint
+        let initial_state = ReadingState {
+            content_index: 0,
+            textwidth: 80,
+            row: 0,
+            rel_pctg: None,
+            section: None,
+        };
+        state.set_last_reading_state(&ebook, &initial_state).unwrap();
+
+        // Add some bookmarks
+        let state1 = ReadingState {
+            content_index: 2,
+            textwidth: 80,
+            row: 15,
+            rel_pctg: Some(0.2),
+            section: None,
+        };
+        let state2 = ReadingState {
+            content_index: 5,
+            textwidth: 80,
+            row: 42,
+            rel_pctg: Some(0.5),
+            section: None,
+        };
+
+        state.insert_bookmark(&ebook, "Chapter 1", &state1).unwrap();
+        state.insert_bookmark(&ebook, "Chapter 2", &state2).unwrap();
+
+        // Test getting bookmarks
+        let bookmarks = state.get_bookmarks(&ebook).unwrap();
+        assert_eq!(bookmarks.len(), 2);
+
+        // Find specific bookmarks
+        let chapter1_bookmark = bookmarks.iter().find(|(name, _)| name == "Chapter 1");
+        let chapter2_bookmark = bookmarks.iter().find(|(name, _)| name == "Chapter 2");
+
+        assert!(chapter1_bookmark.is_some());
+        assert!(chapter2_bookmark.is_some());
+
+        let (_, state1_retrieved) = chapter1_bookmark.unwrap();
+        assert_eq!(state1_retrieved.content_index, 2);
+        assert_eq!(state1_retrieved.row, 15);
+        assert_eq!(state1_retrieved.rel_pctg, Some(0.2));
+
+        let (_, state2_retrieved) = chapter2_bookmark.unwrap();
+        assert_eq!(state2_retrieved.content_index, 5);
+        assert_eq!(state2_retrieved.row, 42);
+        assert_eq!(state2_retrieved.rel_pctg, Some(0.5));
+
+        // Test deleting bookmark
+        state.delete_bookmark(&ebook, "Chapter 1").unwrap();
+        let bookmarks = state.get_bookmarks(&ebook).unwrap();
+        assert_eq!(bookmarks.len(), 1);
+        assert_eq!(bookmarks[0].0, "Chapter 2");
+    }
+
+    #[test]
+    fn test_bookmark_id_generation() {
+        let (state, _temp_dir) = setup_test_state();
+        let ebook1 = MockEbook::new("/path/to/test1.epub", "Test Book 1", "Test Author");
+        let ebook2 = MockEbook::new("/path/to/test2.epub", "Test Book 2", "Test Author");
+
+        let reading_state = ReadingState {
+            content_index: 1,
+            textwidth: 80,
+            row: 10,
+            rel_pctg: None,
+            section: None,
+        };
+
+        // Insert bookmarks with same name but different books
+        // Must create reading states first due to foreign key constraint
+        let default_state = ReadingState {
+            content_index: 0,
+            textwidth: 80,
+            row: 0,
+            rel_pctg: None,
+            section: None,
+        };
+        state.set_last_reading_state(&ebook1, &default_state).unwrap();
+        state.set_last_reading_state(&ebook2, &default_state).unwrap();
+        state.insert_bookmark(&ebook1, "Important", &reading_state).unwrap();
+        state.insert_bookmark(&ebook2, "Important", &reading_state).unwrap();
+
+        let bookmarks1 = state.get_bookmarks(&ebook1).unwrap();
+        let bookmarks2 = state.get_bookmarks(&ebook2).unwrap();
+
+        assert_eq!(bookmarks1.len(), 1);
+        assert_eq!(bookmarks2.len(), 1);
+
+        // The bookmark names should be the same but IDs different (due to different file paths)
+        assert_eq!(bookmarks1[0].0, "Important");
+        assert_eq!(bookmarks2[0].0, "Important");
+
+        // Verify different books have different bookmarks
+        let state1 = &bookmarks1[0].1;
+        let state2 = &bookmarks2[0].1;
+        assert_eq!(state1.content_index, state2.content_index); // Same reading state
+    }
+
+    #[test]
+    fn test_foreign_key_constraints() {
+        let (state, _temp_dir) = setup_test_state();
+        let ebook = MockEbook::new("/path/to/test.epub", "Test Book", "Test Author");
+
+        // Add a reading state
+        let reading_state = ReadingState {
+            content_index: 1,
+            textwidth: 80,
+            row: 10,
+            rel_pctg: Some(0.1),
+            section: None,
+        };
+        state.set_last_reading_state(&ebook, &reading_state).unwrap();
+
+        // Add to library
+        state.update_library(&ebook, Some(0.1)).unwrap();
+
+        // Add bookmark
+        state.insert_bookmark(&ebook, "Test Bookmark", &reading_state).unwrap();
+
+        // Verify everything exists
+        let history = state.get_from_history().unwrap();
+        assert_eq!(history.len(), 1);
+
+        let bookmarks = state.get_bookmarks(&ebook).unwrap();
+        assert_eq!(bookmarks.len(), 1);
+
+        // Delete from reading states (should cascade delete from library and bookmarks)
+        state.conn.execute("DELETE FROM reading_states WHERE filepath=?", params![ebook.path()]).unwrap();
+
+        // Verify cascade deletion worked
+        let history = state.get_from_history().unwrap();
+        assert_eq!(history.len(), 0); // Library entry should be deleted
+
+        let bookmarks = state.get_bookmarks(&ebook).unwrap();
+        assert_eq!(bookmarks.len(), 0); // Bookmarks should be deleted
+    }
+
+    #[test]
+    fn test_error_handling() {
+        let (state, _temp_dir) = setup_test_state();
+
+        // Test operations with non-existent paths (should not panic)
+        let fake_ebook = MockEbook::new("/nonexistent/path.epub", "Fake Book", "Fake Author");
+
+        // Getting reading state for non-existent book should return default
+        let reading_state = state.get_last_reading_state(&fake_ebook).unwrap();
+        assert_eq!(reading_state.content_index, 0);
+
+        // Getting bookmarks for non-existent book should return empty
+        let bookmarks = state.get_bookmarks(&fake_ebook).unwrap();
+        assert!(bookmarks.is_empty());
+
+        // Deleting non-existent bookmark should not error
+        let result = state.delete_bookmark(&fake_ebook, "Non-existent bookmark");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_update_library_replace() {
+        let (state, _temp_dir) = setup_test_state();
+        let ebook = MockEbook::new("/path/to/test.epub", "Test Book", "Test Author");
+
+        // Must create reading state first due to foreign key constraint
+        let default_state = ReadingState {
+            content_index: 0,
+            textwidth: 80,
+            row: 0,
+            rel_pctg: None,
+            section: None,
+        };
+        state.set_last_reading_state(&ebook, &default_state).unwrap();
+
+        // Initial update
+        state.update_library(&ebook, Some(0.25)).unwrap();
+
+        // Should replace existing entry
+        state.update_library(&ebook, Some(0.75)).unwrap();
+
+        let history = state.get_from_history().unwrap();
+        assert_eq!(history.len(), 1);
+        assert_eq!(history[0].reading_progress, Some(0.75));
+
+        // Test with None reading progress
+        state.update_library(&ebook, None).unwrap();
+
+        let history = state.get_from_history().unwrap();
+        assert_eq!(history[0].reading_progress, None);
+    }
+
+    #[test]
+    fn test_reading_state_replace() {
+        let (state, _temp_dir) = setup_test_state();
+        let ebook = MockEbook::new("/path/to/test.epub", "Test Book", "Test Author");
+
+        // Set initial reading state
+        let state1 = ReadingState {
+            content_index: 1,
+            textwidth: 80,
+            row: 10,
+            rel_pctg: Some(0.1),
+            section: None,
+        };
+        state.set_last_reading_state(&ebook, &state1).unwrap();
+
+        // Replace with new state
+        let state2 = ReadingState {
+            content_index: 5,
+            textwidth: 100,
+            row: 50,
+            rel_pctg: Some(0.5),
+            section: None,
+        };
+        state.set_last_reading_state(&ebook, &state2).unwrap();
+
+        // Verify replacement
+        let final_state = state.get_last_reading_state(&ebook).unwrap();
+        assert_eq!(final_state.content_index, 5);
+        assert_eq!(final_state.textwidth, 100);
+        assert_eq!(final_state.row, 50);
+        assert_eq!(final_state.rel_pctg, Some(0.5));
+    }
+
+    #[test]
+    fn test_multiple_ebooks_isolation() {
+        let (state, _temp_dir) = setup_test_state();
+
+        let ebook1 = MockEbook::new("/path/to/book1.epub", "Book 1", "Author 1");
+        let ebook2 = MockEbook::new("/path/to/book2.epub", "Book 2", "Author 2");
+        let ebook3 = MockEbook::new("/path/to/book3.epub", "Book 3", "Author 3");
+
+        // Add different reading states for each book
+        let state1 = ReadingState { content_index: 1, textwidth: 80, row: 10, rel_pctg: Some(0.1), section: None };
+        let state2 = ReadingState { content_index: 2, textwidth: 80, row: 20, rel_pctg: Some(0.2), section: None };
+        let state3 = ReadingState { content_index: 3, textwidth: 80, row: 30, rel_pctg: Some(0.3), section: None };
+
+        state.set_last_reading_state(&ebook1, &state1).unwrap();
+        state.set_last_reading_state(&ebook2, &state2).unwrap();
+        state.set_last_reading_state(&ebook3, &state3).unwrap();
+
+        // Verify reading states are isolated
+        let retrieved1 = state.get_last_reading_state(&ebook1).unwrap();
+        let retrieved2 = state.get_last_reading_state(&ebook2).unwrap();
+        let retrieved3 = state.get_last_reading_state(&ebook3).unwrap();
+
+        assert_eq!(retrieved1.content_index, 1);
+        assert_eq!(retrieved2.content_index, 2);
+        assert_eq!(retrieved3.content_index, 3);
+
+        // Add bookmarks to each book
+        state.insert_bookmark(&ebook1, "Bookmark 1", &state1).unwrap();
+        state.insert_bookmark(&ebook2, "Bookmark 2", &state2).unwrap();
+        state.insert_bookmark(&ebook3, "Bookmark 3", &state3).unwrap();
+
+        // Verify bookmarks are isolated
+        let bookmarks1 = state.get_bookmarks(&ebook1).unwrap();
+        let bookmarks2 = state.get_bookmarks(&ebook2).unwrap();
+        let bookmarks3 = state.get_bookmarks(&ebook3).unwrap();
+
+        assert_eq!(bookmarks1.len(), 1);
+        assert_eq!(bookmarks2.len(), 1);
+        assert_eq!(bookmarks3.len(), 1);
+
+        assert_eq!(bookmarks1[0].0, "Bookmark 1");
+        assert_eq!(bookmarks2[0].0, "Bookmark 2");
+        assert_eq!(bookmarks3[0].0, "Bookmark 3");
+    }
 }

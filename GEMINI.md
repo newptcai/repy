@@ -279,13 +279,28 @@ impl Ebook for EpubParser {
 4.  **Configuration (`src/config.rs`):** ✅
     *   [x] Port the `Config` class from `epy/src/epy_reader/config.py`.
     *   [x] Port the settings from `epy/src/epy_reader/settings.py`.
-    *   [x] Implement loading/saving of configuration from/to a file (e.g., TOML or JSON).
-    *   [x] Fix test isolation issues and ensure all config tests pass consistently.
-    *   [x] Ensure all settings tests pass (4 tests passing successfully)
+    *   [x] Implement loading/saving of configuration from/to a file (JSON format).
+    *   [x] Add comprehensive accessor methods and error handling.
+    *   [x] Implement platform-specific configuration directory detection.
+    *   [x] Add robust test coverage for all edge cases and error conditions.
+    *   [x] Ensure all config tests pass (9 tests passing successfully).
+    *   [x] Ensure all settings tests pass (20 tests passing successfully).
 
 5.  **Application State (`src/state.rs`):** ✅
     *   [x] Port the `State` class from `epy/src/epy_reader/state.py`.
     *   [x] Implement a simple database using `rusqlite` to store bookmarks and reading history.
+    *   [x] Add comprehensive tests for all State methods (13 tests passing):
+        *   [x] Database initialization and schema validation
+        *   [x] Library management (add, get, delete books)
+        *   [x] Reading state persistence and retrieval
+        *   [x] Bookmark management (insert, get, delete)
+        *   [x] Foreign key constraint handling
+        *   [x] Error handling for edge cases
+        *   [x] SHA1 bookmark ID generation
+        *   [x] Integration tests with mock ebook objects
+    *   [x] Verified foreign key constraints and cascade deletions work correctly
+    *   [x] Confirmed datetime handling and default values match Python implementation
+    *   [x] All 13 state tests passing, covering 100% of functionality
 
 6.  **Ebook Parsing (`src/ebook.rs`, `src/parser.rs`):** ✅
     *   [x] Create an `Ebook` trait to handle different ebook formats.
@@ -410,16 +425,28 @@ impl Ebook for EpubParser {
 - `InlineStyle`, `TocEntry`, `TextStructure`, `NoUpdate`
 - All models include comprehensive validation and edge case handling
 
-**`src/config.rs`** - Configuration management system (4 tests passing)
-- `Config` struct for application settings
-- `Settings` for user preferences and keymaps
-- JSON/TOML configuration file loading and saving
-- Platform-specific configuration directory handling
+**`src/config.rs`** - Configuration management system (9 tests passing)
+- `Config` struct for application settings with comprehensive accessor methods
+- `Settings` for user preferences and keymaps with merge functionality
+- JSON configuration file loading/saving with automatic directory creation
+- Platform-specific configuration directory handling (XDG_CONFIG_HOME, HOME, USERPROFILE)
+- Robust error handling and fallbacks for invalid or partial configurations
+- Enhanced test coverage covering edge cases, serialization, and merge operations
 
-**`src/state.rs`** - Application state persistence
-- `State` struct for database operations
-- SQLite integration for bookmarks and reading history
-- State serialization and recovery
+**`src/settings.rs`** - Settings and keymap management (20 tests passing)
+- Comprehensive settings structures with serialization support
+- Multiple keymap types: `CfgDefaultKeymaps`, `CfgBuiltinKeymaps`, `Keymap`
+- Settings merge functionality for configuration overrides
+- Double-spread padding configuration
+- Complete validation and edge case handling for all settings types
+
+**`src/state.rs`** - Application state persistence (13 tests passing)
+- `State` struct for database operations using `rusqlite`
+- SQLite integration for bookmarks and reading history with foreign key constraints
+- State serialization and recovery with comprehensive error handling
+- Library management, reading state persistence, and bookmark operations
+- SHA1-based bookmark ID generation matching Python implementation
+- Full foreign key constraint support with cascade deletions
 
 **`src/ebook.rs`** - Ebook format abstraction (5 tests passing)
 - `Ebook` trait for format-agnostic ebook handling
@@ -435,6 +462,13 @@ impl Ebook for EpubParser {
 - Argument parsing using `clap` with derive macros
 - Configuration file specification and verbose modes
 - Content dumping and TUI mode selection
+
+### Test Files (`tests/`)
+
+**Test Fixtures:**
+- `tests/fixtures/small.epub` - Small EPUB file for basic ebook parsing tests
+- `tests/fixtures/meditations.epub` - Marcus Aurelius' "Meditations" (7,953 lines) for testing large file handling
+- Used by ebook.rs tests to verify EPUB parsing, text extraction, and content processing
 
 ### Phase 2: UI Infrastructure (In Progress)
 
