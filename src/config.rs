@@ -1,7 +1,7 @@
-use crate::settings::{Settings, Keymap, CfgDefaultKeymaps, CfgBuiltinKeymaps};
+use crate::settings::{Settings, Keymap, CfgDefaultKeymaps};
 use eyre::Result;
 use std::{fs, path::PathBuf};
-use serde_json; // Needed for serde_json::from_value and serde_json::json!
+use serde_json;
 
 pub struct Config {
     pub settings: Settings,
@@ -15,31 +15,66 @@ impl Config {
         let prefix = get_app_data_prefix()?;
         let filepath = prefix.join("configuration.json");
 
-        let default_settings = Settings::default();
-        let default_keymaps_str = CfgDefaultKeymaps::default();
-        let _builtin_keymaps_u16 = CfgBuiltinKeymaps::default();
-
-        let mut settings = default_settings;
-        let mut keymap_user_dict = default_keymaps_str;
+        let mut settings = Settings::default();
+        let mut keymap_user_dict = CfgDefaultKeymaps::default();
 
         if filepath.exists() {
             let config_str = fs::read_to_string(&filepath)?;
-            let user_config: serde_json::Value = serde_json::from_str(&config_str)?;
+            if let Ok(user_config) = serde_json::from_str::<serde_json::Value>(&config_str) {
+                if let Some(user_settings_value) = user_config.get("Setting") {
+                    if let serde_json::Value::Object(user_settings_map) = user_settings_value {
+                        if let Some(val) = user_settings_map.get("default_viewer").and_then(|v| v.as_str()) { settings.default_viewer = val.to_string(); }
+                        if let Some(val) = user_settings_map.get("dictionary_client").and_then(|v| v.as_str()) { settings.dictionary_client = val.to_string(); }
+                        if let Some(val) = user_settings_map.get("show_progress_indicator").and_then(|v| v.as_bool()) { settings.show_progress_indicator = val; }
+                        if let Some(val) = user_settings_map.get("page_scroll_animation").and_then(|v| v.as_bool()) { settings.page_scroll_animation = val; }
+                        if let Some(val) = user_settings_map.get("mouse_support").and_then(|v| v.as_bool()) { settings.mouse_support = val; }
+                        if let Some(val) = user_settings_map.get("start_with_double_spread").and_then(|v| v.as_bool()) { settings.start_with_double_spread = val; }
+                        if let Some(val) = user_settings_map.get("default_color_fg").and_then(|v| v.as_i64()) { settings.default_color_fg = val as i16; }
+                        if let Some(val) = user_settings_map.get("default_color_bg").and_then(|v| v.as_i64()) { settings.default_color_bg = val as i16; }
+                        if let Some(val) = user_settings_map.get("dark_color_fg").and_then(|v| v.as_i64()) { settings.dark_color_fg = val as i16; }
+                        if let Some(val) = user_settings_map.get("dark_color_bg").and_then(|v| v.as_i64()) { settings.dark_color_bg = val as i16; }
+                        if let Some(val) = user_settings_map.get("light_color_fg").and_then(|v| v.as_i64()) { settings.light_color_fg = val as i16; }
+                        if let Some(val) = user_settings_map.get("light_color_bg").and_then(|v| v.as_i64()) { settings.light_color_bg = val as i16; }
+                        if let Some(val) = user_settings_map.get("seamless_between_chapters").and_then(|v| v.as_bool()) { settings.seamless_between_chapters = val; }
+                        if let Some(val) = user_settings_map.get("preferred_tts_engine").and_then(|v| v.as_str()) { settings.preferred_tts_engine = Some(val.to_string()); }
+                        if let Some(val) = user_settings_map.get("tts_engine_args").and_then(|v| v.as_array()) {
+                            settings.tts_engine_args = val.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect();
+                        }
+                    }
+                }
 
-            // Merge settings
-            if let Some(user_settings_value) = user_config.get("Setting") {
-                // Deserialize to temp settings to merge
-                let temp_settings: Settings = serde_json::from_value(user_settings_value.clone())?;
-                // This is a basic merge, a more robust merge would iterate and update fields
-                // For now, this overwrites if present in user_settings_value
-                settings = temp_settings;
-            }
-
-            // Merge keymaps
-            if let Some(user_keymap_value) = user_config.get("Keymap") {
-                // Deserialize to temp keymaps to merge
-                let temp_keymaps: CfgDefaultKeymaps = serde_json::from_value(user_keymap_value.clone())?;
-                keymap_user_dict = temp_keymaps;
+                if let Some(user_keymap_value) = user_config.get("Keymap") {
+                    if let serde_json::Value::Object(user_keymap_map) = user_keymap_value {
+                        if let Some(val) = user_keymap_map.get("scroll_up").and_then(|v| v.as_str()) { keymap_user_dict.scroll_up = val.to_string(); }
+                        if let Some(val) = user_keymap_map.get("scroll_down").and_then(|v| v.as_str()) { keymap_user_dict.scroll_down = val.to_string(); }
+                        if let Some(val) = user_keymap_map.get("page_up").and_then(|v| v.as_str()) { keymap_user_dict.page_up = val.to_string(); }
+                        if let Some(val) = user_keymap_map.get("page_down").and_then(|v| v.as_str()) { keymap_user_dict.page_down = val.to_string(); }
+                        if let Some(val) = user_keymap_map.get("next_chapter").and_then(|v| v.as_str()) { keymap_user_dict.next_chapter = val.to_string(); }
+                        if let Some(val) = user_keymap_map.get("prev_chapter").and_then(|v| v.as_str()) { keymap_user_dict.prev_chapter = val.to_string(); }
+                        if let Some(val) = user_keymap_map.get("beginning_of_ch").and_then(|v| v.as_str()) { keymap_user_dict.beginning_of_ch = val.to_string(); }
+                        if let Some(val) = user_keymap_map.get("end_of_ch").and_then(|v| v.as_str()) { keymap_user_dict.end_of_ch = val.to_string(); }
+                        if let Some(val) = user_keymap_map.get("shrink").and_then(|v| v.as_str()) { keymap_user_dict.shrink = val.to_string(); }
+                        if let Some(val) = user_keymap_map.get("enlarge").and_then(|v| v.as_str()) { keymap_user_dict.enlarge = val.to_string(); }
+                        if let Some(val) = user_keymap_map.get("set_width").and_then(|v| v.as_str()) { keymap_user_dict.set_width = val.to_string(); }
+                        if let Some(val) = user_keymap_map.get("metadata").and_then(|v| v.as_str()) { keymap_user_dict.metadata = val.to_string(); }
+                        if let Some(val) = user_keymap_map.get("define_word").and_then(|v| v.as_str()) { keymap_user_dict.define_word = val.to_string(); }
+                        if let Some(val) = user_keymap_map.get("table_of_contents").and_then(|v| v.as_str()) { keymap_user_dict.table_of_contents = val.to_string(); }
+                        if let Some(val) = user_keymap_map.get("follow").and_then(|v| v.as_str()) { keymap_user_dict.follow = val.to_string(); }
+                        if let Some(val) = user_keymap_map.get("open_image").and_then(|v| v.as_str()) { keymap_user_dict.open_image = val.to_string(); }
+                        if let Some(val) = user_keymap_map.get("regex_search").and_then(|v| v.as_str()) { keymap_user_dict.regex_search = val.to_string(); }
+                        if let Some(val) = user_keymap_map.get("show_hide_progress").and_then(|v| v.as_str()) { keymap_user_dict.show_hide_progress = val.to_string(); }
+                        if let Some(val) = user_keymap_map.get("mark_position").and_then(|v| v.as_str()) { keymap_user_dict.mark_position = val.to_string(); }
+                        if let Some(val) = user_keymap_map.get("jump_to_position").and_then(|v| v.as_str()) { keymap_user_dict.jump_to_position = val.to_string(); }
+                        if let Some(val) = user_keymap_map.get("add_bookmark").and_then(|v| v.as_str()) { keymap_user_dict.add_bookmark = val.to_string(); }
+                        if let Some(val) = user_keymap_map.get("show_bookmarks").and_then(|v| v.as_str()) { keymap_user_dict.show_bookmarks = val.to_string(); }
+                        if let Some(val) = user_keymap_map.get("quit").and_then(|v| v.as_str()) { keymap_user_dict.quit = val.to_string(); }
+                        if let Some(val) = user_keymap_map.get("help").and_then(|v| v.as_str()) { keymap_user_dict.help = val.to_string(); }
+                        if let Some(val) = user_keymap_map.get("switch_color").and_then(|v| v.as_str()) { keymap_user_dict.switch_color = val.to_string(); }
+                        if let Some(val) = user_keymap_map.get("tts_toggle").and_then(|v| v.as_str()) { keymap_user_dict.tts_toggle = val.to_string(); }
+                        if let Some(val) = user_keymap_map.get("double_spread_toggle").and_then(|v| v.as_str()) { keymap_user_dict.double_spread_toggle = val.to_string(); }
+                        if let Some(val) = user_keymap_map.get("library").and_then(|v| v.as_str()) { keymap_user_dict.library = val.to_string(); }
+                    }
+                }
             }
         } else {
             // Save initial config if it doesn't exist
@@ -51,40 +86,7 @@ impl Config {
             fs::write(&filepath, serde_json::to_string_pretty(&initial_config)?)?;
         }
 
-        // Construct the final Keymap by merging user, default, and builtin keymaps
-        // This will involve parsing the string keycodes into u16, and then combining with builtin_keymaps_u16
-        // For now, a placeholder, will implement the parsing and merging logic later.
-        let keymap = Keymap {
-            // Placeholder: will implement proper merging later
-            add_bookmark: Vec::new(),
-            beginning_of_ch: Vec::new(),
-            define_word: Vec::new(),
-            double_spread_toggle: Vec::new(),
-            end_of_ch: Vec::new(),
-            enlarge: Vec::new(),
-            follow: Vec::new(),
-            help: Vec::new(),
-            jump_to_position: Vec::new(),
-            library: Vec::new(),
-            mark_position: Vec::new(),
-            metadata: Vec::new(),
-            next_chapter: Vec::new(),
-            open_image: Vec::new(),
-            page_down: Vec::new(),
-            page_up: Vec::new(),
-            prev_chapter: Vec::new(),
-            quit: Vec::new(),
-            regex_search: Vec::new(),
-            scroll_down: Vec::new(),
-            scroll_up: Vec::new(),
-            set_width: Vec::new(),
-            show_bookmarks: Vec::new(),
-            show_hide_progress: Vec::new(),
-            shrink: Vec::new(),
-            switch_color: Vec::new(),
-            tts_toggle: Vec::new(),
-            table_of_contents: Vec::new(),
-        };
+        let keymap = Keymap::default();
 
 
         Ok(Self {
@@ -97,11 +99,6 @@ impl Config {
 }
 
 pub fn get_app_data_prefix() -> Result<PathBuf> {
-    // This function corresponds to AppData's prefix logic in Python
-    // Will implement this logic properly. For now, a placeholder.
-    // It should check XDG_CONFIG_HOME first, then HOME/.config, then HOME.
-    // On Windows, it would be USERPROFILE.
-
     if let Some(config_home) = std::env::var_os("XDG_CONFIG_HOME") {
         let path = PathBuf::from(config_home).join("repy");
         return Ok(path);
@@ -116,7 +113,124 @@ pub fn get_app_data_prefix() -> Result<PathBuf> {
         return Ok(PathBuf::from(user_profile).join(".repy"));
     }
 
-    // Fallback if no known home directory is found
-    // This should probably be an error or a temporary directory
     Err(eyre::eyre!("Could not determine application data directory"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::env;
+    use tempfile::tempdir;
+    use crate::settings::{Settings, CfgDefaultKeymaps};
+
+    fn set_test_environment(dir: &tempfile::TempDir) {
+        unsafe {
+            env::set_var("XDG_CONFIG_HOME", dir.path());
+            env::remove_var("HOME");
+            env::remove_var("USERPROFILE");
+        }
+    }
+
+    #[test]
+    fn test_config_new_no_existing_file() -> Result<()> {
+        let dir = tempdir()?;
+        set_test_environment(&dir);
+
+        let config = Config::new()?;
+        let expected_filepath = dir.path().join("repy").join("configuration.json");
+
+        assert_eq!(config.filepath, expected_filepath);
+        assert!(expected_filepath.exists());
+
+        let config_str = fs::read_to_string(&expected_filepath)?;
+        let json_value: serde_json::Value = serde_json::from_str(&config_str)?;
+
+        let default_settings = Settings::default();
+        let loaded_settings: Settings = serde_json::from_value(json_value["Setting"].clone())?;
+        assert_eq!(loaded_settings, default_settings);
+
+        let default_keymaps = CfgDefaultKeymaps::default();
+        let loaded_keymaps: CfgDefaultKeymaps = serde_json::from_value(json_value["Keymap"].clone())?;
+        assert_eq!(loaded_keymaps, default_keymaps);
+
+        dir.close()?;
+        Ok(())
+    }
+
+    #[test]
+    fn test_config_new_with_existing_file() -> Result<()> {
+        let dir = tempdir()?;
+        set_test_environment(&dir);
+
+        let config_dir = dir.path().join("repy");
+        std::fs::create_dir_all(&config_dir)?;
+        let config_file_path = config_dir.join("configuration.json");
+
+        let config_json = serde_json::json!({
+            "Setting": { "mouse_support": true },
+        });
+        std::fs::write(&config_file_path, serde_json::to_string(&config_json)?)?;
+
+        let config = Config::new()?;
+
+        assert_eq!(config.settings.mouse_support, true);
+        assert_eq!(config.filepath, config_file_path);
+
+        dir.close()?;
+        Ok(())
+    }
+
+    #[test]
+    fn test_get_app_data_prefix() {
+        let original_home = env::var_os("HOME");
+        let original_xdg_config_home = env::var_os("XDG_CONFIG_HOME");
+        let original_userprofile = env::var_os("USERPROFILE");
+
+        unsafe {
+            // Test XDG_CONFIG_HOME
+            let xdg_dir = tempdir().unwrap();
+            env::set_var("XDG_CONFIG_HOME", xdg_dir.path());
+            env::remove_var("HOME");
+            env::remove_var("USERPROFILE");
+            let expected_path = xdg_dir.path().join("repy");
+            assert_eq!(get_app_data_prefix().unwrap(), expected_path);
+
+            // Test HOME/.config
+            let home_dir = tempdir().unwrap();
+            let config_dir = home_dir.path().join(".config").join("repy");
+            std::fs::create_dir_all(&config_dir).unwrap();
+            env::set_var("HOME", home_dir.path());
+            env::remove_var("XDG_CONFIG_HOME");
+            assert_eq!(get_app_data_prefix().unwrap(), config_dir);
+
+            // Test HOME/.repy (legacy)
+            let home_dir_legacy = tempdir().unwrap();
+            let repy_dir = home_dir_legacy.path().join(".repy");
+            std::fs::create_dir_all(&repy_dir).unwrap();
+            let config_dir_legacy = home_dir_legacy.path().join(".config");
+            if config_dir_legacy.exists() {
+                std::fs::remove_dir_all(&config_dir_legacy).unwrap();
+            }
+            env::set_var("HOME", home_dir_legacy.path());
+            env::remove_var("XDG_CONFIG_HOME");
+            assert_eq!(get_app_data_prefix().unwrap(), repy_dir);
+
+            // Restore original environment variables
+            if let Some(home) = original_home {
+                env::set_var("HOME", home);
+            } else {
+                env::remove_var("HOME");
+            }
+            if let Some(xdg) = original_xdg_config_home {
+                env::set_var("XDG_CONFIG_HOME", xdg);
+            } else {
+                env::remove_var("XDG_CONFIG_HOME");
+            }
+            if let Some(profile) = original_userprofile {
+                env::set_var("USERPROFILE", profile);
+            } else {
+                env::remove_var("USERPROFILE");
+            }
+        }
+    }
 }

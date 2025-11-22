@@ -99,3 +99,73 @@ pub struct TextStructure {
 
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct NoUpdate;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_direction_default() {
+        assert_eq!(Direction::default(), Direction::Forward);
+    }
+
+    #[test]
+    fn test_book_metadata_default() {
+        let metadata = BookMetadata::default();
+        assert_eq!(metadata.title, None);
+        assert_eq!(metadata.creator, None);
+        assert_eq!(metadata.description, None);
+        assert_eq!(metadata.publisher, None);
+        assert_eq!(metadata.date, None);
+        assert_eq!(metadata.language, None);
+        assert_eq!(metadata.format, None);
+        assert_eq!(metadata.identifier, None);
+        assert_eq!(metadata.source, None);
+    }
+
+    #[test]
+    fn test_reading_state_default() {
+        let state = ReadingState::default();
+        assert_eq!(state.content_index, 0);
+        assert_eq!(state.textwidth, 0);
+        assert_eq!(state.row, 0);
+        assert_eq!(state.rel_pctg, None);
+        assert_eq!(state.section, None);
+    }
+
+    #[test]
+    fn test_search_data_default() {
+        let search_data = SearchData::default();
+        assert_eq!(search_data.direction, Direction::Forward);
+        assert_eq!(search_data.value, "");
+    }
+
+    #[test]
+    fn test_letters_count_default() {
+        let letters_count = LettersCount::default();
+        assert_eq!(letters_count.all, 0);
+        assert!(letters_count.cumulative.is_empty());
+    }
+
+    #[test]
+    fn test_char_pos_default() {
+        let char_pos = CharPos::default();
+        assert_eq!(char_pos.row, 0);
+        assert_eq!(char_pos.col, 0);
+    }
+
+    #[test]
+    fn test_text_structure_default() {
+        let text_structure = TextStructure::default();
+        assert!(text_structure.text_lines.is_empty());
+        assert!(text_structure.image_maps.is_empty());
+        assert!(text_structure.section_rows.is_empty());
+        assert!(text_structure.formatting.is_empty());
+    }
+
+    #[test]
+    fn test_no_update_default() {
+        let no_update = NoUpdate::default();
+        assert_eq!(no_update, NoUpdate);
+    }
+}
