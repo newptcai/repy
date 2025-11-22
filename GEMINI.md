@@ -85,6 +85,7 @@ The porting process will be broken down into the following steps:
     *   [x] Implement an `Epub` struct that implements the `Ebook` trait, using the `epub` crate.
     *   [x] Implement HTML parsing using the `html2text` library for robust text conversion and `scraper` for structure extraction. Successfully tested with Marcus Aurelius' "Meditations" EPUB (7,953 lines of text parsed correctly).
     *   [x] Ensure all parser tests pass (5 tests passing successfully)
+    *   [x] Ensure all ebook tests pass (5 tests passing successfully) - fixed test_epub_initialize to handle EPUBs without NCX-based TOC
 
 7.  **Terminal UI (`src/ui/`):**
     *   [ ] Create a `ui` module to hold all TUI-related code.
