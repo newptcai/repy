@@ -153,7 +153,6 @@ mod tests {
         let loaded_keymaps: CfgDefaultKeymaps = serde_json::from_value(json_value["Keymap"].clone())?;
         assert_eq!(loaded_keymaps, default_keymaps);
 
-        dir.close()?;
         Ok(())
     }
 
@@ -166,8 +165,13 @@ mod tests {
         std::fs::create_dir_all(&config_dir)?;
         let config_file_path = config_dir.join("configuration.json");
 
+        let mut settings_map = serde_json::Map::new();
+        settings_map.insert("mouse_support".to_string(), serde_json::Value::Bool(true));
+        let custom_settings = serde_json::Value::Object(settings_map);
+
         let config_json = serde_json::json!({
-            "Setting": { "mouse_support": true },
+            "Setting": custom_settings,
+            "Keymap": CfgDefaultKeymaps::default(),
         });
         std::fs::write(&config_file_path, serde_json::to_string(&config_json)?)?;
 
@@ -176,7 +180,6 @@ mod tests {
         assert_eq!(config.settings.mouse_support, true);
         assert_eq!(config.filepath, config_file_path);
 
-        dir.close()?;
         Ok(())
     }
 

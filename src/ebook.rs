@@ -161,3 +161,53 @@ impl Ebook for Epub {
         Ok(all_content)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_epub_new() {
+        let epub = Epub::new("test.epub");
+        assert_eq!(epub.path(), "test.epub");
+    }
+
+    #[test]
+    fn test_epub_initialize() -> Result<()> {
+        let mut epub = Epub::new("tests/fixtures/small.epub");
+        epub.initialize()?;
+        assert!(!epub.contents().is_empty());
+        assert!(!epub.toc_entries().is_empty());
+        assert!(epub.get_meta().title.is_some());
+        Ok(())
+    }
+
+    #[test]
+    fn test_get_raw_text() -> Result<()> {
+        let mut epub = Epub::new("tests/fixtures/small.epub");
+        epub.initialize()?;
+        let content_id = epub.contents()[0].clone();
+        let raw_text = epub.get_raw_text(&content_id)?;
+        assert!(!raw_text.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn test_get_parsed_content() -> Result<()> {
+        let mut epub = Epub::new("tests/fixtures/small.epub");
+        epub.initialize()?;
+        let content_id = epub.contents()[0].clone();
+        let parsed_content = epub.get_parsed_content(&content_id, 80, 0)?;
+        assert!(!parsed_content.text_lines.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn test_get_all_parsed_content() -> Result<()> {
+        let mut epub = Epub::new("tests/fixtures/small.epub");
+        epub.initialize()?;
+        let all_content = epub.get_all_parsed_content(80)?;
+        assert!(!all_content.is_empty());
+        Ok(())
+    }
+}

@@ -190,27 +190,54 @@ mod tests {
 
         let result = parse_html(html, Some(80), Some(section_ids), 0).unwrap();
 
-        // Test that we got some content
-        assert!(!result.text_lines.is_empty());
+        assert_eq!(result.text_lines.len(), 9);
+        assert_eq!(result.text_lines[0], "# Chapter 1");
+        assert_eq!(result.text_lines[2], "This is a **bold** paragraph with some *italic* text.");
 
-        // Test that we found the section
-        assert!(!result.section_rows.is_empty());
-        assert!(result.section_rows.contains_key("chapter1"));
+        assert_eq!(result.image_maps.len(), 1);
+        assert!(result.image_maps.values().any(|v| v == "test.jpg"));
 
-        // Test that we found the image
-        assert!(!result.image_maps.is_empty());
+        assert_eq!(result.section_rows.len(), 1);
+        assert_eq!(result.section_rows.get("chapter1"), Some(&0));
 
-        // Test that we have some formatting (bold/italic)
-        assert!(!result.formatting.is_empty());
+        assert_eq!(result.formatting.len(), 3);
+        assert!(result.formatting.iter().any(|s| s.attr == 1)); // bold
+        assert!(result.formatting.iter().any(|s| s.attr == 2)); // italic
+    }
 
-        // Print some debug output
-        println!("Total lines: {}", result.text_lines.len());
-        println!("Images: {:?}", result.image_maps);
-        println!("Sections: {:?}", result.section_rows);
-        println!("Formatting entries: {}", result.formatting.len());
+    #[test]
+    fn test_html_to_plain_text() {
+        let html = "<p>Hello, world!</p>";
+        let lines = html_to_plain_text(html, 80).unwrap();
+        assert_eq!(lines, vec!["Hello, world!"]);
+    }
 
-        for (i, line) in result.text_lines.iter().take(15).enumerate() {
-            println!("{:2}: '{}'", i, line);
-        }
+    #[test]
+    fn test_extract_images() {
+        let html = r#"<p>Here's an image: <img src="test.jpg" alt="Test Image"></p>"#;
+        let images = extract_images(html, 0).unwrap();
+        assert_eq!(images.len(), 1);
+        assert_eq!(images.get(&0), Some(&"test.jpg".to_string()));
+    }
+
+    #[test]
+    fn test_extract_sections() {
+        let html = r#"<h1 id="chapter1">Chapter 1</h1>"#;
+        let mut section_ids = HashSet::new();
+        section_ids.insert("chapter1".to_string());
+        let text_lines = vec!["# Chapter 1".to_string()];
+        let sections = extract_sections(html, &section_ids, 0, &text_lines).unwrap();
+        assert_eq!(sections.len(), 1);
+        assert_eq!(sections.get("chapter1"), Some(&0));
+    }
+
+    #[test]
+    fn test_extract_formatting() {
+        let html = "<p>This is <strong>bold</strong> and <em>italic</em>.</p>";
+        let text_lines = vec!["This is **bold** and *italic*.".to_string()];
+        let formatting = extract_formatting(html, 0, &text_lines).unwrap();
+        assert_eq!(formatting.len(), 2);
+        assert!(formatting.iter().any(|s| s.n_letters == 4 && s.attr == 1)); // bold
+        assert!(formatting.iter().any(|s| s.n_letters == 6 && s.attr == 2)); // italic
     }
 }
