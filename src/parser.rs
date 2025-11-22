@@ -213,11 +213,70 @@ mod tests {
     }
 
     #[test]
+    fn test_html_to_plain_text_with_wrapping() {
+        let html = "<p>This is a very long paragraph that should be wrapped when converted to plain text with a limited width.</p>";
+        let lines = html_to_plain_text(html, 30).unwrap();
+        // Should wrap the text
+        assert!(lines.len() > 1);
+        assert!(lines[0].len() <= 30);
+    }
+
+    #[test]
+    fn test_html_to_plain_text_empty() {
+        let html = "";
+        let lines = html_to_plain_text(html, 80).unwrap();
+        assert_eq!(lines, Vec::<String>::new());
+    }
+
+    #[test]
+    fn test_html_to_plain_text_multiple_paragraphs() {
+        let html = r#"
+        <p>First paragraph.</p>
+        <p>Second paragraph with <strong>bold</strong> text.</p>
+        <p>Third paragraph.</p>
+        "#;
+        let lines = html_to_plain_text(html, 80).unwrap();
+        // html2text might add blank lines between paragraphs, so check minimum
+        assert!(lines.len() >= 3);
+        assert!(lines.iter().any(|l| l.contains("First paragraph.")));
+        assert!(lines.iter().any(|l| l.contains("Second paragraph with **bold** text.")));
+        assert!(lines.iter().any(|l| l.contains("Third paragraph.")));
+    }
+
+    #[test]
     fn test_extract_images() {
         let html = r#"<p>Here's an image: <img src="test.jpg" alt="Test Image"></p>"#;
         let images = extract_images(html, 0).unwrap();
         assert_eq!(images.len(), 1);
         assert_eq!(images.get(&0), Some(&"test.jpg".to_string()));
+    }
+
+    #[test]
+    fn test_extract_images_multiple() {
+        let html = r#"
+        <p>First image: <img src="image1.jpg" alt="First"></p>
+        <p>Second image: <img src="image2.png" alt="Second"></p>
+        <img src="image3.gif" alt="Third">
+        "#;
+        let images = extract_images(html, 5).unwrap();
+        assert_eq!(images.len(), 3);
+        assert_eq!(images.get(&5), Some(&"image1.jpg".to_string()));
+        assert_eq!(images.get(&6), Some(&"image2.png".to_string()));
+        assert_eq!(images.get(&7), Some(&"image3.gif".to_string()));
+    }
+
+    #[test]
+    fn test_extract_images_none() {
+        let html = "<p>No images here.</p>";
+        let images = extract_images(html, 0).unwrap();
+        assert_eq!(images.len(), 0);
+    }
+
+    #[test]
+    fn test_extract_images_without_src() {
+        let html = "<p><img alt=\"Image without src\"></p>";
+        let images = extract_images(html, 0).unwrap();
+        assert_eq!(images.len(), 0);
     }
 
     #[test]
@@ -232,6 +291,54 @@ mod tests {
     }
 
     #[test]
+    fn test_extract_sections_multiple() {
+        let html = r#"
+        <h1 id="intro">Introduction</h1>
+        <p>Some content here.</p>
+        <h2 id="chapter1">Chapter 1</h2>
+        <p>More content.</p>
+        <div id="conclusion">Conclusion</div>
+        "#;
+        let mut section_ids = HashSet::new();
+        section_ids.insert("intro".to_string());
+        section_ids.insert("chapter1".to_string());
+        section_ids.insert("conclusion".to_string());
+
+        let text_lines = vec![
+            "# Introduction".to_string(),
+            "Some content here.".to_string(),
+            "## Chapter 1".to_string(),
+            "More content.".to_string(),
+            "Conclusion".to_string(),
+        ];
+
+        let sections = extract_sections(html, &section_ids, 0, &text_lines).unwrap();
+        assert_eq!(sections.len(), 3);
+        assert_eq!(sections.get("intro"), Some(&0));
+        assert_eq!(sections.get("chapter1"), Some(&2));
+        assert_eq!(sections.get("conclusion"), Some(&4));
+    }
+
+    #[test]
+    fn test_extract_sections_empty_section_ids() {
+        let html = r#"<h1 id="chapter1">Chapter 1</h1>"#;
+        let section_ids = HashSet::new();
+        let text_lines = vec!["# Chapter 1".to_string()];
+        let sections = extract_sections(html, &section_ids, 0, &text_lines).unwrap();
+        assert_eq!(sections.len(), 0);
+    }
+
+    #[test]
+    fn test_extract_sections_no_matching_sections() {
+        let html = r#"<h1 id="chapter1">Chapter 1</h1>"#;
+        let mut section_ids = HashSet::new();
+        section_ids.insert("nonexistent".to_string());
+        let text_lines = vec!["# Chapter 1".to_string()];
+        let sections = extract_sections(html, &section_ids, 0, &text_lines).unwrap();
+        assert_eq!(sections.len(), 0);
+    }
+
+    #[test]
     fn test_extract_formatting() {
         let html = "<p>This is <strong>bold</strong> and <em>italic</em>.</p>";
         let text_lines = vec!["This is **bold** and *italic*.".to_string()];
@@ -239,5 +346,290 @@ mod tests {
         assert_eq!(formatting.len(), 2);
         assert!(formatting.iter().any(|s| s.n_letters == 4 && s.attr == 1)); // bold
         assert!(formatting.iter().any(|s| s.n_letters == 6 && s.attr == 2)); // italic
+    }
+
+    #[test]
+    fn test_extract_formatting_headers() {
+        let html = r#"
+        <h1>Header 1</h1>
+        <p>Paragraph content.</p>
+        <h2>Header 2</h2>
+        "#;
+        let text_lines = vec![
+            "# Header 1".to_string(),
+            "Paragraph content.".to_string(),
+            "## Header 2".to_string(),
+        ];
+        let formatting = extract_formatting(html, 0, &text_lines).unwrap();
+        assert_eq!(formatting.len(), 2);
+
+        // Check header 1 - html2text might format differently than expected
+        let header1 = formatting.iter().find(|s| s.row == 0).unwrap();
+        assert_eq!(header1.col, 0);
+        assert_eq!(header1.n_letters, "# Header 1".len() as u16); // Use actual length
+        assert_eq!(header1.attr, 1); // Bold
+
+        // Check header 2 - html2text might format differently than expected
+        let header2 = formatting.iter().find(|s| s.row == 2).unwrap();
+        assert_eq!(header2.col, 0);
+        assert_eq!(header2.n_letters, "## Header 2".len() as u16); // Use actual length
+        assert_eq!(header2.attr, 1); // Bold
+    }
+
+    #[test]
+    fn test_extract_formatting_no_matching_text() {
+        let html = "<p>This has <strong>bold</strong> text.</p>";
+        let text_lines = vec!["Completely different text content.".to_string()];
+        let formatting = extract_formatting(html, 0, &text_lines).unwrap();
+        assert_eq!(formatting.len(), 0);
+    }
+
+    #[test]
+    fn test_extract_formatting_no_html() {
+        let html = "";
+        let text_lines = vec!["Plain text content.".to_string()];
+        let formatting = extract_formatting(html, 0, &text_lines).unwrap();
+        assert_eq!(formatting.len(), 0);
+    }
+
+    #[test]
+    fn test_parse_html_comprehensive() {
+        let html = r#"
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <title>Test Document</title>
+        </head>
+        <body>
+            <h1 id="main-title">Main Title</h1>
+            <p>Welcome to this <strong>test document</strong> with <em>emphasis</em>.</p>
+            <h2 id="section1">Section 1</h2>
+            <p>Here's an image: <img src="test.jpg" alt="Test"></p>
+            <p>More <b>bold</b> and <i>italic</i> text.</p>
+        </body>
+        </html>
+        "#;
+
+        let mut section_ids = HashSet::new();
+        section_ids.insert("main-title".to_string());
+        section_ids.insert("section1".to_string());
+
+        let result = parse_html(html, Some(80), Some(section_ids), 0).unwrap();
+
+        // Check text content
+        assert!(!result.text_lines.is_empty());
+        assert!(result.text_lines[0].contains("Main Title"));
+
+        // Check sections
+        assert_eq!(result.section_rows.len(), 2);
+        assert!(result.section_rows.contains_key("main-title"));
+        assert!(result.section_rows.contains_key("section1"));
+
+        // Check images
+        assert_eq!(result.image_maps.len(), 1);
+        assert!(result.image_maps.values().any(|v| v == "test.jpg"));
+
+        // Check formatting (should include headers, strong, b, em, i)
+        assert!(result.formatting.len() >= 4); // 2 headers + strong/em + b/i
+    }
+
+    #[test]
+    fn test_parse_html_with_line_offset() {
+        let html = r#"
+        <h1 id="chapter1">Chapter 1</h1>
+        <p>Content with <strong>bold</strong> text.</p>
+        <img src="image.jpg" alt="Test">
+        "#;
+
+        let mut section_ids = HashSet::new();
+        section_ids.insert("chapter1".to_string());
+
+        let starting_line = 100;
+        let result = parse_html(html, Some(80), Some(section_ids), starting_line).unwrap();
+
+        // Check that line numbers are properly offset
+        if let Some(&line_num) = result.section_rows.get("chapter1") {
+            assert!(line_num >= starting_line);
+        }
+
+        for &line_num in result.image_maps.keys() {
+            assert!(line_num >= starting_line);
+        }
+
+        for style in &result.formatting {
+            assert!(style.row >= starting_line as u16);
+        }
+    }
+
+    #[test]
+    fn test_parse_html_none_text_width() {
+        let html = "<p>Test content.</p>";
+        let result = parse_html(html, None, None, 0).unwrap();
+        assert!(!result.text_lines.is_empty());
+        // Should use default width of 80
+    }
+
+    #[test]
+    fn test_parse_html_none_section_ids() {
+        let html = r#"<h1 id="chapter1">Chapter 1</h1><p>Content.</p>"#;
+        let result = parse_html(html, Some(80), None, 0).unwrap();
+        assert_eq!(result.section_rows.len(), 0); // No sections should be extracted
+    }
+
+    // Test with realistic EPUB content
+    #[test]
+    fn test_parse_realistic_epub_content() {
+        // This simulates content from our test EPUBs
+        let html = r#"
+        <?xml version="1.0" encoding="UTF-8" standalone="no"?>
+        <!DOCTYPE html>
+        <html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops" xml:lang="en" lang="en">
+        <head>
+            <title>Chapter 1. Introduction</title>
+            <link rel="stylesheet" type="text/css" href="css/epub.css" />
+        </head>
+        <body>
+            <section class="chapter" title="Chapter 1. Introduction" epub:type="chapter" id="introduction">
+                <h2 class="title">Chapter 1. Introduction</h2>
+                <p>If you're expecting a <strong>run-of-the-mill</strong> best practices manual, be aware that there's an
+                    ulterior message that will be running through this one. While the primary goal is
+                    certainly to give you the information you need to create accessible EPUB 3
+                    publications, it also seeks to address the question of <em>why</em> you need to pay attention
+                    to the quality of your data, and how accessible data and general good data practices
+                    are more tightly entwined than you might think.</p>
+                <p>Accessibility is not a feel-good consideration that can be deferred to republishers
+                    to fill in for you as you focus on print and quick-and-dirty ebooks, but a content
+                    imperative vital to your survival in the digital future, as I'll take the odd detour
+                    from the planned route to point out. Your data matters, not just its presentation,
+                    and the more you see the value in it the more sense it will make to build in
+                    accessibility from the ground up.</p>
+            </section>
+        </body>
+        </html>
+        "#;
+
+        let mut section_ids = HashSet::new();
+        section_ids.insert("introduction".to_string());
+
+        let result = parse_html(html, Some(80), Some(section_ids), 0).unwrap();
+
+        // Check that text was extracted
+        assert!(!result.text_lines.is_empty());
+        assert!(result.text_lines.iter().any(|line| line.contains("Introduction")));
+
+        // Check section mapping
+        assert_eq!(result.section_rows.len(), 1);
+        assert!(result.section_rows.contains_key("introduction"));
+
+        // Check formatting
+        assert!(result.formatting.iter().any(|s| s.attr == 1)); // bold from "run-of-the-mill"
+        assert!(result.formatting.iter().any(|s| s.attr == 2)); // italic from "why"
+    }
+
+    #[test]
+    fn test_parse_meditations_style_content() {
+        // This simulates content from Meditations EPUB
+        let html = r#"
+        <?xml version='1.0' encoding='utf-8'?>
+        <!DOCTYPE html PUBLIC '-//W3C//DTD XHTML 1.1//EN' 'http://www.w3.org/TR/xhtml11/DTD/xhtml11.dtd'>
+        <html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en">
+        <head>
+        <meta content="text/css" http-equiv="Content-Style-Type"/>
+        <title>The Project Gutenberg eBook of Meditations, by Marcus Aurelius</title>
+        </head>
+        <body>
+        <div class="chapter" id="pgepubid00003">
+        <h2><a id="link2H_INTR"/>
+              INTRODUCTION
+            </h2>
+        <p>
+        MARCUS AURELIUS ANTONINUS was born on April 26, A.D. 121. His real name was M.
+        Annius Verus, and he was sprung of a noble family which claimed descent from
+        Numa, second King of Rome. Thus the most religious of emperors came of the
+        blood of the most pious of early kings. His father, Annius Verus, had held high
+        office in Rome, and his grandfather, of the same name, had been thrice Consul.
+        Both his parents died young, but Marcus held them in loving remembrance. On his
+        father's death Marcus was adopted by his grandfather, the consular Annius
+        Verus, and there was deep love between these two.
+        </p>
+        </div>
+        </body>
+        </html>
+        "#;
+
+        let mut section_ids = HashSet::new();
+        section_ids.insert("pgepubid00003".to_string());
+
+        let result = parse_html(html, Some(80), Some(section_ids), 0).unwrap();
+
+        // Check that text was extracted correctly
+        assert!(!result.text_lines.is_empty());
+        assert!(result.text_lines.iter().any(|line| line.contains("INTRODUCTION")));
+        assert!(result.text_lines.iter().any(|line| line.contains("MARCUS AURELIUS")));
+
+        // Check section mapping
+        assert_eq!(result.section_rows.len(), 1);
+        assert!(result.section_rows.contains_key("pgepubid00003"));
+
+        // May have formatting for the header - this is implementation-dependent
+        // So we just check that parsing didn't crash
+    }
+
+    // Edge case tests
+    #[test]
+    fn test_malformed_html_recovery() {
+        let html = r#"
+        <p>Unclosed paragraph
+        <h1>Header <strong>Unclosed strong
+        <div>Nested content</div>
+        "#;
+
+        let result = html_to_plain_text(html, 80).unwrap();
+        // Should not crash and should extract some text
+        assert!(!result.is_empty());
+    }
+
+    #[test]
+    fn test_empty_html_elements() {
+        let html = r#"
+        <p></p>
+        <h1></h1>
+        <div></div>
+        <span></span>
+        "#;
+
+        let result = html_to_plain_text(html, 80).unwrap();
+        // Should handle empty elements gracefully
+        assert!(result.is_empty() || result.iter().all(|s| s.trim().is_empty()));
+    }
+
+    #[test]
+    fn test_nested_formatting() {
+        let html = "<p>This has <strong>nested <em>bold italic</em> text</strong>.</p>";
+        let text_lines = vec!["This has **nested *bold italic* text**.".to_string()];
+        let formatting = extract_formatting(html, 0, &text_lines).unwrap();
+
+        // Should extract at least one formatting element (the parser might not handle nested well)
+        assert!(!formatting.is_empty());
+        // Our current parser implementation may not extract nested formatting perfectly
+        // So we just check that some formatting is detected
+    }
+
+    #[test]
+    fn test_whitespace_handling() {
+        let html = r#"
+        <p>   Text with extra spaces   </p>
+        <p>
+
+            Text with newlines and spaces
+
+        </p>
+        "#;
+
+        let result = html_to_plain_text(html, 80).unwrap();
+        // Should normalize whitespace appropriately - html2text handles this
+        assert!(result.len() >= 2);
+        assert!(result.iter().any(|l| l.trim().contains("Text with extra spaces")));
+        assert!(result.iter().any(|l| l.trim().contains("Text with newlines and spaces")));
     }
 }

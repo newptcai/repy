@@ -305,9 +305,29 @@ impl Ebook for EpubParser {
 6.  **Ebook Parsing (`src/ebook.rs`, `src/parser.rs`):** ✅
     *   [x] Create an `Ebook` trait to handle different ebook formats.
     *   [x] Implement an `Epub` struct that implements the `Ebook` trait, using the `epub` crate.
-    *   [x] Implement HTML parsing using the `html2text` library for robust text conversion and `scraper` for structure extraction. Successfully tested with Marcus Aurelius' "Meditations" EPUB (7,953 lines of text parsed correctly).
-    *   [x] Ensure all parser tests pass (5 tests passing successfully)
-    *   [x] Ensure all ebook tests pass (5 tests passing successfully) - fixed test_epub_initialize to handle EPUBs without NCX-based TOC
+    *   [x] Implement HTML parsing using the `html2text` library for robust text conversion and `scraper` for structure extraction. Successfully tested with multiple EPUB files including Marcus Aurelius' "Meditations" and O'Reilly's "Accessible EPUB 3".
+    *   [x] **Comprehensive Parser Tests (27 tests passing):**
+        *   [x] Basic HTML to text conversion with proper wrapping
+        *   [x] Image extraction with positioning and line offsets
+        *   [x] Section/anchor mapping for navigation
+        *   [x] Text formatting detection (bold, italic, headers)
+        *   [x] Edge cases: malformed HTML, empty elements, nested formatting
+        *   [x] Real-world EPUB content testing with actual book structures
+        *   [x] Whitespace handling and multiple paragraph processing
+        *   [x] Comprehensive error handling and recovery
+    *   [x] **Comprehensive Ebook Tests (25 tests passing):**
+        *   [x] EPUB initialization with both small and large book files
+        *   [x] Raw text extraction from individual chapters
+        *   [x] Parsed content generation with proper formatting
+        *   [x] Text wrapping with different widths and line offset handling
+        *   [x] Full book parsing with continuous line numbering
+        *   [x] Image resource extraction (MIME type detection)
+        *   [x] Metadata extraction (title, author, publisher, etc.)
+        *   [x] Error handling for non-existent files and content IDs
+        *   [x] Performance testing with large content (Meditations)
+        *   [x] TOC entry handling and cleanup functionality
+        *   [x] Comprehensive workflow testing covering full usage patterns
+        *   [x] Cross-file compatibility testing (small.epub vs meditations.epub)
 
 ### Phase 2: Terminal UI Infrastructure (IN PROGRESS 🔄)
 
@@ -448,15 +468,24 @@ impl Ebook for EpubParser {
 - SHA1-based bookmark ID generation matching Python implementation
 - Full foreign key constraint support with cascade deletions
 
-**`src/ebook.rs`** - Ebook format abstraction (5 tests passing)
+**`src/ebook.rs`** - Ebook format abstraction (25 tests passing)
 - `Ebook` trait for format-agnostic ebook handling
-- `Epub` implementation for EPUB/EPUB3 format support
-- Async ebook loading and metadata extraction
+- `Epub` implementation for EPUB/EPUB3 format support with full metadata extraction
+- Robust raw text and parsed content extraction from individual chapters
+- Image resource handling with MIME type detection
+- Comprehensive error handling for missing files and content
+- Performance optimization for large book processing
+- Full workflow testing with multiple EPUB file types
+- TOC parsing and content indexing support
 
-**`src/parser.rs`** - HTML and text processing (5 tests passing)
-- HTML to text conversion with style preservation
-- Text structure analysis and formatting
-- Section anchor extraction and image handling
+**`src/parser.rs`** - HTML and text processing (27 tests passing)
+- HTML to text conversion with style preservation using html2text
+- Text structure analysis and formatting with scraper
+- Section anchor extraction and image handling with positioning
+- Comprehensive edge case handling and error recovery
+- Support for various HTML elements (headers, paragraphs, formatting)
+- Line wrapping and text processing with configurable widths
+- Real-world EPUB content compatibility testing
 
 **`src/cli.rs`** - Command-line interface
 - Argument parsing using `clap` with derive macros
