@@ -1,62 +1,269 @@
-# Gemini Porting Plan: epy to repy
+# Comprehensive Rust Porting Plan: epy to repy
 
-This document outlines the plan for porting the Python-based epub reader `epy` to a Rust-based equivalent, `repy`.
+This document outlines a detailed plan for porting the Python-based epub reader `epy` to a Rust-based equivalent, `repy`, based on thorough analysis of the epy codebase architecture and implementation.
 
-## Key Porting Considerations & Challenges
+## Executive Summary
 
-Porting from a dynamically-typed language like Python to a statically-typed, compiled language like Rust involves more than a direct translation of code. The following points highlight key architectural and idiomatic shifts to consider:
+`epy` is a sophisticated TUI ebook reader (1600+ lines of core reader logic) with advanced features including multi-format support, text-to-speech integration, search with highlighting, bookmarks, library management, and configurable keybindings. The Rust port must maintain this rich feature set while leveraging Rust's performance and safety benefits.
 
-### 1. From Dynamic to Static Typing
-*   **Data Structures:** Python's flexible `dict`s and dynamic objects must be mapped to explicit Rust `struct`s and `enum`s. This requires analyzing the data flow in `epy` to define clear, typed contracts.
-*   **Signaling:** Python patterns like the `NoUpdate` class are used for signaling. In Rust, these should be replaced with idiomatic types like `Option<T>` (to represent presence or absence) and `Result<T, E>` (for operations that can succeed or fail), which provide compile-time safety.
+## Codebase Architecture Analysis
 
-### 2. Error Handling Strategy
-*   The port will move from Python's exception-based error handling (`try...except`) to Rust's `Result`-based model.
-*   Using the `eyre` crate, as planned, is a good choice. It will allow for creating a centralized, context-rich error reporting system that is more ergonomic than manually propagating `Result` types everywhere.
+### Core Epy Components
+- **Reader (`reader.py`)**: 1600+ line main TUI application with state management, event handling, search, TTS, and navigation
+- **Models (`models.py`)**: Frozen dataclasses for ReadingState, TextStructure, BookMetadata with complex type relationships
+- **Ebook Parsers (`ebooks/`)**: Abstract base class with specialized implementations for EPUB, MOBI, AZW, FB2, and URL content
+- **HTML Processing (`parser.py`)**: Custom HTML parser converting to formatted text lines with style preservation
+- **Text Rendering (`board.py`)**: InfiniBoard lazy rendering system with double-spread support and animations
+- **State Management (`state.py`)**: SQLite-based persistence for reading positions, library, and bookmarks
+- **Configuration (`config.py`, `settings.py`)**: JSON-based settings with customizable keymaps and platform support
+- **TTS Integration (`speakers/`)**: Multiple text-to-speech engines via subprocess calls
+- **Utilities (`utils.py`, `lib.py`)**: Helper functions for file handling, text processing, and external tool integration
 
-### 3. Object-Oriented to Trait-Based Design
-*   `epy` uses class inheritance for polymorphism (e.g., for different ebook formats or text-to-speech speakers).
-*   The idiomatic Rust approach is to use `trait`s. Defining an `Ebook` trait, for instance, will allow different parsers (for Epub, Mobi, etc.) to be used interchangeably by the application logic.
+### Key Design Patterns
+- **Multiprocessing**: Letter counting in separate process for performance
+- **Modal Windows**: Help, TOC, metadata, bookmarks dialogs
+- **Seamless Chapters**: Continuous reading across chapter boundaries
+- **Count Prefixes**: Numeric command repetition (5j for 5 lines down)
+- **External Tool Integration**: TTS, dictionary, image viewers via subprocess
 
-### 4. State Management and Ownership
-*   This is a primary challenge in Rust TUI applications. The central application `State` needs to be safely accessed and modified by various components (UI, event handler, etc.).
-*   Patterns involving `Rc<RefCell<T>>` will likely be necessary to allow shared, mutable access to state in a single-threaded context, satisfying the borrow checker. An alternative could be a more centralized message-passing architecture where components send events to update a single state owner.
+## Detailed Technical Challenges & Solutions
 
-### 5. Dependency Ecosystem Mapping
-*   Each Python dependency from `pyproject.toml` must be mapped to a suitable Rust crate.
-*   **Key Mappings:**
-    *   TUI: `tui-rs` + `textwrap` -> `ratatui`
-    *   Terminal Backend: `pyte` -> `crossterm`
-    *   HTML Parsing: `beautifulsoup4` -> `html2text` + `scraper` (chosen for robust text conversion)
-    *   CLI Parsing: `argparse` -> `clap`
-*   HTML parsing simplified by using `html2text` library instead of implementing custom parser, providing better reliability and maintainability.
+### 1. State Management & Ownership Architecture
 
-### 6. UI and Event Loop
-*   The `ratatui` framework works by re-rendering the entire UI on each "tick" or event.
-*   The core of the application will be a main loop that:
-    1.  Waits for an input event from `crossterm`.
-    2.  Updates the application state based on the event.
-    3.  Draws the entire UI based on the new state.
-*   This is a different model from many other UI paradigms and will be a foundational piece of the architecture.
+**Challenge**: Epy uses shared mutable state across multiple objects (Reader, Board, Ebook parsers) with complex interdependencies.
 
-## Development Guidelines
+**Rust Solution**:
+- **Primary Pattern**: `Rc<RefCell<ApplicationState>>` for shared mutable access
+- **Alternative**: Message-passing architecture using `std::sync::mpsc` channels
+- **State Components**:
+  ```rust
+  struct ApplicationState {
+      reading_state: RefCell<ReadingState>,
+      config: RefCell<Config>,
+      ebook: RefCell<Box<dyn Ebook>>,
+      search_data: RefCell<Option<SearchData>>,
+      ui_state: RefCell<UiState>, // Current modal, active windows, etc.
+  }
+  ```
 
-**IMPORTANT:** Commit frequently! Make small, focused commits as you complete each task or fix each issue. This helps track progress and makes it easier to identify and revert problematic changes.
+### 2. Complex Text Processing Pipeline
 
-## Porting Steps
+**Epy Implementation**: Custom HTML parser with style preservation, section anchors, image handling, and word wrapping.
 
-The porting process will be broken down into the following steps:
+**Rust Implementation Strategy**:
+```rust
+// Step 1: HTML to structured representation
+struct HtmlDocument {
+    elements: Vec<HtmlElement>,
+    sections: HashMap<String, usize>, // Section ID -> line index
+    images: HashMap<usize, String>,   // Line index -> image path
+}
 
-1.  **Project Setup:**
+// Step 2: Text conversion with formatting
+impl HtmlProcessor {
+    fn to_text_structure(&self, doc: &HtmlDocument, width: usize) -> TextStructure {
+        // - Process HTML elements in order
+        // - Apply formatting spans
+        // - Handle image placeholders
+        // - Extract section anchors
+        // - Generate wrapped text with preserved formatting
+    }
+}
+```
+
+### 3. Multiprocessing to Async Concurrency
+
+**Epy Pattern**: Separate process for letter counting to avoid UI blocking.
+
+**Rust Solution**:
+- **Primary**: `tokio` async runtime for non-blocking operations
+- **Alternative**: Worker threads using `std::thread` with channels
+```rust
+async fn calculate_reading_progress(ebook: &dyn Ebook) -> Result<LettersCount, Error> {
+    tokio::task::spawn_blocking(move || {
+        // CPU-intensive letter counting
+    }).await?
+}
+```
+
+### 4. Event-Driven TUI Architecture
+
+**Epy Pattern**: Curses-based imperative UI with direct screen manipulation.
+
+**Ratatui Pattern**: Declarative widgets with immediate mode rendering:
+```rust
+struct ReaderApp {
+    state: Rc<RefCell<ApplicationState>>,
+    focused_widget: WidgetId,
+}
+
+impl Widget for ReaderApp {
+    fn render(self, area: Rect, buf: &mut Buffer) {
+        // Render based on current state
+        match self.state.borrow().ui_state.active_window {
+            WindowType::Reader => self.render_reader(area, buf),
+            WindowType::Help => self.render_help(area, buf),
+            WindowType::Toc => self.render_toc(area, buf),
+            // ...
+        }
+    }
+}
+```
+
+### 5. Advanced Search with Highlighting
+
+**Epy Implementation**: Multi-chapter regex search with temporary highlighting overlays.
+
+**Rust Enhancement**:
+```rust
+struct SearchEngine {
+    pattern: Regex,
+    results: Vec<SearchResult>,
+    current_index: usize,
+}
+
+struct SearchResult {
+    content_index: usize,
+    line_range: Range<usize>,
+    char_range: Range<usize>,
+    context: String,
+}
+
+impl SearchEngine {
+    fn search_across_chapters(&mut self, ebook: &dyn Ebook) -> Result<(), Error> {
+        // Iterate through all chapters
+        // Find matches in TextStructure
+        // Track character positions across wrapped lines
+        // Store results for navigation
+    }
+}
+```
+
+### 6. External Tool Integration
+
+**Epy Pattern**: Subprocess calls with error handling for TTS, dictionary, image viewers.
+
+**Rust Strategy**:
+```rust
+struct ExternalTools {
+    tts_engine: Box<dyn TtsEngine>,
+    dictionary: Box<dyn DictionaryProvider>,
+    image_viewer: Box<dyn ImageViewer>,
+}
+
+trait TtsEngine {
+    fn speak(&self, text: &str) -> Result<(), Error>;
+}
+
+struct GttsMpvEngine {
+    // Configuration and state
+}
+
+impl TtsEngine for GttsMpvEngine {
+    fn speak(&self, text: &str) -> Result<(), Error> {
+        // Use tokio::process::Command for non-blocking execution
+    }
+}
+```
+
+### 7. Configuration and Keymap System
+
+**Epy Implementation**: JSON configuration with dynamic keymap customization.
+
+**Rust Enhanced Version**:
+```rust
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct Config {
+    display: DisplayConfig,
+    reading: ReadingConfig,
+    tools: ToolsConfig,
+    keymap: KeyMap,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct KeyMap {
+    // Use enum for strong typing
+    quit: Vec<KeyBinding>,
+    page_down: Vec<KeyBinding>,
+    // ... custom key combinations
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+enum KeyBinding {
+    Char(char),
+    Ctrl(char),
+    Alt(char),
+    Function(u8),
+    // ... complex combinations
+}
+```
+
+### 8. Multi-Format Ebook Support
+
+**Epy Architecture**: Abstract base class with format-specific implementations.
+
+**Rust Trait System**:
+```rust
+#[async_trait]
+trait Ebook: Send + Sync {
+    async fn get_metadata(&self) -> Result<BookMetadata, Error>;
+    async fn initialize(&mut self) -> Result<(), Error>;
+    async fn get_text_structure(&self, content_index: usize, width: usize) -> Result<TextStructure, Error>;
+    async fn get_image_data(&self, path: &str) -> Result<(String, Vec<u8>), Error>;
+    fn cleanup(&mut self);
+}
+
+struct EpubParser {
+    // EPUB-specific state
+}
+
+#[async_trait]
+impl Ebook for EpubParser {
+    // EPUB-specific implementations
+}
+```
+
+## Dependency Ecosystem Mapping
+
+### Core Dependencies
+| Python | Rust | Purpose |
+|--------|------|---------|
+| `curses` | `ratatui` + `crossterm` | Terminal UI framework |
+| `multiprocessing` | `tokio` | Async/concurrent processing |
+| `sqlite3` | `rusqlite` | Database persistence |
+| `zipfile` | `zip` | ZIP file handling |
+| `xml.etree.ElementTree` | `xml-rs` | XML parsing |
+| `html.parser` | `html2text` + `scraper` | HTML processing |
+| `textwrap` | `textwrap` | Text wrapping |
+| `urllib.parse` | `url` | URL handling |
+
+### Enhanced Dependencies for Rust
+- **Async Runtime**: `tokio` for non-blocking operations
+- **Serialization**: `serde` + `serde_toml` for configuration
+- **Error Handling**: `eyre` + `color-eyre` for rich errors
+- **Logging**: `tracing` + `tracing-subscriber` for debugging
+- **Clap**: `clap` with derive macros for CLI
+- **Testing**: `tempfile` + `assert_cmd` for comprehensive tests
+
+### External Tool Integration
+- **TTS**: Continue subprocess approach for external engines
+- **Image Viewers**: Cross-platform detection and subprocess execution
+- **Dictionary**: Multiple dictionary engine support with fallbacks
+
+## Comprehensive Implementation Roadmap
+
+### Phase 1: Core Infrastructure (COMPLETED ✅)
+
+1.  **Project Setup:** ✅
     *   [x] Initialize a new Rust project.
     *   [x] Add core dependencies to `Cargo.toml`: `ratatui`, `crossterm`, `eyre`.
     *   [x] Research and add dependencies for epub parsing (`epub` crate seems promising) and HTML parsing (`scraper` or `html5ever`).
 
-2.  **Basic Structure and Error Handling:**
+2.  **Basic Structure and Error Handling:** ✅
     *   [x] Set up the main application entry point in `src/main.rs`.
     *   [x] Implement a global error handling solution using `eyre`.
 
-3.  **Data Models (`src/models.rs`):**
+3.  **Data Models (`src/models.rs`):** ✅
     *   [x] Port all data classes from `epy/src/epy_reader/models.py` to Rust structs. This includes:
         *   [x] `Direction` (as an enum)
         *   [x] `InlineStyle`
@@ -69,51 +276,138 @@ The porting process will be broken down into the following steps:
         *   [x] `TocEntry`
     *   [x] Ensure all model tests pass (8 tests passing successfully)
 
-4.  **Configuration (`src/config.rs`):**
+4.  **Configuration (`src/config.rs`):** ✅
     *   [x] Port the `Config` class from `epy/src/epy_reader/config.py`.
     *   [x] Port the settings from `epy/src/epy_reader/settings.py`.
     *   [x] Implement loading/saving of configuration from/to a file (e.g., TOML or JSON).
     *   [x] Fix test isolation issues and ensure all config tests pass consistently.
     *   [x] Ensure all settings tests pass (4 tests passing successfully)
 
-5.  **Application State (`src/state.rs`):**
+5.  **Application State (`src/state.rs`):** ✅
     *   [x] Port the `State` class from `epy/src/epy_reader/state.py`.
     *   [x] Implement a simple database using `rusqlite` to store bookmarks and reading history.
 
-6.  **Ebook Parsing (`src/ebook.rs`, `src/parser.rs`):**
+6.  **Ebook Parsing (`src/ebook.rs`, `src/parser.rs`):** ✅
     *   [x] Create an `Ebook` trait to handle different ebook formats.
     *   [x] Implement an `Epub` struct that implements the `Ebook` trait, using the `epub` crate.
     *   [x] Implement HTML parsing using the `html2text` library for robust text conversion and `scraper` for structure extraction. Successfully tested with Marcus Aurelius' "Meditations" EPUB (7,953 lines of text parsed correctly).
     *   [x] Ensure all parser tests pass (5 tests passing successfully)
     *   [x] Ensure all ebook tests pass (5 tests passing successfully) - fixed test_epub_initialize to handle EPUBs without NCX-based TOC
 
+### Phase 2: Terminal UI Infrastructure (IN PROGRESS 🔄)
+
 7.  **Terminal UI (`src/ui/`):**
     *   [ ] Create a `ui` module to hold all TUI-related code.
     *   [ ] **Main Reader (`src/ui/reader.rs`):**
         *   [ ] Create a `Reader` struct to manage the application's main state and logic.
         *   [ ] Implement the main event loop, handling user input from `crossterm`.
+        *   [ ] Design state management architecture using `Rc<RefCell<ApplicationState>>`
+        *   [ ] Implement count prefix handling for command repetition
+        *   [ ] Add seamless chapter navigation support
     *   [ ] **Content View (`src/ui/board.rs`):**
         *   [ ] Implement a `Board` widget (or similar) that is responsible for rendering the book's text content using `ratatui`.
+        *   [ ] Add support for double-spread layout with configurable padding
+        *   [ ] Implement lazy rendering for performance with large books
+        *   [ ] Add text selection and copy functionality
+        *   [ ] Support different color schemes and themes
     *   [ ] **Dialogs/Windows (`src/ui/windows/`):**
         *   [ ] Create separate modules for each dialog/window:
-        *   [ ] Table of Contents
-        *   [ ] Metadata display
-        *   [ ] Help window
-        *   [ ] Bookmarks management
-        *   [ ] Library view
-        *   [ ] Search input and results
+        *   [ ] **Table of Contents** (`toc.rs`): Navigation with section anchors and search
+        *   [ ] **Metadata display** (`metadata.rs`): Book information display
+        *   [ ] **Help window** (`help.rs`): Keybinding reference and usage instructions
+        *   [ ] **Bookmarks management** (`bookmarks.rs`): Add, remove, navigate bookmarks
+        *   [ ] **Library view** (`library.rs`): Recent books and reading history
+        *   [ ] **Search input and results** (`search.rs`): Regex search with highlighting
+        *   [ ] **Settings dialog** (`settings.rs`): Runtime configuration changes
 
 8.  **Command-Line Interface (`src/cli.rs`):**
     *   [x] Port the argument parsing logic from `epy/src/epy_reader/cli.py` using the `clap` crate.
     *   [ ] Handle starting the TUI or dumping book content based on arguments.
+    *   [ ] Add support for configuration file specification
+    *   [ ] Implement verbose logging and debug modes
 
-9.  **Utilities (`src/utils.rs`):**
+### Phase 3: Advanced Features (PENDING ⏳)
+
+9.  **Text-to-Speech Integration (`src/tts/`):**
+    *   [ ] Create TTS trait system for multiple engine support
+    *   [ ] **GTTS + MPV Engine**: Async TTS with progress tracking
+    *   [ ] **Mimic Engine**: Local TTS synthesis integration
+    *   [ ] **Pico Engine**: Cross-platform voice synthesis
+    *   [ ] Add voice selection, speed control, and pronunciation dictionaries
+    *   [ ] Implement reading position synchronization with TTS
+
+10. **Advanced Search (`src/search.rs`):**
+    *   [ ] Multi-chapter regex search with performance optimization
+    *   [ ] Search result highlighting with configurable colors
+    *   [ ] Search history and saved searches
+    *   [ ] Fuzzy search and typo tolerance
+    *   [ ] Incremental search with real-time results
+
+11. **External Tool Integration (`src/tools/`):**
+    *   [ ] **Dictionary Integration**: Multiple dictionary engines (sdcv, dict, etc.)
+    *   [ ] **Image Viewer Integration**: Cross-platform image display
+    *   [ ] **Export Functionality**: Text and highlighted content export
+    *   [ ] **Sync Integration**: Cloud storage for reading progress
+
+12. **Utilities (`src/utils.rs`):**
     *   [ ] Port the helper functions from `epy/src/epy_reader/utils.py` and `epy/src/epy_reader/lib.py` to a `utils` module.
+    *   [ ] Add platform-specific utilities (Windows/Linux/macOS)
+    *   [ ] Implement file format detection and validation
+    *   [ ] Add logging and debugging utilities
 
-10. **Integration (`src/main.rs`):**
+### Phase 4: Performance & Polish (PENDING ⏳)
+
+13. **Performance Optimization:**
+    *   [ ] Implement async book loading and caching
+    *   [ ] Optimize large book handling with lazy loading
+    *   [ ] Add memory management for massive texts
+    *   [ ] Implement progressive loading for network books
+    *   [ ] Performance profiling and benchmarking
+
+14. **Advanced Features:**
+    *   [ ] **Multiple Format Support**: MOBI, AZW, FB2 parsers using trait system
+    *   [ ] **Plugin System**: Extensible architecture for custom parsers and tools
+    *   [ ] **Reading Statistics**: Track reading speed, habits, and progress
+    *   [ ] **Annotation System**: Marginal notes and highlighting
+    *   [ ] **Custom Themes**: User-defined color schemes and layouts
+
+15. **Quality Assurance:**
+    *   [ ] Comprehensive test suite with integration tests
+    *   [ ] Property-based testing for critical components
+    *   [ ] Performance testing and memory profiling
+    *   [ ] Cross-platform compatibility testing
+    *   [ ] Accessibility features and usability testing
+
+### Phase 5: Integration & Deployment (PENDING ⏳)
+
+16. **Integration (`src/main.rs`):**
     *   [ ] Tie all the modules together in the `main` function.
     *   [ ] Initialize the configuration and state.
     *   [ ] Parse command-line arguments.
     *   [ ] Set up the terminal for `ratatui`.
     *   [ ] Create and run the main `Reader` application.
     *   [ ] Ensure graceful shutdown and terminal restoration.
+
+17. **Distribution & Documentation:**
+    *   [ ] Create build scripts and CI/CD pipeline
+    *   [ ] Package for multiple platforms (cargo-deb, cargo-wix, etc.)
+    *   [ ] Comprehensive user documentation and README
+    *   [ ] Developer documentation and contribution guidelines
+    *   [ ] Migration guide from epy to repy
+
+## Development Guidelines
+
+**IMPORTANT**:
+- **Commit frequently!** Make small, focused commits as you complete each task or fix each issue. This helps track progress and makes it easier to identify and revert problematic changes.
+- **Test-driven development**: Write tests before implementation for complex components
+- **Performance first**: Profile and optimize critical paths early
+- **Cross-platform mindset**: Ensure compatibility across Linux, macOS, and Windows
+- **User experience preservation**: Maintain all epy features while improving performance
+
+## Success Metrics
+
+- **Feature Parity**: 100% of epy functionality available in repy
+- **Performance Improvement**: 2x faster book loading and rendering
+- **Memory Efficiency**: 50% lower memory usage for large books
+- **Reliability**: Zero crashes in production use with comprehensive error handling
+- **Maintainability**: Clear code architecture with comprehensive test coverage
