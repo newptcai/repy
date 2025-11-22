@@ -395,6 +395,70 @@ impl Ebook for EpubParser {
     *   [ ] Developer documentation and contribution guidelines
     *   [ ] Migration guide from epy to repy
 
+## Rust File Structure Documentation
+
+### Core Source Files (`src/`)
+
+**`src/main.rs`** - Application entry point
+- CLI argument parsing and configuration loading
+- Terminal initialization and graceful shutdown
+- Main application lifecycle management
+
+**`src/models.rs`** - Data structures and domain models (27 tests passing)
+- `Direction`, `BookMetadata`, `LibraryItem`, `ReadingState`
+- `SearchData`, `LettersCount`, `CharPos`, `TextMark`, `TextSpan`
+- `InlineStyle`, `TocEntry`, `TextStructure`, `NoUpdate`
+- All models include comprehensive validation and edge case handling
+
+**`src/config.rs`** - Configuration management system (4 tests passing)
+- `Config` struct for application settings
+- `Settings` for user preferences and keymaps
+- JSON/TOML configuration file loading and saving
+- Platform-specific configuration directory handling
+
+**`src/state.rs`** - Application state persistence
+- `State` struct for database operations
+- SQLite integration for bookmarks and reading history
+- State serialization and recovery
+
+**`src/ebook.rs`** - Ebook format abstraction (5 tests passing)
+- `Ebook` trait for format-agnostic ebook handling
+- `Epub` implementation for EPUB/EPUB3 format support
+- Async ebook loading and metadata extraction
+
+**`src/parser.rs`** - HTML and text processing (5 tests passing)
+- HTML to text conversion with style preservation
+- Text structure analysis and formatting
+- Section anchor extraction and image handling
+
+**`src/cli.rs`** - Command-line interface
+- Argument parsing using `clap` with derive macros
+- Configuration file specification and verbose modes
+- Content dumping and TUI mode selection
+
+### Phase 2: UI Infrastructure (In Progress)
+
+**Planned UI Files (`src/ui/`):**
+- `src/ui/reader.rs` - Main TUI application and event loop
+- `src/ui/board.rs` - Text rendering widget with lazy loading
+- `src/ui/windows/` - Modal dialogs (TOC, help, bookmarks, etc.)
+
+### Dependencies and External Tools
+
+**Core Dependencies:**
+- `ratatui` + `crossterm` - Terminal UI framework
+- `tokio` - Async runtime for non-blocking operations
+- `rusqlite` - Database persistence
+- `epub` - EPUB file parsing
+- `scraper` + `html2text` - HTML processing
+- `serde` - Configuration serialization
+- `eyre` - Rich error handling
+
+**External Tool Integration:**
+- Text-to-speech engines (GTTS+MPV, Mimic, Pico)
+- Dictionary tools (sdcv, dict, wkdict)
+- Image viewers (cross-platform detection)
+
 ## Development Guidelines
 
 **IMPORTANT**:
