@@ -39,6 +39,10 @@ Porting from a dynamically-typed language like Python to a statically-typed, com
     3.  Draws the entire UI based on the new state.
 *   This is a different model from many other UI paradigms and will be a foundational piece of the architecture.
 
+## Development Guidelines
+
+**IMPORTANT:** Commit frequently! Make small, focused commits as you complete each task or fix each issue. This helps track progress and makes it easier to identify and revert problematic changes.
+
 ## Porting Steps
 
 The porting process will be broken down into the following steps:
@@ -63,12 +67,14 @@ The porting process will be broken down into the following steps:
         *   [x] `SearchData`
         *   [x] `TextStructure`
         *   [x] `TocEntry`
+    *   [x] Ensure all model tests pass (8 tests passing successfully)
 
 4.  **Configuration (`src/config.rs`):**
     *   [x] Port the `Config` class from `epy/src/epy_reader/config.py`.
     *   [x] Port the settings from `epy/src/epy_reader/settings.py`.
     *   [x] Implement loading/saving of configuration from/to a file (e.g., TOML or JSON).
     *   [x] Fix test isolation issues and ensure all config tests pass consistently.
+    *   [x] Ensure all settings tests pass (4 tests passing successfully)
 
 5.  **Application State (`src/state.rs`):**
     *   [x] Port the `State` class from `epy/src/epy_reader/state.py`.
@@ -78,6 +84,7 @@ The porting process will be broken down into the following steps:
     *   [x] Create an `Ebook` trait to handle different ebook formats.
     *   [x] Implement an `Epub` struct that implements the `Ebook` trait, using the `epub` crate.
     *   [x] Implement HTML parsing using the `html2text` library for robust text conversion and `scraper` for structure extraction. Successfully tested with Marcus Aurelius' "Meditations" EPUB (7,953 lines of text parsed correctly).
+    *   [x] Ensure all parser tests pass (5 tests passing successfully)
 
 7.  **Terminal UI (`src/ui/`):**
     *   [ ] Create a `ui` module to hold all TUI-related code.
