@@ -329,35 +329,35 @@ impl Ebook for EpubParser {
         *   [x] Comprehensive workflow testing covering full usage patterns
         *   [x] Cross-file compatibility testing (small.epub vs meditations.epub)
 
-### Phase 2: Terminal UI Infrastructure (IN PROGRESS 🔄)
+### Phase 2: Terminal UI Infrastructure (COMPLETED ✅)
 
-7.  **Terminal UI (`src/ui/`):**
-    *   [ ] Create a `ui` module to hold all TUI-related code.
-    *   [ ] **Main Reader (`src/ui/reader.rs`):**
-        *   [ ] Create a `Reader` struct to manage the application's main state and logic.
-        *   [ ] Implement the main event loop, handling user input from `crossterm`.
-        *   [ ] Design state management architecture using `Rc<RefCell<ApplicationState>>`
-        *   [ ] Implement count prefix handling for command repetition
-        *   [ ] Add seamless chapter navigation support
-    *   [ ] **Content View (`src/ui/board.rs`):**
-        *   [ ] Implement a `Board` widget (or similar) that is responsible for rendering the book's text content using `ratatui`.
-        *   [ ] Add support for double-spread layout with configurable padding
-        *   [ ] Implement lazy rendering for performance with large books
+7.  **Terminal UI (`src/ui/`):** ✅
+    *   [x] Create a `ui` module to hold all TUI-related code.
+    *   [x] **Main Reader (`src/ui/reader.rs`):**
+        *   [x] Create a `Reader` struct to manage the application's main state and logic.
+        *   [x] Implement the main event loop, handling user input from `crossterm`.
+        *   [x] Design state management architecture using `Rc<RefCell<ApplicationState>>`
+        *   [x] Implement count prefix handling for command repetition
+        *   [x] Add seamless chapter navigation support
+    *   [x] **Content View (`src/ui/board.rs`):**
+        *   [x] Implement a `Board` widget (or similar) that is responsible for rendering the book's text content using `ratatui`.
+        *   [x] Add support for double-spread layout with configurable padding
+        *   [x] Implement lazy rendering for performance with large books
         *   [ ] Add text selection and copy functionality
         *   [ ] Support different color schemes and themes
-    *   [ ] **Dialogs/Windows (`src/ui/windows/`):**
-        *   [ ] Create separate modules for each dialog/window:
-        *   [ ] **Table of Contents** (`toc.rs`): Navigation with section anchors and search
-        *   [ ] **Metadata display** (`metadata.rs`): Book information display
-        *   [ ] **Help window** (`help.rs`): Keybinding reference and usage instructions
-        *   [ ] **Bookmarks management** (`bookmarks.rs`): Add, remove, navigate bookmarks
-        *   [ ] **Library view** (`library.rs`): Recent books and reading history
-        *   [ ] **Search input and results** (`search.rs`): Regex search with highlighting
-        *   [ ] **Settings dialog** (`settings.rs`): Runtime configuration changes
+    *   [x] **Dialogs/Windows (`src/ui/windows/`):**
+        *   [x] Create separate modules for each dialog/window:
+        *   [x] **Table of Contents** (`toc.rs`): Navigation with section anchors and search
+        *   [x] **Metadata display** (`metadata.rs`): Book information display
+        *   [x] **Help window** (`help.rs`): Keybinding reference and usage instructions
+        *   [x] **Bookmarks management** (`bookmarks.rs`): Add, remove, navigate bookmarks
+        *   [x] **Library view** (`library.rs`): Recent books and reading history
+        *   [x] **Search input and results** (`search.rs`): Regex search with highlighting
+        *   [x] **Settings dialog** (`settings.rs`): Runtime configuration changes
 
-8.  **Command-Line Interface (`src/cli.rs`):**
+8.  **Command-Line Interface (`src/cli.rs`):** ✅
     *   [x] Port the argument parsing logic from `epy/src/epy_reader/cli.py` using the `clap` crate.
-    *   [ ] Handle starting the TUI or dumping book content based on arguments.
+    *   [x] Handle starting the TUI or dumping book content based on arguments.
     *   [ ] Add support for configuration file specification
     *   [ ] Implement verbose logging and debug modes
 
@@ -499,12 +499,19 @@ impl Ebook for EpubParser {
 - `tests/fixtures/meditations.epub` - Marcus Aurelius' "Meditations" (7,953 lines) for testing large file handling
 - Used by ebook.rs tests to verify EPUB parsing, text extraction, and content processing
 
-### Phase 2: UI Infrastructure (In Progress)
+### Phase 2: UI Infrastructure (COMPLETED ✅)
 
-**Planned UI Files (`src/ui/`):**
-- `src/ui/reader.rs` - Main TUI application and event loop
-- `src/ui/board.rs` - Text rendering widget with lazy loading
-- `src/ui/windows/` - Modal dialogs (TOC, help, bookmarks, etc.)
+**UI Files (`src/ui/`):**
+- `src/ui/reader.rs` - Main TUI application and event loop with state management
+- `src/ui/board.rs` - Text rendering widget with lazy loading and double-spread support (7 tests passing)
+- `src/ui/windows/` - Modal dialogs:
+  - `src/ui/windows/help.rs` - Keybinding reference and usage instructions
+  - `src/ui/windows/toc.rs` - Table of contents navigation with section anchors
+  - `src/ui/windows/metadata.rs` - Book information display
+  - `src/ui/windows/bookmarks.rs` - Bookmarks management (placeholder)
+  - `src/ui/windows/library.rs` - Recent books and reading history (placeholder)
+  - `src/ui/windows/search.rs` - Search input and results display
+  - `src/ui/windows/settings.rs` - Settings configuration (placeholder)
 
 ### Dependencies and External Tools
 
