@@ -3,6 +3,7 @@ use eyre::Result;
 use std::{fs, path::PathBuf};
 use serde_json;
 
+#[derive(Debug, Clone)]
 pub struct Config {
     pub settings: Settings,
     pub keymap: Keymap,

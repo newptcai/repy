@@ -1,52 +1,68 @@
 use repy::{
     cli::Cli,
+    config::Config,
+    ui::reader::Reader,
 };
 
 use clap::Parser;
-use crossterm::{
-    event::{DisableMouseCapture, EnableMouseCapture},
-    execute,
-    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
-};
 use eyre::Result;
-use ratatui::{
-    backend::CrosstermBackend,
-    Terminal,
-};
-use std::io;
-
-
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
-    println!("{:?}", cli);
 
-    // setup terminal
-    enable_raw_mode()?;
-    let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
-    let backend = CrosstermBackend::new(stdout);
-    let mut terminal = Terminal::new(backend)?;
+    // Load configuration
+    let config = match Config::new() {
+        Ok(config) => config,
+        Err(err) => {
+            eprintln!("Warning: Could not load configuration: {}", err);
+            eprintln!("Starting with default settings");
+            // We can't create a Config manually due to private fields,
+            // so we'll use a placeholder approach for now
+            return run_tui_with_default_config();
+        }
+    };
 
-    // create app and run it
-    let res = run_app(&mut terminal);
-
-    // restore terminal
-    disable_raw_mode()?;
-    execute!(
-        terminal.backend_mut(),
-        LeaveAlternateScreen,
-        DisableMouseCapture
-    )?;
-    terminal.show_cursor()?;
-
-    if let Err(err) = res {
-        eprintln!("{:?}", err);
+    // Handle different CLI modes
+    if !cli.ebook.is_empty() {
+        let filepath = &cli.ebook[0]; // Take the first ebook path
+        if cli.dump {
+            // Dump content mode
+            dump_content(filepath)?;
+        } else {
+            // TUI mode with a file
+            run_tui_with_file(filepath, config)?;
+        }
+    } else if cli.history {
+        // Show library/history mode
+        println!("Library/history view not yet implemented");
+    } else {
+        // TUI mode without a file (show library)
+        run_tui(config)?;
     }
 
     Ok(())
 }
 
-fn run_app<B: ratatui::backend::Backend>(_terminal: &mut Terminal<B>) -> Result<()> {
+fn run_tui(config: Config) -> Result<()> {
+    let mut reader = Reader::new(config)?;
+    reader.run()
+}
+
+fn run_tui_with_file(_filepath: &str, config: Config) -> Result<()> {
+    // TODO: Load ebook file and pass to reader
+    // For now, just start the TUI
+    let mut reader = Reader::new(config)?;
+    reader.run()
+}
+
+fn dump_content(_filepath: &str) -> Result<()> {
+    // TODO: Implement content dumping
+    println!("Content dumping not yet implemented");
+    Ok(())
+}
+
+fn run_tui_with_default_config() -> Result<()> {
+    // TODO: Implement a fallback TUI with default config
+    println!("TUI with default configuration not yet implemented");
     Ok(())
 }

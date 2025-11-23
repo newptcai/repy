@@ -5,11 +5,37 @@ use std::collections::HashMap;
 pub enum Direction {
     Forward,
     Backward,
+    Up,
+    Down,
+    Left,
+    Right,
+    PageUp,
+    PageDown,
+    Home,
+    End,
 }
 
 impl Default for Direction {
     fn default() -> Self {
         Direction::Forward
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum WindowType {
+    Reader,
+    Help,
+    Toc,
+    Bookmarks,
+    Library,
+    Search,
+    Metadata,
+    Settings,
+}
+
+impl Default for WindowType {
+    fn default() -> Self {
+        WindowType::Reader
     }
 }
 
