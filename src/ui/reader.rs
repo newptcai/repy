@@ -1,3 +1,4 @@
+use arboard::Clipboard;
 use std::cell::RefCell;
 use std::io;
 use std::rc::Rc;
@@ -13,10 +14,12 @@ use ratatui::{
 };
 
 use crate::config::Config;
+use crate::ebook::{Ebook, Epub};
 use crate::models::{
-    Direction as AppDirection, ReadingState, SearchData, WindowType,
+    Direction as AppDirection, ReadingState, SearchData, TextStructure, WindowType,
 };
 use crate::state::State;
+use crate::ui::board::Board;
 
 /// Application state that encompasses all UI and reading state
 #[derive(Debug, Clone)]
@@ -58,6 +61,7 @@ pub struct UiState {
     pub selected_search_result: usize,
     pub message: Option<String>,
     pub message_type: MessageType,
+    pub selection_start: Option<usize>,
 }
 
 impl UiState {
@@ -76,6 +80,7 @@ impl UiState {
             selected_search_result: 0,
             message: None,
             message_type: MessageType::Info,
+            selection_start: None,
         }
     }
 
@@ -99,6 +104,7 @@ impl UiState {
                 self.show_search = false;
                 self.show_metadata = false;
                 self.show_settings = false;
+                self.selection_start = None;
             }
             WindowType::Help => self.show_help = true,
             WindowType::Toc => self.show_toc = true,
@@ -107,6 +113,10 @@ impl UiState {
             WindowType::Search => self.show_search = true,
             WindowType::Metadata => self.show_metadata = true,
             WindowType::Settings => self.show_settings = true,
+            WindowType::Visual => {
+                let current_row = self.selection_start.unwrap_or(0);
+                self.selection_start = Some(current_row);
+            }
         }
     }
 }
@@ -123,6 +133,9 @@ pub struct Reader {
     state: Rc<RefCell<ApplicationState>>,
     terminal: Terminal<CrosstermBackend<io::Stdout>>,
     db_state: State,
+    board: Board,
+    clipboard: Clipboard,
+    ebook: Option<Epub>,
 }
 
 impl Reader {
@@ -140,7 +153,31 @@ impl Reader {
             state: Rc::new(RefCell::new(app_state)),
             terminal,
             db_state,
+            board: Board::new(),
+            clipboard: Clipboard::new()?,
+            ebook: None,
         })
+    }
+
+    pub fn load_ebook(&mut self, path: &str) -> eyre::Result<()> {
+        let mut epub = Epub::new(path);
+        epub.initialize()?;
+    
+        let text_width = self.state.borrow().config.settings.width.unwrap_or(80);
+        let all_content = epub.get_all_parsed_content(text_width)?;
+    
+        let mut combined_text_structure = TextStructure::default();
+        for ts in all_content {
+            combined_text_structure.text_lines.extend(ts.text_lines);
+            combined_text_structure.image_maps.extend(ts.image_maps);
+            combined_text_structure.section_rows.extend(ts.section_rows);
+            combined_text_structure.formatting.extend(ts.formatting);
+        }
+    
+        self.board.update_text_structure(combined_text_structure);
+        self.ebook = Some(epub);
+    
+        Ok(())
     }
 
     /// Run the main application loop
@@ -169,7 +206,7 @@ impl Reader {
                 let state = self.state.clone();
                 self.terminal.draw(|f| {
                     let state_ref = state.borrow();
-                    Self::render_static(f, &state_ref);
+                    Self::render_static(f, &state_ref, &self.board);
                 })?;
             }
 
@@ -220,15 +257,15 @@ impl Reader {
         };
 
         // Handle key bindings based on current mode
-        let has_search_data = {
+        let active_window = {
             let state = self.state.borrow();
-            state.search_data.is_some()
+            state.ui_state.active_window.clone()
         };
 
-        if has_search_data {
-            self.handle_search_mode_keys(key, repeat_count)?;
-        } else {
-            self.handle_normal_mode_keys(key, repeat_count)?;
+        match active_window {
+            WindowType::Search => self.handle_search_mode_keys(key, repeat_count)?,
+            WindowType::Visual => self.handle_visual_mode_keys(key, repeat_count)?,
+            _ => self.handle_normal_mode_keys(key, repeat_count)?,
         }
 
         // Clear count prefix after handling
@@ -315,6 +352,12 @@ impl Reader {
                 }
             }
 
+            // Visual Mode
+            KeyCode::Char('v') => {
+                let mut state = self.state.borrow_mut();
+                state.ui_state.open_window(WindowType::Visual);
+            }
+
             // Windows
             KeyCode::Char('q') => {
                 {
@@ -380,16 +423,52 @@ impl Reader {
         Ok(())
     }
 
+    /// Handle keys in visual mode
+    fn handle_visual_mode_keys(&mut self, key: KeyEvent, repeat_count: u32) -> eyre::Result<()> {
+        match key.code {
+            KeyCode::Esc => {
+                let mut state = self.state.borrow_mut();
+                state.ui_state.open_window(WindowType::Reader);
+            }
+            KeyCode::Char('y') => {
+                self.yank_selection()?;
+            }
+            // Navigation
+            KeyCode::Char('j') | KeyCode::Down => {
+                for _ in 0..repeat_count {
+                    self.move_cursor(AppDirection::Down);
+                }
+            }
+            KeyCode::Char('k') | KeyCode::Up => {
+                for _ in 0..repeat_count {
+                    self.move_cursor(AppDirection::Up);
+                }
+            }
+            KeyCode::Char('h') | KeyCode::Left => {
+                for _ in 0..repeat_count {
+                    self.move_cursor(AppDirection::Left);
+                }
+            }
+            KeyCode::Char('l') | KeyCode::Right => {
+                for _ in 0..repeat_count {
+                    self.move_cursor(AppDirection::Right);
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
     /// Render the UI
     fn render(&self, frame: &mut Frame) {
         let state = self.state.borrow();
-        Self::render_static(frame, &state);
+        Self::render_static(frame, &state, &self.board);
     }
 
     /// Static render method that can be called from a closure
-    fn render_static(frame: &mut Frame, state: &ApplicationState) {
+    fn render_static(frame: &mut Frame, state: &ApplicationState, board: &Board) {
         // Main reader view
-        Self::render_reader_static(frame, &state);
+        Self::render_reader_static(frame, &state, board);
 
         // Render overlays/modals if active
         if state.ui_state.show_help {
@@ -411,12 +490,12 @@ impl Reader {
     }
 
     /// Render the main reader view
-    fn render_reader(&self, frame: &mut Frame, state: &ApplicationState) {
-        Self::render_reader_static(frame, state);
+    fn render_reader(&self, frame: &mut Frame, state: &ApplicationState, board: &Board) {
+        Self::render_reader_static(frame, state, board);
     }
 
     /// Static method to render the main reader view
-    fn render_reader_static(frame: &mut Frame, state: &ApplicationState) {
+    fn render_reader_static(frame: &mut Frame, state: &ApplicationState, board: &Board) {
         let chunks = Layout::default()
             .direction(ratatui::layout::Direction::Vertical)
             .constraints([
@@ -425,19 +504,15 @@ impl Reader {
             ])
             .split(frame.area());
 
-        // Main content area (will be implemented in board.rs)
-        let content_block = Block::default()
-            .borders(Borders::ALL)
-            .title("Reader");
-
-        frame.render_widget(content_block, chunks[0]);
+        // Main content area
+        board.render(frame, chunks[0], state);
 
         // Status bar
         let status_text = vec![
             Line::from(vec![
                 Span::styled("Position: ", Style::default()),
                 Span::styled(
-                    format!("{}/{}", state.reading_state.row, 0), // TODO: Get total lines
+                    format!("{}/{}", state.reading_state.row, board.total_lines()),
                     Style::default().add_modifier(Modifier::BOLD),
                 ),
             ]),
@@ -500,8 +575,24 @@ impl Reader {
     }
 
     // Navigation methods (placeholders)
-    fn move_cursor(&mut self, _direction: AppDirection) {
-        // TODO: Implement cursor movement
+    fn move_cursor(&mut self, direction: AppDirection) {
+        let mut state = self.state.borrow_mut();
+        let total_lines = self.board.total_lines();
+        let current_row = state.reading_state.row;
+
+        match direction {
+            AppDirection::Up => {
+                if current_row > 0 {
+                    state.reading_state.row -= 1;
+                }
+            }
+            AppDirection::Down => {
+                if current_row < total_lines.saturating_sub(1) {
+                    state.reading_state.row += 1;
+                }
+            }
+            _ => {}
+        }
     }
 
     fn next_chapter(&mut self) {
@@ -530,5 +621,18 @@ impl Reader {
 
     fn search_previous(&mut self) {
         // TODO: Implement search previous
+    }
+
+    fn yank_selection(&mut self) -> eyre::Result<()> {
+        let state = self.state.borrow();
+        if let Some(selection_start) = state.ui_state.selection_start {
+            let selection_end = state.reading_state.row;
+            let selected_text = self.board.get_selected_text(selection_start, selection_end);
+            self.clipboard.set_text(selected_text)?;
+            let mut ui_state = &mut self.state.borrow_mut().ui_state;
+            ui_state.set_message("Text copied to clipboard".to_string(), MessageType::Info);
+            ui_state.open_window(WindowType::Reader);
+        }
+        Ok(())
     }
 }

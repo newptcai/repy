@@ -17,6 +17,7 @@ serde_json = "1.0.145"
 sha1 = "0.10.6"
 hex = "0.4.3"
 html2text = "0.16.4"
+arboard = "3.6.1"
 
 [dev-dependencies]
 assert_cmd = "2.1.1"

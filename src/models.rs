@@ -31,6 +31,7 @@ pub enum WindowType {
     Search,
     Metadata,
     Settings,
+    Visual,
 }
 
 impl Default for WindowType {

@@ -52,6 +52,8 @@ pub struct Settings {
     pub seamless_between_chapters: bool,
     pub preferred_tts_engine: Option<String>,
     pub tts_engine_args: Vec<String>,
+    pub width: Option<usize>,
+    pub show_line_numbers: bool,
 }
 
 impl Settings {
@@ -75,6 +77,8 @@ impl Settings {
         if !other.tts_engine_args.is_empty() {
             self.tts_engine_args = other.tts_engine_args;
         }
+        self.width = other.width;
+        self.show_line_numbers = other.show_line_numbers;
     }
 }
 
@@ -97,6 +101,8 @@ impl Default for Settings {
             seamless_between_chapters: false,
             preferred_tts_engine: None,
             tts_engine_args: Vec::new(),
+            width: None,
+            show_line_numbers: false,
         }
     }
 }

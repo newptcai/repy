@@ -48,10 +48,11 @@ fn run_tui(config: Config) -> Result<()> {
     reader.run()
 }
 
-fn run_tui_with_file(_filepath: &str, config: Config) -> Result<()> {
-    // TODO: Load ebook file and pass to reader
-    // For now, just start the TUI
+fn run_tui_with_file(filepath: &str, config: Config) -> Result<()> {
     let mut reader = Reader::new(config)?;
+    if let Err(e) = reader.load_ebook(filepath) {
+        eprintln!("Warning: Could not load ebook: {}", e);
+    }
     reader.run()
 }
 
