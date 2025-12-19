@@ -1,8 +1,9 @@
 use crate::models::{BookMetadata, TextStructure, TocEntry};
 use crate::parser::parse_html;
 use eyre::Result;
-use epub::doc::EpubDoc;
+use epub::doc::{EpubDoc, NavPoint};
 use std::collections::HashSet;
+use std::path::PathBuf;
 
 pub trait Ebook {
     fn path(&self) -> &str;
@@ -37,6 +38,47 @@ impl Epub {
             metadata: BookMetadata::default(),
         }
     }
+
+    fn split_navpoint_target(content: &PathBuf) -> (PathBuf, Option<String>) {
+        let content_str = content.to_string_lossy();
+        if let Some((path, fragment)) = content_str.split_once('#') {
+            let section = if fragment.is_empty() {
+                None
+            } else {
+                Some(fragment.to_string())
+            };
+            let resource_path = if path.is_empty() {
+                content.clone()
+            } else {
+                PathBuf::from(path)
+            };
+            (resource_path, section)
+        } else {
+            (content.clone(), None)
+        }
+    }
+
+    fn append_navpoints(
+        toc_entries: &mut Vec<TocEntry>,
+        navpoints: &[NavPoint],
+        doc: &EpubDoc<std::io::BufReader<std::fs::File>>,
+    ) {
+        for navpoint in navpoints {
+            let (resource_path, section) = Self::split_navpoint_target(&navpoint.content);
+            let content_index = doc
+                .resource_uri_to_chapter(&resource_path)
+                .unwrap_or(usize::MAX);
+            toc_entries.push(TocEntry {
+                label: navpoint.label.clone(),
+                content_index,
+                section,
+            });
+
+            if !navpoint.children.is_empty() {
+                Self::append_navpoints(toc_entries, &navpoint.children, doc);
+            }
+        }
+    }
 }
 
 impl Ebook for Epub {
@@ -59,15 +101,9 @@ impl Ebook for Epub {
     fn initialize(&mut self) -> Result<()> {
         let doc = EpubDoc::new(&self.path)?;
         self.contents = doc.spine.iter().map(|item| item.idref.clone()).collect();
-        
+
         let mut toc_entries = Vec::new();
-        for entry in &doc.toc {
-            toc_entries.push(TocEntry {
-                label: entry.label.clone(),
-                content_index: 0, 
-                section: None,
-            });
-        }
+        Self::append_navpoints(&mut toc_entries, &doc.toc, &doc);
         self.toc = toc_entries;
 
         let mut metadata = BookMetadata::default();

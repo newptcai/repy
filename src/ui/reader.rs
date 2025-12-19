@@ -193,6 +193,7 @@ pub struct Reader {
     board: Board,
     clipboard: Clipboard,
     ebook: Option<Epub>,
+    content_start_rows: Vec<usize>,
 }
 
 impl Reader {
@@ -213,6 +214,7 @@ impl Reader {
             board: Board::new(),
             clipboard: Clipboard::new()?,
             ebook: None,
+            content_start_rows: Vec::new(),
         })
     }
 
@@ -222,9 +224,13 @@ impl Reader {
     
         let text_width = self.state.borrow().config.settings.width.unwrap_or(80);
         let all_content = epub.get_all_parsed_content(text_width)?;
-    
+
         let mut combined_text_structure = TextStructure::default();
+        let mut content_start_rows = Vec::with_capacity(all_content.len());
+        let mut row_offset = 0;
         for ts in all_content {
+            content_start_rows.push(row_offset);
+            row_offset += ts.text_lines.len();
             combined_text_structure.text_lines.extend(ts.text_lines);
             combined_text_structure.image_maps.extend(ts.image_maps);
             combined_text_structure.section_rows.extend(ts.section_rows);
@@ -233,6 +239,7 @@ impl Reader {
     
         self.board.update_text_structure(combined_text_structure);
         self.ebook = Some(epub);
+        self.content_start_rows = content_start_rows;
 
         if let Some(epub) = self.ebook.as_ref() {
             let mut state = self.state.borrow_mut();
@@ -1214,20 +1221,27 @@ impl Reader {
             }
         };
 
-        if let Some(section_id) = section {
+        let mut target_row = None;
+        if let Some(section_id) = section.as_ref() {
             if let Some(section_rows) = self.board.section_rows() {
-                if let Some(row) = section_rows.get(&section_id) {
-                    let mut state = self.state.borrow_mut();
-                    state.reading_state.row = *row;
-                    state.ui_state.open_window(WindowType::Reader);
-                    return Ok(());
+                if let Some(row) = section_rows.get(section_id) {
+                    target_row = Some(*row);
                 }
             }
         }
 
+        if target_row.is_none() {
+            if let Some(row) = self.content_start_rows.get(content_index) {
+                target_row = Some(*row);
+            }
+        }
+
         let mut state = self.state.borrow_mut();
-        if content_index == 0 {
-            state.reading_state.row = 0;
+        if let Some(row) = target_row {
+            state.reading_state.row = row;
+            if content_index < self.content_start_rows.len() {
+                state.reading_state.content_index = content_index;
+            }
             state.ui_state.open_window(WindowType::Reader);
         } else {
             state.ui_state.set_message("TOC entry not mapped to text".to_string(), MessageType::Warning);
@@ -1402,13 +1416,18 @@ impl Reader {
         };
         let all_content = epub.get_all_parsed_content(text_width)?;
         let mut combined_text_structure = TextStructure::default();
+        let mut content_start_rows = Vec::with_capacity(all_content.len());
+        let mut row_offset = 0;
         for ts in all_content {
+            content_start_rows.push(row_offset);
+            row_offset += ts.text_lines.len();
             combined_text_structure.text_lines.extend(ts.text_lines);
             combined_text_structure.image_maps.extend(ts.image_maps);
             combined_text_structure.section_rows.extend(ts.section_rows);
             combined_text_structure.formatting.extend(ts.formatting);
         }
         self.board.update_text_structure(combined_text_structure);
+        self.content_start_rows = content_start_rows;
         let mut state = self.state.borrow_mut();
         state.reading_state.textwidth = text_width;
         let total_lines = self.board.total_lines();
