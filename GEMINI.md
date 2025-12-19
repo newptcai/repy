@@ -536,6 +536,7 @@ impl Ebook for EpubParser {
 - **Performance first**: Profile and optimize critical paths early
 - **Cross-platform mindset**: Ensure compatibility across Linux, macOS, and Windows
 - **User experience preservation**: Maintain all epy features while improving performance
+- **Epy reference**: Initialize the `epy` submodule to consult the original code; if SSH access is unavailable, switch the submodule URL to HTTPS before running `git submodule update --init --recursive`.
 
 ## Success Metrics
 
