@@ -730,6 +730,7 @@ impl Reader {
                 frame.area(),
                 &state.ui_state.toc_entries,
                 state.ui_state.toc_selected_index,
+                state.ui_state.metadata.as_ref(),
             );
         } else if state.ui_state.show_bookmarks {
             let entries: Vec<String> = state

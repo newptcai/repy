@@ -2,17 +2,23 @@ use ratatui::{
     layout::Rect,
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, List, ListItem, Paragraph},
+    widgets::{Block, Borders, Clear, Paragraph},
     Frame,
 };
 
-use crate::models::TocEntry;
+use crate::models::{BookMetadata, TocEntry};
 
 pub struct TocWindow;
 
 impl TocWindow {
-    pub fn render(frame: &mut Frame, area: Rect, entries: &[TocEntry], selected_index: usize) {
-        let popup_area = Self::centered_popup_area(area, 50, 80);
+    pub fn render(
+        frame: &mut Frame,
+        area: Rect,
+        entries: &[TocEntry],
+        selected_index: usize,
+        metadata: Option<&BookMetadata>,
+    ) {
+        let popup_area = Self::centered_popup_area(area, 60, 70);
 
         frame.render_widget(Clear, popup_area);
 
@@ -31,30 +37,35 @@ impl TocWindow {
             return;
         }
 
-        let items: Vec<ListItem> = entries
-            .iter()
-            .enumerate()
-            .map(|(i, entry)| {
-                let style = if i == selected_index {
-                    Style::default().bg(Color::Blue).fg(Color::White)
-                } else {
-                    Style::default()
-                };
+        // Header title from book metadata, falling back to a generic label
+        let book_title = metadata
+            .and_then(|m| m.title.as_deref())
+            .unwrap_or("Table of Contents");
 
-                let content = if let Some(section) = &entry.section {
-                    format!("{} ({})", entry.label, section)
-                } else {
-                    entry.label.clone()
-                };
+        let mut lines: Vec<Line> = Vec::new();
 
-                ListItem::new(Line::from(content)).style(style)
-            })
-            .collect();
+        // Book title at the top, styled similarly to other popups
+        lines.push(Line::from(Span::styled(
+            format!(" {}", book_title),
+            Style::default().add_modifier(Modifier::BOLD),
+        )));
 
-        let list = List::new(items)
+        // Indented table of contents entries; only show the label, not the raw section/html
+        for (i, entry) in entries.iter().enumerate() {
+            let style = if i == selected_index {
+                Style::default().bg(Color::Blue).fg(Color::White)
+            } else {
+                Style::default()
+            };
+
+            let content = format!("   {}", entry.label);
+            lines.push(Line::from(Span::styled(content, style)));
+        }
+
+        let paragraph = Paragraph::new(lines)
             .block(Block::default().title("Table of Contents").borders(Borders::ALL));
 
-        frame.render_widget(list, popup_area);
+        frame.render_widget(paragraph, popup_area);
     }
 
     fn centered_popup_area(area: Rect, width_percent: u16, height_percent: u16) -> Rect {
