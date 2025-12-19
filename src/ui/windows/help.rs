@@ -1,7 +1,6 @@
 use ratatui::{
     layout::Rect,
-    style::{Modifier, Style},
-    text::{Line, Span},
+    text::Line,
     widgets::{Block, Borders, Clear, Paragraph},
     Frame,
 };
@@ -15,9 +14,6 @@ impl HelpWindow {
         frame.render_widget(Clear, popup_area);
 
         let help_content = vec![
-            Line::from(Span::styled("Help", Style::default().add_modifier(Modifier::BOLD))),
-            Line::from("----"),
-            Line::from(""),
             Line::from(" Key Bindings:"),
             Line::from("   k  Scroll Up"),
             Line::from("   j  Scroll Down"),
