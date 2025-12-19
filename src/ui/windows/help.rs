@@ -42,7 +42,7 @@ impl HelpWindow {
             Line::from("   c  Switch Color"),
             Line::from("   !  T T S Toggle"),
             Line::from("   D  Double Spread Toggle"),
-            Line::from("   R  Library"),
+            Line::from("   r  Library (history; 'd' deletes entry)"),
         ];
 
         let help_paragraph = Paragraph::new(help_content)

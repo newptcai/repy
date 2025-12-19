@@ -6,6 +6,7 @@ Concise roadmap for the Rust port of `epy`.
 
 - Core configuration and app data prefix handling are implemented (`src/config.rs`).
 - SQLite-backed reading state, library/history, and bookmarks are implemented (`src/state.rs`).
+- In-TUI library/history window with selection and deletion is wired into the reader (`src/ui/reader.rs`, `src/ui/windows/library.rs`).
 - On quit, the current book position and progress are persisted; on startup with no arguments, the last-read book is reopened if available (`src/ui/reader.rs`, `src/main.rs`).
 - SQLite is fully managed from Rust with `rusqlite`’s `bundled` feature, so no system `libsqlite3` is required (`Cargo.toml`).
 - A user-facing `README.md` documents configuration, database paths, and basic usage.

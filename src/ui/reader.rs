@@ -5,6 +5,7 @@ use std::collections::HashMap;
 use std::io;
 use std::rc::Rc;
 
+use chrono::Local;
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::{
     backend::CrosstermBackend,
@@ -704,6 +705,9 @@ impl Reader {
                 let current = state.ui_state.library_selected_index;
                 state.ui_state.library_selected_index = current.saturating_sub(repeat_count as usize);
             }
+            KeyCode::Char('d') => {
+                self.delete_selected_library_item()?;
+            }
             KeyCode::Enter => {
                 self.open_selected_library_item()?;
             }
@@ -791,11 +795,7 @@ impl Reader {
                 .ui_state
                 .library_items
                 .iter()
-                .map(|item| {
-                    let title = item.title.as_deref().unwrap_or("Unknown title");
-                    let author = item.author.as_deref().unwrap_or("Unknown author");
-                    format!("{} — {} ({})", title, author, item.filepath)
-                })
+                .map(Self::format_library_item)
                 .collect();
             LibraryWindow::render(
                 frame,
@@ -833,6 +833,43 @@ impl Reader {
         if let Some(ref message) = state.ui_state.message {
             Self::render_message_static(frame, message, &state.ui_state.message_type);
         }
+    }
+
+    fn format_library_item(item: &LibraryItem) -> String {
+        let reading_progress_str = match item.reading_progress {
+            Some(p) => {
+                let pct = (p * 100.0).round() as i32;
+                let pct = pct.clamp(0, 100);
+                format!("{:>4}", format!("{}%", pct))
+            }
+            None => format!("{:>4}", "N/A"),
+        };
+
+        let filename = {
+            let path = &item.filepath;
+            if let Ok(home) = std::env::var("HOME") {
+                if path.starts_with(&home) {
+                    path.replacen(&home, "~", 1)
+                } else {
+                    path.clone()
+                }
+            } else {
+                path.clone()
+            }
+        };
+
+        let book_name = if let (Some(title), Some(author)) = (item.title.as_ref(), item.author.as_ref()) {
+            format!("{} - {} ({})", title, author, filename)
+        } else if item.title.is_none() && item.author.is_some() {
+            format!("{} - {}", filename, item.author.as_ref().unwrap())
+        } else {
+            filename
+        };
+
+        let last_read_local = item.last_read.with_timezone(&Local);
+        let last_read_str = last_read_local.format("%I:%M%p %b %d").to_string();
+
+        format!("{} {}: {}", reading_progress_str, last_read_str, book_name)
     }
 
     fn settings_entries(settings: &crate::settings::Settings) -> Vec<String> {
@@ -1349,6 +1386,28 @@ impl Reader {
             let mut state = self.state.borrow_mut();
             state.reading_state.row = row;
             state.ui_state.open_window(WindowType::Reader);
+        }
+        Ok(())
+    }
+
+    fn delete_selected_library_item(&mut self) -> eyre::Result<()> {
+        let filepath = {
+            let state = self.state.borrow();
+            state
+                .ui_state
+                .library_items
+                .get(state.ui_state.library_selected_index)
+                .map(|item| item.filepath.clone())
+        };
+        if let Some(path) = filepath {
+            self.db_state.delete_from_library(&path)?;
+            let library_items = self.db_state.get_from_history()?;
+            let mut state = self.state.borrow_mut();
+            state.ui_state.library_items = library_items;
+            if state.ui_state.library_selected_index >= state.ui_state.library_items.len() {
+                state.ui_state.library_selected_index =
+                    state.ui_state.library_items.len().saturating_sub(1);
+            }
         }
         Ok(())
     }

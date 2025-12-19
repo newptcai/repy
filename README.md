@@ -33,8 +33,17 @@ Basic usage mirrors `epy`:
     last saved position.
   - Otherwise, it starts in the reader UI without a book loaded.
 
-Keyboard controls are intentionally close to `epy` (navigation, search, library,
-bookmarks, etc.) and are documented in the help window inside the TUI.
+Keyboard controls are intentionally close to `epy` and are documented in the
+help window inside the TUI. A few important ones:
+
+- `j` / `k` — scroll down / up.
+- `h` / `l` — page up / down.
+- `t` — open the table of contents.
+- `m` — open the bookmarks window (`a` to add, `d` to delete, `Enter` to jump).
+- `r` — open the Library/history window:
+  - `j` / `k` to select an entry.
+  - `Enter` to open the selected book.
+  - `d` to delete the selected history entry (and its saved reading state).
 
 ## Configuration
 
@@ -92,4 +101,3 @@ library, or via the “last book” behavior when starting with no arguments),
 
 This port is still evolving. Bug reports, small focused patches, and feedback on
 feature parity with `epy` are very welcome.
-
