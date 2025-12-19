@@ -2,6 +2,24 @@
 
 Concise roadmap for the Rust port of `epy`.
 
+## Current Progress (Dec 2025)
+
+- Core configuration and app data prefix handling are implemented (`src/config.rs`).
+- SQLite-backed reading state, library/history, and bookmarks are implemented (`src/state.rs`).
+- On quit, the current book position and progress are persisted; on startup with no arguments, the last-read book is reopened if available (`src/ui/reader.rs`, `src/main.rs`).
+- SQLite is fully managed from Rust with `rusqlite`’s `bundled` feature, so no system `libsqlite3` is required (`Cargo.toml`).
+- A user-facing `README.md` documents configuration, database paths, and basic usage.
+
+What is *not* done yet (high level):
+
+- Layout parity polish (header/footer chrome, margins, image placeholders, line numbers toggle, help window parity).
+- Advanced search features (multi-chapter regex, search history, fuzzy search, incremental search).
+- Text-to-speech trait system and engines.
+- External tool integration (dictionary, image viewer, export, sync).
+- Utilities module parity with `epy` (`src/utils.rs`), performance work, and packaging/CI.
+
+The detailed roadmap below remains the source of truth for planned work.
+
 ## Roadmap
 
 ### Phase 1: Core Infrastructure (COMPLETED ✅)
