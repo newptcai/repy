@@ -1,6 +1,6 @@
 # Comprehensive Rust Porting Plan: epy to repy
 
-A concise plan for porting the Python-based epub reader `epy` to the Rust-based `repy`.
+Concise roadmap for the Rust port of `epy`.
 
 ## Roadmap
 
@@ -17,28 +17,82 @@ A concise plan for porting the Python-based epub reader `epy` to the Rust-based 
 - Command-line interface
 
 ### Phase 3: Advanced Features (PENDING ⏳)
-- Text-to-speech integration
-- Advanced search
-- External tool integration
-- Utilities
+
+9.  **Layout Parity (epy vs repy):**
+    *   [ ] Header bar
+    *   [ ] Minimal chrome
+    *   [ ] Footer/status
+    *   [ ] Margins/padding
+    *   [ ] Image placeholder styling
+    *   [ ] Line numbers toggle
+    *   [ ] Help window parity
+
+10. **Text-to-Speech Integration (`src/tts/`):**
+    *   [ ] Create TTS trait system for multiple engine support
+    *   [ ] **GTTS + MPV Engine**: Async TTS with progress tracking
+    *   [ ] **Mimic Engine**: Local TTS synthesis integration
+    *   [ ] **Pico Engine**: Cross-platform voice synthesis
+    *   [ ] Add voice selection, speed control, and pronunciation dictionaries
+    *   [ ] Implement reading position synchronization with TTS
+
+11. **Advanced Search (`src/search.rs`):**
+    *   [ ] Multi-chapter regex search with performance optimization
+    *   [ ] Search result highlighting with configurable colors
+    *   [ ] Search history and saved searches
+    *   [ ] Fuzzy search and typo tolerance
+    *   [ ] Incremental search with real-time results
+
+12. **External Tool Integration (`src/tools/`):**
+    *   [ ] **Dictionary Integration**: Multiple dictionary engines (sdcv, dict, etc.)
+    *   [ ] **Image Viewer Integration**: Cross-platform image display
+    *   [ ] **Export Functionality**: Text and highlighted content export
+    *   [ ] **Sync Integration**: Cloud storage for reading progress
+
+13. **Utilities (`src/utils.rs`):**
+    *   [ ] Port the helper functions from `epy/src/epy_reader/utils.py` and `epy/src/epy_reader/lib.py` to a `utils` module.
+    *   [ ] Add platform-specific utilities (Windows/Linux/macOS)
+    *   [ ] Implement file format detection and validation
+    *   [ ] Add logging and debugging utilities
 
 ### Phase 4: Performance & Polish (PENDING ⏳)
-- Performance optimization
-- Advanced features
-- Quality assurance
+
+14. **Performance Optimization:**
+    *   [ ] Implement async book loading and caching
+    *   [ ] Optimize large book handling with lazy loading
+    *   [ ] Add memory management for massive texts
+    *   [ ] Implement progressive loading for network books
+    *   [ ] Performance profiling and benchmarking
+
+15. **Advanced Features:**
+    *   [ ] **Multiple Format Support**: MOBI, AZW, FB2 parsers using trait system
+    *   [ ] **Plugin System**: Extensible architecture for custom parsers and tools
+    *   [ ] **Reading Statistics**: Track reading speed, habits, and progress
+    *   [ ] **Annotation System**: Marginal notes and highlighting
+    *   [ ] **Custom Themes**: User-defined color schemes and layouts
+
+16. **Quality Assurance:**
+    *   [ ] Comprehensive test suite with integration tests
+    *   [ ] Property-based testing for critical components
+    *   [ ] Performance testing and memory profiling
+    *   [ ] Cross-platform compatibility testing
+    *   [ ] Accessibility features and usability testing
 
 ### Phase 5: Integration & Deployment (PENDING ⏳)
-- Integration
-- Distribution & documentation
 
-## Layout Parity TODOs (epy vs repy)
-- Header bar
-- Minimal chrome
-- Footer/status
-- Margins/padding
-- Image placeholder styling
-- Line numbers toggle
-- Help window parity
+17. **Integration (`src/main.rs`):**
+    *   [ ] Tie all the modules together in the `main` function.
+    *   [ ] Initialize the configuration and state.
+    *   [ ] Parse command-line arguments.
+    *   [ ] Set up the terminal for `ratatui`.
+    *   [ ] Create and run the main `Reader` application.
+    *   [ ] Ensure graceful shutdown and terminal restoration.
+
+18. **Distribution & Documentation:**
+    *   [ ] Create build scripts and CI/CD pipeline
+    *   [ ] Package for multiple platforms (cargo-deb, cargo-wix, etc.)
+    *   [ ] Comprehensive user documentation and README
+    *   [ ] Developer documentation and contribution guidelines
+    *   [ ] Migration guide from epy to repy
 
 ## Development Guidelines
 - Commit frequently with small, focused changes.
