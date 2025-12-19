@@ -14,12 +14,15 @@ impl State {
         let prefix = get_app_data_prefix()?;
         let filepath = prefix.join("states.db");
 
-        let conn = Connection::open(&filepath)?;
+        // Ensure the parent directory exists
+        if let Some(parent) = filepath.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
 
-        // Check if the database needs initialization
-        // Note: rusqlite::Connection::open creates the file if it doesn't exist
-        // So, we check if the file existed *before* opening the connection.
+        // Check if the database file existed before opening
         let db_exists = filepath.exists();
+
+        let conn = Connection::open(&filepath)?;
 
         if !db_exists {
             Self::init_db(&conn)?;

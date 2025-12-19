@@ -81,6 +81,9 @@ fn main() -> Result<()> {
 
 fn run_tui(config: Config) -> Result<()> {
     let mut reader = Reader::new(config)?;
+    // When started without an explicit file, mimic `epy` by
+    // reopening the last-read book at its saved position if available.
+    reader.load_last_ebook_if_any()?;
     reader.run()
 }
 

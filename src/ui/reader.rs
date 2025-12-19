@@ -218,6 +218,16 @@ impl Reader {
         })
     }
 
+    /// Load the most recently read ebook, if any, using the database
+    pub fn load_last_ebook_if_any(&mut self) -> eyre::Result<()> {
+        if let Some(filepath) = self.db_state.get_last_read()? {
+            if std::path::Path::new(&filepath).exists() {
+                self.load_ebook(&filepath)?;
+            }
+        }
+        Ok(())
+    }
+
     pub fn load_ebook(&mut self, path: &str) -> eyre::Result<()> {
         let mut epub = Epub::new(path);
         epub.initialize()?;
@@ -243,9 +253,19 @@ impl Reader {
 
         if let Some(epub) = self.ebook.as_ref() {
             let mut state = self.state.borrow_mut();
+
+            // Load last reading state from the database (or default if none)
+            if let Ok(db_state) = self.db_state.get_last_reading_state(epub) {
+                state.reading_state = db_state;
+            }
+
+            // Ensure text width matches current config and clamp row
             state.reading_state.textwidth = text_width;
-            state.reading_state.row = 0;
-            state.reading_state.content_index = 0;
+            let total_lines = self.board.total_lines();
+            if total_lines > 0 && state.reading_state.row >= total_lines {
+                state.reading_state.row = total_lines - 1;
+            }
+
             state.ui_state.metadata = Some(epub.get_meta().clone());
             state.ui_state.toc_entries = epub.toc_entries().clone();
             state.ui_state.toc_selected_index = 0;
@@ -296,6 +316,24 @@ impl Reader {
                     }
                 }
             }
+        }
+
+        // Persist current reading state to the database before cleaning up
+        if let Some(epub) = self.ebook.as_ref() {
+            let reading_state = {
+                let state = self.state.borrow();
+                state.reading_state.clone()
+            };
+            let total_lines = self.board.total_lines();
+            let rel_pctg = if total_lines > 0 {
+                Some(reading_state.row as f32 / total_lines as f32)
+            } else {
+                None
+            };
+            let mut to_save = reading_state.clone();
+            to_save.rel_pctg = rel_pctg;
+            self.db_state.set_last_reading_state(epub, &to_save)?;
+            self.db_state.update_library(epub, rel_pctg)?;
         }
 
         // Cleanup terminal
