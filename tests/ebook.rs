@@ -3,7 +3,7 @@ use repy::ebook::{Ebook, Epub};
 
 #[test]
 fn test_epub_loading() -> Result<(), Box<dyn std::error::Error>> {
-    let epub_path = "books/meditations.epub";
+    let epub_path = "tests/fixtures/meditations.epub";
     println!("Loading EPUB: {}", epub_path);
 
     // Create and initialize EPUB reader

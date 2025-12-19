@@ -238,8 +238,14 @@ pub fn get_app_data_prefix() -> Result<PathBuf> {
 mod tests {
     use super::*;
     use std::env;
+    use std::sync::{Mutex, OnceLock};
     use tempfile::tempdir;
     use crate::settings::{Settings, CfgDefaultKeymaps};
+
+    fn lock_env() -> std::sync::MutexGuard<'static, ()> {
+        static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        ENV_LOCK.get_or_init(|| Mutex::new(())).lock().expect("lock env mutex")
+    }
 
     fn set_test_environment(dir: &tempfile::TempDir) {
         unsafe {
@@ -273,6 +279,7 @@ mod tests {
 
     #[test]
     fn test_config_new_no_existing_file() -> Result<()> {
+        let _env_lock = lock_env();
         let original_home = env::var_os("HOME");
         let original_xdg_config_home = env::var_os("XDG_CONFIG_HOME");
         let original_userprofile = env::var_os("USERPROFILE");
@@ -304,6 +311,7 @@ mod tests {
 
     #[test]
     fn test_config_new_with_existing_file() -> Result<()> {
+        let _env_lock = lock_env();
         let original_home = env::var_os("HOME");
         let original_xdg_config_home = env::var_os("XDG_CONFIG_HOME");
         let original_userprofile = env::var_os("USERPROFILE");
@@ -342,6 +350,7 @@ mod tests {
 
     #[test]
     fn test_get_app_data_prefix() {
+        let _env_lock = lock_env();
         let original_home = env::var_os("HOME");
         let original_xdg_config_home = env::var_os("XDG_CONFIG_HOME");
         let original_userprofile = env::var_os("USERPROFILE");
@@ -397,6 +406,7 @@ mod tests {
 
     #[test]
     fn test_config_accessors() -> Result<()> {
+        let _env_lock = lock_env();
         let original_home = env::var_os("HOME");
         let original_xdg_config_home = env::var_os("XDG_CONFIG_HOME");
         let original_userprofile = env::var_os("USERPROFILE");
@@ -418,6 +428,7 @@ mod tests {
 
     #[test]
     fn test_config_with_custom_settings() -> Result<()> {
+        let _env_lock = lock_env();
         let original_home = env::var_os("HOME");
         let original_xdg_config_home = env::var_os("XDG_CONFIG_HOME");
         let original_userprofile = env::var_os("USERPROFILE");
@@ -447,6 +458,7 @@ mod tests {
 
     #[test]
     fn test_config_save_and_load() -> Result<()> {
+        let _env_lock = lock_env();
         let original_home = env::var_os("HOME");
         let original_xdg_config_home = env::var_os("XDG_CONFIG_HOME");
         let original_userprofile = env::var_os("USERPROFILE");
@@ -483,6 +495,7 @@ mod tests {
 
     #[test]
     fn test_config_invalid_json() -> Result<()> {
+        let _env_lock = lock_env();
         let original_home = env::var_os("HOME");
         let original_xdg_config_home = env::var_os("XDG_CONFIG_HOME");
         let original_userprofile = env::var_os("USERPROFILE");
@@ -511,6 +524,7 @@ mod tests {
 
     #[test]
     fn test_config_partial_settings() -> Result<()> {
+        let _env_lock = lock_env();
         let original_home = env::var_os("HOME");
         let original_xdg_config_home = env::var_os("XDG_CONFIG_HOME");
         let original_userprofile = env::var_os("USERPROFILE");
@@ -557,6 +571,7 @@ mod tests {
 
     #[test]
     fn test_config_edge_cases() -> Result<()> {
+        let _env_lock = lock_env();
         let original_home = env::var_os("HOME");
         let original_xdg_config_home = env::var_os("XDG_CONFIG_HOME");
         let original_userprofile = env::var_os("USERPROFILE");

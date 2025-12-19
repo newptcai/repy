@@ -5,6 +5,7 @@ use std::process::Command;
 #[test]
 fn test_history_flag() {
     let mut cmd = Command::cargo_bin("repy").unwrap();
+    cmd.env("REPY_CLI_ECHO", "1");
     cmd.arg("-r");
     cmd.assert()
         .success()
@@ -14,6 +15,7 @@ fn test_history_flag() {
 #[test]
 fn test_dump_flag() {
     let mut cmd = Command::cargo_bin("repy").unwrap();
+    cmd.env("REPY_CLI_ECHO", "1");
     cmd.arg("--dump");
     cmd.assert()
         .success()
@@ -23,9 +25,9 @@ fn test_dump_flag() {
 #[test]
 fn test_ebook_arg() {
     let mut cmd = Command::cargo_bin("repy").unwrap();
+    cmd.env("REPY_CLI_ECHO", "1");
     cmd.arg("my_book.epub");
     cmd.assert()
         .success()
         .stdout(predicates::str::contains("ebook: [\"my_book.epub\"]"));
 }
-

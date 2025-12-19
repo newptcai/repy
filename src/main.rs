@@ -10,6 +10,12 @@ use eyre::Result;
 fn main() -> Result<()> {
     let cli = Cli::parse();
 
+    if std::env::var_os("REPY_CLI_ECHO").is_some() {
+        println!("history: {}", cli.history);
+        println!("dump: {}", cli.dump);
+        println!("ebook: {:?}", cli.ebook);
+    }
+
     // Load configuration
     let config = match Config::new() {
         Ok(config) => config,
@@ -23,6 +29,12 @@ fn main() -> Result<()> {
     };
 
     // Handle different CLI modes
+    if cli.dump && cli.ebook.is_empty() {
+        // Dump mode without an ebook path.
+        println!("Content dumping not yet implemented");
+        return Ok(());
+    }
+
     if !cli.ebook.is_empty() {
         let filepath = &cli.ebook[0]; // Take the first ebook path
         if cli.dump {
@@ -30,6 +42,10 @@ fn main() -> Result<()> {
             dump_content(filepath)?;
         } else {
             // TUI mode with a file
+            if !std::path::Path::new(filepath).exists() {
+                eprintln!("Warning: Ebook path does not exist: {}", filepath);
+                return Ok(());
+            }
             run_tui_with_file(filepath, config)?;
         }
     } else if cli.history {
