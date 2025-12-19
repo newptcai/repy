@@ -1,6 +1,7 @@
 use repy::{
     cli::Cli,
     config::Config,
+    logging::{self, LogLevel},
     ui::reader::Reader,
 };
 
@@ -9,6 +10,18 @@ use eyre::Result;
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
+    let log_level = if cli.debug || cli.verbose > 1 {
+        LogLevel::Debug
+    } else if cli.verbose > 0 {
+        LogLevel::Info
+    } else {
+        LogLevel::Warn
+    };
+    logging::init(log_level);
+
+    if cli.debug {
+        logging::debug(format!("CLI options: {:?}", cli));
+    }
 
     if std::env::var_os("REPY_CLI_ECHO").is_some() {
         println!("history: {}", cli.history);
@@ -17,10 +30,17 @@ fn main() -> Result<()> {
     }
 
     // Load configuration
-    let config = match Config::new() {
+    let config = match cli.config.as_ref() {
+        Some(filepath) => {
+            logging::info(format!("Using config file: {}", filepath.display()));
+            Config::load_from(filepath.to_path_buf())
+        }
+        None => Config::new(),
+    };
+    let config = match config {
         Ok(config) => config,
         Err(err) => {
-            eprintln!("Warning: Could not load configuration: {}", err);
+            logging::warn(format!("Could not load configuration: {}", err));
             eprintln!("Starting with default settings");
             // We can't create a Config manually due to private fields,
             // so we'll use a placeholder approach for now
