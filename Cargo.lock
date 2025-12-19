@@ -1823,6 +1823,7 @@ dependencies = [
  "html2text",
  "predicates",
  "ratatui",
+ "regex",
  "rusqlite",
  "scraper",
  "serde",

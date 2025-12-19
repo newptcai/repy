@@ -6,7 +6,7 @@ use ratatui::{
     Frame,
 };
 
-use crate::models::{TextStructure, ReadingState};
+use crate::models::TextStructure;
 use crate::ui::reader::ApplicationState;
 
 /// Board widget for rendering book text content
@@ -74,7 +74,22 @@ impl Board {
                     }
                 }
 
-                spans.push(Span::styled(line.clone(), style));
+                if let Some(ranges) = state.ui_state.search_matches.get(&line_num) {
+                    let mut last_index = 0;
+                    for (start, end) in ranges {
+                        if *start > last_index {
+                            spans.push(Span::styled(line[last_index..*start].to_string(), style));
+                        }
+                        let highlight_style = style.fg(Color::Black).bg(Color::Yellow);
+                        spans.push(Span::styled(line[*start..*end].to_string(), highlight_style));
+                        last_index = *end;
+                    }
+                    if last_index < line.len() {
+                        spans.push(Span::styled(line[last_index..].to_string(), style));
+                    }
+                } else {
+                    spans.push(Span::styled(line.clone(), style));
+                }
                 Line::from(spans)
             })
             .collect();
@@ -114,6 +129,16 @@ impl Board {
         self.text_structure
             .as_ref()
             .and_then(|ts| ts.text_lines.get(line).map(String::as_str))
+    }
+
+    pub fn lines(&self) -> Option<&[String]> {
+        self.text_structure
+            .as_ref()
+            .map(|ts| ts.text_lines.as_slice())
+    }
+
+    pub fn section_rows(&self) -> Option<&std::collections::HashMap<String, usize>> {
+        self.text_structure.as_ref().map(|ts| &ts.section_rows)
     }
 
     pub fn get_selected_text(&self, start: usize, end: usize) -> String {

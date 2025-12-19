@@ -1,30 +1,16 @@
 use ratatui::{
     layout::Rect,
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, List, ListItem, Paragraph},
+    widgets::{Block, Borders, Clear, Paragraph},
     Frame,
 };
 
-pub struct HelpWindow {
-    pub visible: bool,
-}
+pub struct HelpWindow;
 
 impl HelpWindow {
-    pub fn new() -> Self {
-        Self { visible: false }
-    }
-
-    pub fn toggle(&mut self) {
-        self.visible = !self.visible;
-    }
-
-    pub fn render(&self, frame: &mut Frame, area: Rect) {
-        if !self.visible {
-            return;
-        }
-
-        let popup_area = self.centered_popup_area(area, 60, 70);
+    pub fn render(frame: &mut Frame, area: Rect) {
+        let popup_area = Self::centered_popup_area(area, 60, 70);
 
         frame.render_widget(Clear, popup_area);
 
@@ -72,7 +58,7 @@ impl HelpWindow {
         frame.render_widget(help_paragraph, popup_area);
     }
 
-    fn centered_popup_area(&self, area: Rect, width_percent: u16, height_percent: u16) -> Rect {
+    fn centered_popup_area(area: Rect, width_percent: u16, height_percent: u16) -> Rect {
         let width = (area.width * width_percent) / 100;
         let height = (area.height * height_percent) / 100;
         let x = area.x + (area.width - width) / 2;

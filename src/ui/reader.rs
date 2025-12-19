@@ -1,5 +1,7 @@
 use arboard::Clipboard;
+use regex::Regex;
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::io;
 use std::rc::Rc;
 
@@ -16,10 +18,15 @@ use ratatui::{
 use crate::config::Config;
 use crate::ebook::{Ebook, Epub};
 use crate::models::{
-    Direction as AppDirection, ReadingState, SearchData, TextStructure, WindowType,
+    BookMetadata, Direction as AppDirection, LibraryItem, ReadingState, SearchData, TextStructure,
+    TocEntry, WindowType,
 };
 use crate::state::State;
 use crate::ui::board::Board;
+use crate::ui::windows::{
+    bookmarks::BookmarksWindow, help::HelpWindow, library::LibraryWindow, metadata::MetadataWindow,
+    search::SearchWindow, settings::SettingsWindow, toc::TocWindow,
+};
 
 /// Application state that encompasses all UI and reading state
 #[derive(Debug, Clone)]
@@ -57,8 +64,17 @@ pub struct UiState {
     pub show_metadata: bool,
     pub show_settings: bool,
     pub search_query: String,
-    pub search_results: Vec<String>,
+    pub search_results: Vec<SearchResult>,
+    pub search_matches: HashMap<usize, Vec<(usize, usize)>>,
     pub selected_search_result: usize,
+    pub toc_entries: Vec<TocEntry>,
+    pub toc_selected_index: usize,
+    pub bookmarks: Vec<(String, ReadingState)>,
+    pub bookmarks_selected_index: usize,
+    pub library_items: Vec<LibraryItem>,
+    pub library_selected_index: usize,
+    pub metadata: Option<BookMetadata>,
+    pub settings_selected_index: usize,
     pub message: Option<String>,
     pub message_type: MessageType,
     pub selection_start: Option<usize>,
@@ -77,7 +93,16 @@ impl UiState {
             show_settings: false,
             search_query: String::new(),
             search_results: Vec::new(),
+            search_matches: HashMap::new(),
             selected_search_result: 0,
+            toc_entries: Vec::new(),
+            toc_selected_index: 0,
+            bookmarks: Vec::new(),
+            bookmarks_selected_index: 0,
+            library_items: Vec::new(),
+            library_selected_index: 0,
+            metadata: None,
+            settings_selected_index: 0,
             message: None,
             message_type: MessageType::Info,
             selection_start: None,
@@ -128,6 +153,38 @@ pub enum MessageType {
     Error,
 }
 
+#[derive(Debug, Clone)]
+pub struct SearchResult {
+    pub line: usize,
+    pub ranges: Vec<(usize, usize)>,
+    pub preview: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum SettingItem {
+    ShowLineNumbers,
+    MouseSupport,
+    PageScrollAnimation,
+    ShowProgressIndicator,
+    StartWithDoubleSpread,
+    SeamlessBetweenChapters,
+    Width,
+}
+
+impl SettingItem {
+    fn all() -> &'static [SettingItem] {
+        &[
+            SettingItem::ShowLineNumbers,
+            SettingItem::MouseSupport,
+            SettingItem::PageScrollAnimation,
+            SettingItem::ShowProgressIndicator,
+            SettingItem::StartWithDoubleSpread,
+            SettingItem::SeamlessBetweenChapters,
+            SettingItem::Width,
+        ]
+    }
+}
+
 /// Main reader application struct
 pub struct Reader {
     state: Rc<RefCell<ApplicationState>>,
@@ -176,6 +233,20 @@ impl Reader {
     
         self.board.update_text_structure(combined_text_structure);
         self.ebook = Some(epub);
+
+        if let Some(epub) = self.ebook.as_ref() {
+            let mut state = self.state.borrow_mut();
+            state.reading_state.textwidth = text_width;
+            state.reading_state.row = 0;
+            state.reading_state.content_index = 0;
+            state.ui_state.metadata = Some(epub.get_meta().clone());
+            state.ui_state.toc_entries = epub.toc_entries().clone();
+            state.ui_state.toc_selected_index = 0;
+            if let Ok(bookmarks) = self.db_state.get_bookmarks(epub) {
+                state.ui_state.bookmarks = bookmarks;
+                state.ui_state.bookmarks_selected_index = 0;
+            }
+        }
     
         Ok(())
     }
@@ -265,6 +336,11 @@ impl Reader {
         match active_window {
             WindowType::Search => self.handle_search_mode_keys(key, repeat_count)?,
             WindowType::Visual => self.handle_visual_mode_keys(key, repeat_count)?,
+            WindowType::Toc => self.handle_toc_mode_keys(key, repeat_count)?,
+            WindowType::Bookmarks => self.handle_bookmarks_mode_keys(key, repeat_count)?,
+            WindowType::Library => self.handle_library_mode_keys(key, repeat_count)?,
+            WindowType::Settings => self.handle_settings_mode_keys(key, repeat_count)?,
+            WindowType::Help | WindowType::Metadata => self.handle_modal_close_keys(key)?,
             _ => self.handle_normal_mode_keys(key, repeat_count)?,
         }
 
@@ -348,6 +424,9 @@ impl Reader {
                 {
                     let mut state = self.state.borrow_mut();
                     state.search_data = Some(SearchData::default());
+                    state.ui_state.search_query.clear();
+                    state.ui_state.search_results.clear();
+                    state.ui_state.search_matches.clear();
                     state.ui_state.open_window(WindowType::Search);
                 }
             }
@@ -374,16 +453,21 @@ impl Reader {
                 state.ui_state.open_window(WindowType::Help);
             }
             KeyCode::Char('t') => {
-                let mut state = self.state.borrow_mut();
-                state.ui_state.open_window(WindowType::Toc);
+                self.open_toc_window()?;
             }
             KeyCode::Char('m') => {
-                let mut state = self.state.borrow_mut();
-                state.ui_state.open_window(WindowType::Bookmarks);
+                self.open_bookmarks_window()?;
             }
             KeyCode::Char('i') => {
+                self.open_metadata_window()?;
+            }
+            KeyCode::Char('r') => {
+                self.open_library_window()?;
+            }
+            KeyCode::Char('s') => {
                 let mut state = self.state.borrow_mut();
-                state.ui_state.open_window(WindowType::Metadata);
+                state.ui_state.settings_selected_index = 0;
+                state.ui_state.open_window(WindowType::Settings);
             }
 
             _ => {}
@@ -396,8 +480,15 @@ impl Reader {
     fn handle_search_mode_keys(&mut self, key: KeyEvent, _repeat_count: u32) -> eyre::Result<()> {
         match key.code {
             KeyCode::Enter => {
-                // Execute search
-                self.execute_search();
+                let has_results = {
+                    let state = self.state.borrow();
+                    !state.ui_state.search_results.is_empty()
+                };
+                if has_results {
+                    self.jump_to_selected_search_result();
+                } else {
+                    self.execute_search();
+                }
             }
             KeyCode::Esc => {
                 // Cancel search
@@ -411,11 +502,36 @@ impl Reader {
                 // Remove last character from search query
                 let mut state = self.state.borrow_mut();
                 state.ui_state.search_query.pop();
+                state.ui_state.search_results.clear();
+                state.ui_state.search_matches.clear();
+            }
+            KeyCode::Char('j') | KeyCode::Down => {
+                let mut state = self.state.borrow_mut();
+                if !state.ui_state.search_results.is_empty() {
+                    let next = (state.ui_state.selected_search_result + 1)
+                        .min(state.ui_state.search_results.len() - 1);
+                    state.ui_state.selected_search_result = next;
+                    if let Some(result) = state.ui_state.search_results.get(next) {
+                        state.reading_state.row = result.line;
+                    }
+                }
+            }
+            KeyCode::Char('k') | KeyCode::Up => {
+                let mut state = self.state.borrow_mut();
+                if !state.ui_state.search_results.is_empty() {
+                    let current = state.ui_state.selected_search_result;
+                    state.ui_state.selected_search_result = current.saturating_sub(1);
+                    if let Some(result) = state.ui_state.search_results.get(state.ui_state.selected_search_result) {
+                        state.reading_state.row = result.line;
+                    }
+                }
             }
             KeyCode::Char(c) => {
                 // Add character to search query
                 let mut state = self.state.borrow_mut();
                 state.ui_state.search_query.push(c);
+                state.ui_state.search_results.clear();
+                state.ui_state.search_matches.clear();
             }
             _ => {}
         }
@@ -459,6 +575,132 @@ impl Reader {
         Ok(())
     }
 
+    fn handle_toc_mode_keys(&mut self, key: KeyEvent, repeat_count: u32) -> eyre::Result<()> {
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('q') => {
+                let mut state = self.state.borrow_mut();
+                state.ui_state.open_window(WindowType::Reader);
+            }
+            KeyCode::Char('j') | KeyCode::Down => {
+                let mut state = self.state.borrow_mut();
+                if !state.ui_state.toc_entries.is_empty() {
+                    let next = state.ui_state.toc_selected_index.saturating_add(repeat_count as usize);
+                    state.ui_state.toc_selected_index = next.min(state.ui_state.toc_entries.len() - 1);
+                }
+            }
+            KeyCode::Char('k') | KeyCode::Up => {
+                let mut state = self.state.borrow_mut();
+                let current = state.ui_state.toc_selected_index;
+                state.ui_state.toc_selected_index = current.saturating_sub(repeat_count as usize);
+            }
+            KeyCode::Enter => {
+                self.jump_to_toc_entry()?;
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn handle_bookmarks_mode_keys(&mut self, key: KeyEvent, repeat_count: u32) -> eyre::Result<()> {
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('q') => {
+                let mut state = self.state.borrow_mut();
+                state.ui_state.open_window(WindowType::Reader);
+            }
+            KeyCode::Char('j') | KeyCode::Down => {
+                let mut state = self.state.borrow_mut();
+                if !state.ui_state.bookmarks.is_empty() {
+                    let next = state.ui_state.bookmarks_selected_index.saturating_add(repeat_count as usize);
+                    state.ui_state.bookmarks_selected_index = next.min(state.ui_state.bookmarks.len() - 1);
+                }
+            }
+            KeyCode::Char('k') | KeyCode::Up => {
+                let mut state = self.state.borrow_mut();
+                let current = state.ui_state.bookmarks_selected_index;
+                state.ui_state.bookmarks_selected_index = current.saturating_sub(repeat_count as usize);
+            }
+            KeyCode::Char('a') => {
+                self.add_bookmark()?;
+            }
+            KeyCode::Char('d') => {
+                self.delete_selected_bookmark()?;
+            }
+            KeyCode::Enter => {
+                self.jump_to_selected_bookmark()?;
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn handle_library_mode_keys(&mut self, key: KeyEvent, repeat_count: u32) -> eyre::Result<()> {
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('q') => {
+                let mut state = self.state.borrow_mut();
+                state.ui_state.open_window(WindowType::Reader);
+            }
+            KeyCode::Char('j') | KeyCode::Down => {
+                let mut state = self.state.borrow_mut();
+                if !state.ui_state.library_items.is_empty() {
+                    let next = state.ui_state.library_selected_index.saturating_add(repeat_count as usize);
+                    state.ui_state.library_selected_index = next.min(state.ui_state.library_items.len() - 1);
+                }
+            }
+            KeyCode::Char('k') | KeyCode::Up => {
+                let mut state = self.state.borrow_mut();
+                let current = state.ui_state.library_selected_index;
+                state.ui_state.library_selected_index = current.saturating_sub(repeat_count as usize);
+            }
+            KeyCode::Enter => {
+                self.open_selected_library_item()?;
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn handle_settings_mode_keys(&mut self, key: KeyEvent, repeat_count: u32) -> eyre::Result<()> {
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('q') => {
+                let mut state = self.state.borrow_mut();
+                state.ui_state.open_window(WindowType::Reader);
+            }
+            KeyCode::Char('j') | KeyCode::Down => {
+                let mut state = self.state.borrow_mut();
+                let max_index = SettingItem::all().len().saturating_sub(1);
+                let next = state.ui_state.settings_selected_index.saturating_add(repeat_count as usize);
+                state.ui_state.settings_selected_index = next.min(max_index);
+            }
+            KeyCode::Char('k') | KeyCode::Up => {
+                let mut state = self.state.borrow_mut();
+                state.ui_state.settings_selected_index =
+                    state.ui_state.settings_selected_index.saturating_sub(repeat_count as usize);
+            }
+            KeyCode::Enter => {
+                self.toggle_selected_setting()?;
+            }
+            KeyCode::Char('+') | KeyCode::Char('=') | KeyCode::Right => {
+                self.adjust_width(5)?;
+            }
+            KeyCode::Char('-') | KeyCode::Left => {
+                self.adjust_width(-5)?;
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn handle_modal_close_keys(&mut self, key: KeyEvent) -> eyre::Result<()> {
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('q') | KeyCode::Enter => {
+                let mut state = self.state.borrow_mut();
+                state.ui_state.open_window(WindowType::Reader);
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
     /// Render the UI
     fn render(&self, frame: &mut Frame) {
         let state = self.state.borrow();
@@ -472,21 +714,103 @@ impl Reader {
 
         // Render overlays/modals if active
         if state.ui_state.show_help {
-            // TODO: Implement help overlay
+            HelpWindow::render(frame, frame.area());
         } else if state.ui_state.show_toc {
-            // TODO: Implement TOC overlay
+            TocWindow::render(
+                frame,
+                frame.area(),
+                &state.ui_state.toc_entries,
+                state.ui_state.toc_selected_index,
+            );
         } else if state.ui_state.show_bookmarks {
-            // TODO: Implement bookmarks overlay
+            let entries: Vec<String> = state
+                .ui_state
+                .bookmarks
+                .iter()
+                .map(|(name, reading_state)| {
+                    format!("{} (line {})", name, reading_state.row + 1)
+                })
+                .collect();
+            BookmarksWindow::render(
+                frame,
+                frame.area(),
+                &entries,
+                state.ui_state.bookmarks_selected_index,
+                None,
+            );
+        } else if state.ui_state.show_library {
+            let entries: Vec<String> = state
+                .ui_state
+                .library_items
+                .iter()
+                .map(|item| {
+                    let title = item.title.as_deref().unwrap_or("Unknown title");
+                    let author = item.author.as_deref().unwrap_or("Unknown author");
+                    format!("{} — {} ({})", title, author, item.filepath)
+                })
+                .collect();
+            LibraryWindow::render(
+                frame,
+                frame.area(),
+                &entries,
+                state.ui_state.library_selected_index,
+            );
         } else if state.ui_state.show_search {
-            // TODO: Implement search overlay
+            let entries: Vec<String> = state
+                .ui_state
+                .search_results
+                .iter()
+                .map(|result| format!("{}: {}", result.line + 1, result.preview))
+                .collect();
+            SearchWindow::render(
+                frame,
+                frame.area(),
+                &state.ui_state.search_query,
+                &entries,
+                state.ui_state.selected_search_result,
+            );
         } else if state.ui_state.show_metadata {
-            // TODO: Implement metadata overlay
+            MetadataWindow::render(frame, frame.area(), state.ui_state.metadata.as_ref());
+        } else if state.ui_state.show_settings {
+            let entries = Self::settings_entries(&state.config.settings);
+            SettingsWindow::render(
+                frame,
+                frame.area(),
+                &entries,
+                state.ui_state.settings_selected_index,
+            );
         }
 
         // Render message if present
         if let Some(ref message) = state.ui_state.message {
             Self::render_message_static(frame, message, &state.ui_state.message_type);
         }
+    }
+
+    fn settings_entries(settings: &crate::settings::Settings) -> Vec<String> {
+        SettingItem::all()
+            .iter()
+            .map(|item| match item {
+                SettingItem::ShowLineNumbers => format!("Show line numbers: {}", settings.show_line_numbers),
+                SettingItem::MouseSupport => format!("Mouse support: {}", settings.mouse_support),
+                SettingItem::PageScrollAnimation => {
+                    format!("Page scroll animation: {}", settings.page_scroll_animation)
+                }
+                SettingItem::ShowProgressIndicator => {
+                    format!("Show progress indicator: {}", settings.show_progress_indicator)
+                }
+                SettingItem::StartWithDoubleSpread => {
+                    format!("Start with double spread: {}", settings.start_with_double_spread)
+                }
+                SettingItem::SeamlessBetweenChapters => {
+                    format!("Seamless between chapters: {}", settings.seamless_between_chapters)
+                }
+                SettingItem::Width => format!(
+                    "Text width: {}",
+                    settings.width.map(|w| w.to_string()).unwrap_or_else(|| "auto".to_string())
+                ),
+            })
+            .collect()
     }
 
     /// Render the main reader view
@@ -574,6 +898,49 @@ impl Reader {
         frame.render_widget(message_paragraph, area);
     }
 
+    fn open_toc_window(&mut self) -> eyre::Result<()> {
+        let toc_entries = if let Some(epub) = self.ebook.as_ref() {
+            epub.toc_entries().clone()
+        } else {
+            Vec::new()
+        };
+        let mut state = self.state.borrow_mut();
+        state.ui_state.toc_entries = toc_entries;
+        state.ui_state.toc_selected_index = 0;
+        state.ui_state.open_window(WindowType::Toc);
+        Ok(())
+    }
+
+    fn open_bookmarks_window(&mut self) -> eyre::Result<()> {
+        let bookmarks = if let Some(epub) = self.ebook.as_ref() {
+            self.db_state.get_bookmarks(epub)?
+        } else {
+            Vec::new()
+        };
+        let mut state = self.state.borrow_mut();
+        state.ui_state.bookmarks = bookmarks;
+        state.ui_state.bookmarks_selected_index = 0;
+        state.ui_state.open_window(WindowType::Bookmarks);
+        Ok(())
+    }
+
+    fn open_library_window(&mut self) -> eyre::Result<()> {
+        let library_items = self.db_state.get_from_history()?;
+        let mut state = self.state.borrow_mut();
+        state.ui_state.library_items = library_items;
+        state.ui_state.library_selected_index = 0;
+        state.ui_state.open_window(WindowType::Library);
+        Ok(())
+    }
+
+    fn open_metadata_window(&mut self) -> eyre::Result<()> {
+        let metadata = self.ebook.as_ref().map(|epub| epub.get_meta().clone());
+        let mut state = self.state.borrow_mut();
+        state.ui_state.metadata = metadata;
+        state.ui_state.open_window(WindowType::Metadata);
+        Ok(())
+    }
+
     // Navigation methods (placeholders)
     fn move_cursor(&mut self, direction: AppDirection) {
         let mut state = self.state.borrow_mut();
@@ -604,23 +971,331 @@ impl Reader {
     }
 
     fn goto_start(&mut self) {
-        // TODO: Implement go to start
+        let mut state = self.state.borrow_mut();
+        state.reading_state.row = 0;
     }
 
     fn goto_end(&mut self) {
-        // TODO: Implement go to end
+        let total_lines = self.board.total_lines();
+        let mut state = self.state.borrow_mut();
+        if total_lines > 0 {
+            state.reading_state.row = total_lines - 1;
+        }
     }
 
     fn execute_search(&mut self) {
-        // TODO: Implement search execution
+        let query = {
+            let state = self.state.borrow();
+            state.ui_state.search_query.trim().to_string()
+        };
+
+        if query.is_empty() {
+            let mut state = self.state.borrow_mut();
+            state.ui_state.set_message("Search query is empty".to_string(), MessageType::Warning);
+            return;
+        }
+
+        let regex = match Regex::new(&query) {
+            Ok(regex) => regex,
+            Err(err) => {
+                let mut state = self.state.borrow_mut();
+                state.ui_state.set_message(format!("Invalid regex: {}", err), MessageType::Error);
+                return;
+            }
+        };
+
+        let mut results = Vec::new();
+        let mut matches_map: HashMap<usize, Vec<(usize, usize)>> = HashMap::new();
+
+        if let Some(lines) = self.board.lines() {
+            for (line_index, line) in lines.iter().enumerate() {
+                let mut ranges = Vec::new();
+                for mat in regex.find_iter(line) {
+                    ranges.push((mat.start(), mat.end()));
+                }
+                if !ranges.is_empty() {
+                    let preview = line.trim().to_string();
+                    results.push(SearchResult {
+                        line: line_index,
+                        ranges: ranges.clone(),
+                        preview,
+                    });
+                    matches_map.insert(line_index, ranges);
+                }
+            }
+        }
+
+        let mut state = self.state.borrow_mut();
+        state.ui_state.search_results = results;
+        state.ui_state.search_matches = matches_map;
+        state.ui_state.selected_search_result = 0;
+
+        if let Some(first) = state.ui_state.search_results.first() {
+            state.reading_state.row = first.line;
+        } else {
+            state.ui_state.set_message("No matches found".to_string(), MessageType::Info);
+        }
     }
 
     fn search_next(&mut self) {
-        // TODO: Implement search next
+        let mut state = self.state.borrow_mut();
+        if state.ui_state.search_results.is_empty() {
+            state.ui_state.set_message("No search results".to_string(), MessageType::Info);
+            return;
+        }
+        let next = (state.ui_state.selected_search_result + 1) % state.ui_state.search_results.len();
+        state.ui_state.selected_search_result = next;
+        if let Some(result) = state.ui_state.search_results.get(next) {
+            state.reading_state.row = result.line;
+        }
     }
 
     fn search_previous(&mut self) {
-        // TODO: Implement search previous
+        let mut state = self.state.borrow_mut();
+        if state.ui_state.search_results.is_empty() {
+            state.ui_state.set_message("No search results".to_string(), MessageType::Info);
+            return;
+        }
+        let len = state.ui_state.search_results.len();
+        let prev = if state.ui_state.selected_search_result == 0 {
+            len - 1
+        } else {
+            state.ui_state.selected_search_result - 1
+        };
+        state.ui_state.selected_search_result = prev;
+        if let Some(result) = state.ui_state.search_results.get(prev) {
+            state.reading_state.row = result.line;
+        }
+    }
+
+    fn jump_to_selected_search_result(&mut self) {
+        let row = {
+            let state = self.state.borrow();
+            state
+                .ui_state
+                .search_results
+                .get(state.ui_state.selected_search_result)
+                .map(|result| result.line)
+        };
+        if let Some(row) = row {
+            let mut state = self.state.borrow_mut();
+            state.reading_state.row = row;
+            state.ui_state.open_window(WindowType::Reader);
+        }
+    }
+
+    fn jump_to_toc_entry(&mut self) -> eyre::Result<()> {
+        let (section, content_index) = {
+            let state = self.state.borrow();
+            if let Some(entry) = state.ui_state.toc_entries.get(state.ui_state.toc_selected_index) {
+                (entry.section.clone(), entry.content_index)
+            } else {
+                return Ok(());
+            }
+        };
+
+        if let Some(section_id) = section {
+            if let Some(section_rows) = self.board.section_rows() {
+                if let Some(row) = section_rows.get(&section_id) {
+                    let mut state = self.state.borrow_mut();
+                    state.reading_state.row = *row;
+                    state.ui_state.open_window(WindowType::Reader);
+                    return Ok(());
+                }
+            }
+        }
+
+        let mut state = self.state.borrow_mut();
+        if content_index == 0 {
+            state.reading_state.row = 0;
+            state.ui_state.open_window(WindowType::Reader);
+        } else {
+            state.ui_state.set_message("TOC entry not mapped to text".to_string(), MessageType::Warning);
+        }
+        Ok(())
+    }
+
+    fn add_bookmark(&mut self) -> eyre::Result<()> {
+        let Some(epub) = self.ebook.as_ref() else {
+            let mut state = self.state.borrow_mut();
+            state.ui_state.set_message("No book loaded".to_string(), MessageType::Warning);
+            return Ok(());
+        };
+        let bookmark_name = {
+            let state = self.state.borrow();
+            format!("Bookmark {}", state.ui_state.bookmarks.len() + 1)
+        };
+        let reading_state = { self.state.borrow().reading_state.clone() };
+        self.db_state.insert_bookmark(epub, &bookmark_name, &reading_state)?;
+        self.refresh_bookmarks()?;
+        Ok(())
+    }
+
+    fn delete_selected_bookmark(&mut self) -> eyre::Result<()> {
+        let Some(epub) = self.ebook.as_ref() else {
+            return Ok(());
+        };
+        let bookmark_name = {
+            let state = self.state.borrow();
+            state
+                .ui_state
+                .bookmarks
+                .get(state.ui_state.bookmarks_selected_index)
+                .map(|(name, _)| name.clone())
+        };
+        if let Some(name) = bookmark_name {
+            self.db_state.delete_bookmark(epub, &name)?;
+            self.refresh_bookmarks()?;
+        }
+        Ok(())
+    }
+
+    fn refresh_bookmarks(&mut self) -> eyre::Result<()> {
+        if let Some(epub) = self.ebook.as_ref() {
+            let bookmarks = self.db_state.get_bookmarks(epub)?;
+            let mut state = self.state.borrow_mut();
+            state.ui_state.bookmarks = bookmarks;
+            if state.ui_state.bookmarks_selected_index >= state.ui_state.bookmarks.len() {
+                state.ui_state.bookmarks_selected_index =
+                    state.ui_state.bookmarks.len().saturating_sub(1);
+            }
+        }
+        Ok(())
+    }
+
+    fn jump_to_selected_bookmark(&mut self) -> eyre::Result<()> {
+        let row = {
+            let state = self.state.borrow();
+            state
+                .ui_state
+                .bookmarks
+                .get(state.ui_state.bookmarks_selected_index)
+                .map(|(_, reading_state)| reading_state.row)
+        };
+        if let Some(row) = row {
+            let mut state = self.state.borrow_mut();
+            state.reading_state.row = row;
+            state.ui_state.open_window(WindowType::Reader);
+        }
+        Ok(())
+    }
+
+    fn open_selected_library_item(&mut self) -> eyre::Result<()> {
+        let filepath = {
+            let state = self.state.borrow();
+            state
+                .ui_state
+                .library_items
+                .get(state.ui_state.library_selected_index)
+                .map(|item| item.filepath.clone())
+        };
+        if let Some(path) = filepath {
+            if std::path::Path::new(&path).exists() {
+                self.load_ebook(&path)?;
+                let mut state = self.state.borrow_mut();
+                state.ui_state.open_window(WindowType::Reader);
+            } else {
+                let mut state = self.state.borrow_mut();
+                state
+                    .ui_state
+                    .set_message("Selected file no longer exists".to_string(), MessageType::Warning);
+            }
+        }
+        Ok(())
+    }
+
+    fn toggle_selected_setting(&mut self) -> eyre::Result<()> {
+        let selected = {
+            let state = self.state.borrow();
+            SettingItem::all()
+                .get(state.ui_state.settings_selected_index)
+                .copied()
+        };
+
+        let Some(item) = selected else {
+            return Ok(());
+        };
+
+        let mut state = self.state.borrow_mut();
+        match item {
+            SettingItem::ShowLineNumbers => {
+                state.config.settings.show_line_numbers = !state.config.settings.show_line_numbers;
+            }
+            SettingItem::MouseSupport => {
+                state.config.settings.mouse_support = !state.config.settings.mouse_support;
+            }
+            SettingItem::PageScrollAnimation => {
+                state.config.settings.page_scroll_animation = !state.config.settings.page_scroll_animation;
+            }
+            SettingItem::ShowProgressIndicator => {
+                state.config.settings.show_progress_indicator = !state.config.settings.show_progress_indicator;
+            }
+            SettingItem::StartWithDoubleSpread => {
+                state.config.settings.start_with_double_spread = !state.config.settings.start_with_double_spread;
+            }
+            SettingItem::SeamlessBetweenChapters => {
+                state.config.settings.seamless_between_chapters = !state.config.settings.seamless_between_chapters;
+            }
+            SettingItem::Width => {
+                state.config.settings.width = if state.config.settings.width.is_some() {
+                    None
+                } else {
+                    Some(80)
+                };
+                let text_width = state.config.settings.width.unwrap_or(80);
+                drop(state);
+                self.rebuild_text_structure(text_width)?;
+                return Ok(());
+            }
+        }
+        Ok(())
+    }
+
+    fn adjust_width(&mut self, delta: i32) -> eyre::Result<()> {
+        let selected = {
+            let state = self.state.borrow();
+            SettingItem::all()
+                .get(state.ui_state.settings_selected_index)
+                .copied()
+        };
+        if selected != Some(SettingItem::Width) {
+            return Ok(());
+        }
+
+        let current_width = {
+            let state = self.state.borrow();
+            state.config.settings.width.unwrap_or(80) as i32
+        };
+        let new_width = (current_width + delta).max(20) as usize;
+        {
+            let mut state = self.state.borrow_mut();
+            state.config.settings.width = Some(new_width);
+        }
+        self.rebuild_text_structure(new_width)?;
+        Ok(())
+    }
+
+    fn rebuild_text_structure(&mut self, text_width: usize) -> eyre::Result<()> {
+        let epub = match self.ebook.as_mut() {
+            Some(epub) => epub,
+            None => return Ok(()),
+        };
+        let all_content = epub.get_all_parsed_content(text_width)?;
+        let mut combined_text_structure = TextStructure::default();
+        for ts in all_content {
+            combined_text_structure.text_lines.extend(ts.text_lines);
+            combined_text_structure.image_maps.extend(ts.image_maps);
+            combined_text_structure.section_rows.extend(ts.section_rows);
+            combined_text_structure.formatting.extend(ts.formatting);
+        }
+        self.board.update_text_structure(combined_text_structure);
+        let mut state = self.state.borrow_mut();
+        state.reading_state.textwidth = text_width;
+        let total_lines = self.board.total_lines();
+        if total_lines > 0 && state.reading_state.row >= total_lines {
+            state.reading_state.row = total_lines - 1;
+        }
+        Ok(())
     }
 
     fn yank_selection(&mut self) -> eyre::Result<()> {
@@ -629,7 +1304,7 @@ impl Reader {
             let selection_end = state.reading_state.row;
             let selected_text = self.board.get_selected_text(selection_start, selection_end);
             self.clipboard.set_text(selected_text)?;
-            let mut ui_state = &mut self.state.borrow_mut().ui_state;
+            let ui_state = &mut self.state.borrow_mut().ui_state;
             ui_state.set_message("Text copied to clipboard".to_string(), MessageType::Info);
             ui_state.open_window(WindowType::Reader);
         }

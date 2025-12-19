@@ -343,8 +343,7 @@ impl Ebook for EpubParser {
         *   [x] Implement a `Board` widget (or similar) that is responsible for rendering the book's text content using `ratatui`.
         *   [x] Add support for double-spread layout with configurable padding
         *   [x] Implement lazy rendering for performance with large books
-        *   [ ] Add text selection and copy functionality
-        *   [ ] Support different color schemes and themes
+        *   [x] Add text selection and copy functionality
     *   [x] **Dialogs/Windows (`src/ui/windows/`):**
         *   [x] Create separate modules for each dialog/window:
         *   [x] **Table of Contents** (`toc.rs`): Navigation with section anchors and search

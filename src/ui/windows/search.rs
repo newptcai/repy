@@ -1,62 +1,57 @@
-use ratatui::{layout::Rect, style::{Modifier, Style}, text::{Line, Span}, widgets::{Block, Borders, Clear, Paragraph}, Frame};
+use ratatui::{
+    layout::Rect,
+    style::{Color, Modifier, Style},
+    text::Line,
+    widgets::{Block, Borders, Clear, List, ListItem, Paragraph},
+    Frame,
+};
 
-pub struct SearchWindow {
-    pub visible: bool,
-    pub query: String,
-}
+pub struct SearchWindow;
 
 impl SearchWindow {
-    pub fn new() -> Self {
-        Self {
-            visible: false,
-            query: String::new(),
-        }
-    }
-
-    pub fn toggle(&mut self) {
-        self.visible = !self.visible;
-    }
-
-    pub fn set_query(&mut self, query: String) {
-        self.query = query;
-    }
-
-    pub fn add_char(&mut self, c: char) {
-        self.query.push(c);
-    }
-
-    pub fn remove_char(&mut self) {
-        self.query.pop();
-    }
-
-    pub fn clear(&mut self) {
-        self.query.clear();
-    }
-
-    pub fn render(&self, frame: &mut Frame, area: Rect) {
-        if !self.visible {
-            return;
-        }
-
+    pub fn render(frame: &mut Frame, area: Rect, query: &str, results: &[String], selected_index: usize) {
         let popup_area = Rect::new(
-            area.x + 2,
-            area.y + area.height / 2 - 2,
-            area.width - 4,
-            5,
+            area.x + area.width / 8,
+            area.y + area.height / 6,
+            area.width * 3 / 4,
+            area.height * 2 / 3,
         );
 
         frame.render_widget(Clear, popup_area);
 
-        let content = vec![
-            Line::from("Search:"),
-            Line::from(format!("/{}", self.query)),
-            Line::from(""),
-            Line::from(Span::styled("Enter: search  Esc: cancel", Style::default().add_modifier(Modifier::DIM))),
-        ];
+        let header = Paragraph::new(Line::from(format!("/{}", query)))
+            .block(Block::default().title("Search").borders(Borders::ALL))
+            .style(Style::default().add_modifier(Modifier::BOLD));
 
-        let paragraph = Paragraph::new(content)
-            .block(Block::default().title("Search").borders(Borders::ALL));
+        let header_area = Rect::new(popup_area.x, popup_area.y, popup_area.width, 3);
+        frame.render_widget(header, header_area);
 
-        frame.render_widget(paragraph, popup_area);
+        let list_area = Rect::new(popup_area.x, popup_area.y + 3, popup_area.width, popup_area.height - 3);
+
+        if results.is_empty() {
+            let empty = Paragraph::new("No matches yet")
+                .style(Style::default().fg(Color::DarkGray))
+                .block(Block::default().borders(Borders::ALL));
+            frame.render_widget(empty, list_area);
+            return;
+        }
+
+        let items: Vec<ListItem> = results
+            .iter()
+            .enumerate()
+            .map(|(i, entry)| {
+                let style = if i == selected_index {
+                    Style::default().bg(Color::Blue).fg(Color::White)
+                } else {
+                    Style::default()
+                };
+                ListItem::new(Line::from(entry.clone())).style(style)
+            })
+            .collect();
+
+        let list = List::new(items)
+            .block(Block::default().borders(Borders::ALL));
+
+        frame.render_widget(list, list_area);
     }
 }

@@ -1,37 +1,15 @@
 use ratatui::{layout::Rect, style::{Color, Modifier, Style}, text::{Line, Span}, widgets::{Block, Borders, Clear, Paragraph}, Frame};
 use crate::models::BookMetadata;
 
-pub struct MetadataWindow {
-    pub visible: bool,
-    pub metadata: Option<BookMetadata>,
-}
+pub struct MetadataWindow;
 
 impl MetadataWindow {
-    pub fn new() -> Self {
-        Self {
-            visible: false,
-            metadata: None,
-        }
-    }
-
-    pub fn toggle(&mut self) {
-        self.visible = !self.visible;
-    }
-
-    pub fn set_metadata(&mut self, metadata: BookMetadata) {
-        self.metadata = Some(metadata);
-    }
-
-    pub fn render(&self, frame: &mut Frame, area: Rect) {
-        if !self.visible {
-            return;
-        }
-
-        let popup_area = self.centered_popup_area(area, 60, 80);
+    pub fn render(frame: &mut Frame, area: Rect, metadata: Option<&BookMetadata>) {
+        let popup_area = Self::centered_popup_area(area, 60, 80);
 
         frame.render_widget(Clear, popup_area);
 
-        if let Some(ref metadata) = self.metadata {
+        if let Some(metadata) = metadata {
             let content = vec![
                 Line::from(Span::styled("Book Information", Style::default().add_modifier(Modifier::BOLD))),
                 Line::from(""),
@@ -67,7 +45,7 @@ impl MetadataWindow {
         }
     }
 
-    fn centered_popup_area(&self, area: Rect, width_percent: u16, height_percent: u16) -> Rect {
+    fn centered_popup_area(area: Rect, width_percent: u16, height_percent: u16) -> Rect {
         let width = (area.width * width_percent) / 100;
         let height = (area.height * height_percent) / 100;
         let x = area.x + (area.width - width) / 2;

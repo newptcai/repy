@@ -1,35 +1,48 @@
-use ratatui::{layout::Rect, widgets::{Block, Borders, Clear, Paragraph}, Frame};
+use ratatui::{
+    layout::Rect,
+    style::{Color, Style},
+    text::Line,
+    widgets::{Block, Borders, Clear, List, ListItem, Paragraph},
+    Frame,
+};
 
-pub struct LibraryWindow {
-    pub visible: bool,
-}
+pub struct LibraryWindow;
 
 impl LibraryWindow {
-    pub fn new() -> Self {
-        Self { visible: false }
-    }
-
-    pub fn toggle(&mut self) {
-        self.visible = !self.visible;
-    }
-
-    pub fn render(&self, frame: &mut Frame, area: Rect) {
-        if !self.visible {
-            return;
-        }
-
+    pub fn render(frame: &mut Frame, area: Rect, entries: &[String], selected_index: usize) {
         let popup_area = Rect::new(
-            area.x + area.width / 4,
-            area.y + area.height / 4,
-            area.width / 2,
-            area.height / 2,
+            area.x + area.width / 6,
+            area.y + area.height / 8,
+            area.width * 2 / 3,
+            area.height * 3 / 4,
         );
 
         frame.render_widget(Clear, popup_area);
 
-        let paragraph = Paragraph::new("Library view\n\nTODO: Implement library UI")
+        if entries.is_empty() {
+            let paragraph = Paragraph::new("No history yet")
+                .style(Style::default().fg(Color::DarkGray))
+                .block(Block::default().title("Library").borders(Borders::ALL));
+            frame.render_widget(paragraph, popup_area);
+            return;
+        }
+
+        let items: Vec<ListItem> = entries
+            .iter()
+            .enumerate()
+            .map(|(i, entry)| {
+                let style = if i == selected_index {
+                    Style::default().bg(Color::Blue).fg(Color::White)
+                } else {
+                    Style::default()
+                };
+                ListItem::new(Line::from(entry.clone())).style(style)
+            })
+            .collect();
+
+        let list = List::new(items)
             .block(Block::default().title("Library").borders(Borders::ALL));
 
-        frame.render_widget(paragraph, popup_area);
+        frame.render_widget(list, popup_area);
     }
 }
