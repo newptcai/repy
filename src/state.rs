@@ -19,14 +19,12 @@ impl State {
             std::fs::create_dir_all(parent)?;
         }
 
-        // Check if the database file existed before opening
-        let db_exists = filepath.exists();
-
         let conn = Connection::open(&filepath)?;
 
-        if !db_exists {
-            Self::init_db(&conn)?;
-        }
+        // Always ensure the schema exists. Tables are created only if missing,
+        // so this is safe to run on an existing database and also fixes
+        // previously-created empty databases.
+        Self::init_db(&conn)?;
 
         Ok(Self { conn })
     }
