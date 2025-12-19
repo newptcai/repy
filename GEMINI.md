@@ -357,8 +357,8 @@ impl Ebook for EpubParser {
 8.  **Command-Line Interface (`src/cli.rs`):** ✅
     *   [x] Port the argument parsing logic from `epy/src/epy_reader/cli.py` using the `clap` crate.
     *   [x] Handle starting the TUI or dumping book content based on arguments.
-    *   [ ] Add support for configuration file specification
-    *   [ ] Implement verbose logging and debug modes
+    *   [x] Add support for configuration file specification
+    *   [x] Implement verbose logging and debug modes
 
 ### Phase 3: Advanced Features (PENDING ⏳)
 
