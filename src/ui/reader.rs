@@ -9,8 +9,8 @@ use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::{
     backend::CrosstermBackend,
     layout::{Constraint, Layout, Rect},
-    style::{Color, Modifier, Style},
-    text::{Line, Span},
+    style::{Color, Style},
+    text::Line,
     widgets::{Block, Borders, Clear, Paragraph, Wrap},
     Frame, Terminal,
 };
@@ -369,12 +369,12 @@ impl Reader {
             }
             KeyCode::Char('h') | KeyCode::Left => {
                 for _ in 0..repeat_count {
-                    self.move_cursor(AppDirection::Left);
+                    self.move_cursor(AppDirection::PageUp);
                 }
             }
             KeyCode::Char('l') | KeyCode::Right => {
                 for _ in 0..repeat_count {
-                    self.move_cursor(AppDirection::Right);
+                    self.move_cursor(AppDirection::PageDown);
                 }
             }
 
@@ -391,6 +391,12 @@ impl Reader {
             }
 
             // Chapter navigation
+            KeyCode::Char('L') => {
+                self.next_chapter();
+            }
+            KeyCode::Char('H') => {
+                self.previous_chapter();
+            }
             KeyCode::Char('n') => {
                 if key.modifiers.contains(KeyModifiers::CONTROL) {
                     self.next_chapter();
@@ -408,15 +414,17 @@ impl Reader {
             }
 
             // Beginning/End
-            KeyCode::Home | KeyCode::Char('g') => {
-                if key.modifiers.contains(KeyModifiers::SHIFT) || key.modifiers.contains(KeyModifiers::CONTROL) {
-                    self.goto_end();
-                } else {
-                    self.goto_start();
-                }
+            KeyCode::Home => {
+                self.goto_start();
             }
-            KeyCode::End | KeyCode::Char('G') => {
+            KeyCode::End => {
                 self.goto_end();
+            }
+            KeyCode::Char('g') => {
+                self.goto_chapter_start();
+            }
+            KeyCode::Char('G') => {
+                self.goto_chapter_end();
             }
 
             // Search
@@ -701,12 +709,6 @@ impl Reader {
         Ok(())
     }
 
-    /// Render the UI
-    fn render(&self, frame: &mut Frame) {
-        let state = self.state.borrow();
-        Self::render_static(frame, &state, &self.board);
-    }
-
     /// Static render method that can be called from a closure
     fn render_static(frame: &mut Frame, state: &ApplicationState, board: &Board) {
         // Main reader view
@@ -813,65 +815,88 @@ impl Reader {
             .collect()
     }
 
-    /// Render the main reader view
-    fn render_reader(&self, frame: &mut Frame, state: &ApplicationState, board: &Board) {
-        Self::render_reader_static(frame, state, board);
-    }
-
     /// Static method to render the main reader view
     fn render_reader_static(frame: &mut Frame, state: &ApplicationState, board: &Board) {
+        let frame_area = frame.area();
+        let percent_text = if state.config.settings.show_progress_indicator {
+            let total_lines = board.total_lines();
+            if total_lines > 0 {
+                let percent = (state.reading_state.row.saturating_mul(100)) / total_lines;
+                Some(format!("{}%", percent.min(100)))
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        let title = state
+            .ui_state
+            .metadata
+            .as_ref()
+            .and_then(|meta| meta.title.as_deref())
+            .unwrap_or("repy");
+
         let chunks = Layout::default()
             .direction(ratatui::layout::Direction::Vertical)
             .constraints([
-                Constraint::Min(0), // Main content
-                Constraint::Length(3), // Status bar
+                Constraint::Length(1), // Header
+                Constraint::Min(0),    // Main content
             ])
-            .split(frame.area());
+            .split(frame_area);
 
-        // Main content area
-        board.render(frame, chunks[0], state);
+        let header_line = Self::build_header_line(title, percent_text.as_deref(), chunks[0].width);
+        let header = Paragraph::new(Line::from(header_line));
+        frame.render_widget(header, chunks[0]);
 
-        // Status bar
-        let status_text = vec![
-            Line::from(vec![
-                Span::styled("Position: ", Style::default()),
-                Span::styled(
-                    format!("{}/{}", state.reading_state.row, board.total_lines()),
-                    Style::default().add_modifier(Modifier::BOLD),
-                ),
-            ]),
-        ];
+        // Main content area with centered margins
+        let desired_width = state.reading_state.textwidth as u16;
+        let content_width = desired_width.min(chunks[1].width);
+        let left_pad = (chunks[1].width.saturating_sub(content_width)) / 2;
+        let content_area = Rect {
+            x: chunks[1].x + left_pad,
+            y: chunks[1].y,
+            width: content_width,
+            height: chunks[1].height,
+        };
 
-        let status_paragraph = Paragraph::new(status_text)
-            .block(Block::default().borders(Borders::ALL))
-            .wrap(Wrap { trim: true });
-
-        frame.render_widget(status_paragraph, chunks[1]);
+        board.render(frame, content_area, state);
     }
 
-    // Placeholder methods for rendering overlays
-    fn render_help_overlay(&self, _frame: &mut Frame) {
-        // TODO: Implement help overlay
-    }
+    fn build_header_line(title: &str, percent: Option<&str>, width: u16) -> String {
+        let width = width as usize;
+        if width == 0 {
+            return String::new();
+        }
 
-    fn render_toc_overlay(&self, _frame: &mut Frame) {
-        // TODO: Implement TOC overlay
-    }
+        let mut buffer = vec![' '; width];
+        let percent_len = percent.map(|text| text.len()).unwrap_or(0);
+        let content_width = if percent_len > 0 {
+            width.saturating_sub(percent_len + 1)
+        } else {
+            width
+        };
 
-    fn render_bookmarks_overlay(&self, _frame: &mut Frame) {
-        // TODO: Implement bookmarks overlay
-    }
+        let mut title_text = title.to_string();
+        if title_text.len() > content_width {
+            title_text.truncate(content_width);
+        }
+        let title_start = (content_width.saturating_sub(title_text.len())) / 2;
+        for (i, ch) in title_text.chars().enumerate() {
+            if title_start + i < buffer.len() {
+                buffer[title_start + i] = ch;
+            }
+        }
 
-    fn render_search_overlay(&self, _frame: &mut Frame) {
-        // TODO: Implement search overlay
-    }
+        if let Some(percent) = percent {
+            let start = width.saturating_sub(percent_len);
+            for (i, ch) in percent.chars().enumerate() {
+                if start + i < buffer.len() {
+                    buffer[start + i] = ch;
+                }
+            }
+        }
 
-    fn render_metadata_overlay(&self, _frame: &mut Frame) {
-        // TODO: Implement metadata overlay
-    }
-
-    fn render_message(&self, frame: &mut Frame, message: &str, message_type: &MessageType) {
-        Self::render_message_static(frame, message, message_type);
+        buffer.into_iter().collect()
     }
 
     fn render_message_static(frame: &mut Frame, message: &str, message_type: &MessageType) {
@@ -958,21 +983,78 @@ impl Reader {
                     state.reading_state.row += 1;
                 }
             }
+            AppDirection::PageUp => {
+                let page = self.page_size();
+                state.reading_state.row = current_row.saturating_sub(page);
+            }
+            AppDirection::PageDown => {
+                let page = self.page_size();
+                let next = current_row.saturating_add(page);
+                state.reading_state.row = next.min(total_lines.saturating_sub(1));
+            }
             _ => {}
         }
     }
 
     fn next_chapter(&mut self) {
-        // TODO: Implement next chapter navigation
+        let rows = self.chapter_rows();
+        if rows.is_empty() {
+            return;
+        }
+        let current_row = self.state.borrow().reading_state.row;
+        let index = Self::current_chapter_index(&rows, current_row);
+        if index + 1 < rows.len() {
+            let mut state = self.state.borrow_mut();
+            state.reading_state.row = rows[index + 1];
+        }
     }
 
     fn previous_chapter(&mut self) {
-        // TODO: Implement previous chapter navigation
+        let rows = self.chapter_rows();
+        if rows.is_empty() {
+            return;
+        }
+        let current_row = self.state.borrow().reading_state.row;
+        let index = Self::current_chapter_index(&rows, current_row);
+        if index > 0 {
+            let mut state = self.state.borrow_mut();
+            state.reading_state.row = rows[index - 1];
+        }
     }
 
     fn goto_start(&mut self) {
         let mut state = self.state.borrow_mut();
         state.reading_state.row = 0;
+    }
+
+    fn goto_chapter_start(&mut self) {
+        let rows = self.chapter_rows();
+        if rows.is_empty() {
+            self.goto_start();
+            return;
+        }
+        let current_row = self.state.borrow().reading_state.row;
+        let index = Self::current_chapter_index(&rows, current_row);
+        let mut state = self.state.borrow_mut();
+        state.reading_state.row = rows[index];
+    }
+
+    fn goto_chapter_end(&mut self) {
+        let rows = self.chapter_rows();
+        if rows.is_empty() {
+            self.goto_end();
+            return;
+        }
+        let current_row = self.state.borrow().reading_state.row;
+        let index = Self::current_chapter_index(&rows, current_row);
+        let total_lines = self.board.total_lines();
+        let end_row = if index + 1 < rows.len() {
+            rows[index + 1].saturating_sub(1)
+        } else {
+            total_lines.saturating_sub(1)
+        };
+        let mut state = self.state.borrow_mut();
+        state.reading_state.row = end_row;
     }
 
     fn goto_end(&mut self) {
@@ -981,6 +1063,44 @@ impl Reader {
         if total_lines > 0 {
             state.reading_state.row = total_lines - 1;
         }
+    }
+
+    fn page_size(&self) -> usize {
+        match crossterm::terminal::size() {
+            Ok((_cols, rows)) => rows.saturating_sub(1) as usize,
+            Err(_) => 0,
+        }
+    }
+
+    fn chapter_rows(&self) -> Vec<usize> {
+        let section_rows = match self.board.section_rows() {
+            Some(section_rows) => section_rows,
+            None => return Vec::new(),
+        };
+        let state = self.state.borrow();
+        let mut rows = Vec::new();
+        for entry in &state.ui_state.toc_entries {
+            if let Some(section) = entry.section.as_ref() {
+                if let Some(row) = section_rows.get(section) {
+                    rows.push(*row);
+                }
+            }
+        }
+        rows.sort_unstable();
+        rows.dedup();
+        rows
+    }
+
+    fn current_chapter_index(rows: &[usize], current_row: usize) -> usize {
+        let mut index = 0;
+        for (i, row) in rows.iter().enumerate() {
+            if *row <= current_row {
+                index = i;
+            } else {
+                break;
+            }
+        }
+        index
     }
 
     fn execute_search(&mut self) {

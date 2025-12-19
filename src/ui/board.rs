@@ -2,7 +2,7 @@ use ratatui::{
     layout::Rect,
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph, Wrap},
+    widgets::{Block, Paragraph, Wrap},
     Frame,
 };
 
@@ -27,17 +27,10 @@ impl Board {
     }
 
     pub fn render(&self, frame: &mut Frame, area: Rect, state: &ApplicationState) {
-        let block = Block::default()
-            .borders(Borders::ALL)
-            .title("Content");
-
-        let inner_area = block.inner(area);
-        frame.render_widget(block, area);
-
         if let Some(ref text_structure) = self.text_structure {
-            self.render_content(frame, inner_area, text_structure, state);
+            self.render_content(frame, area, text_structure, state);
         } else {
-            self.render_empty(frame, inner_area);
+            self.render_empty(frame, area);
         }
     }
 

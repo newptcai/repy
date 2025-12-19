@@ -538,6 +538,16 @@ impl Ebook for EpubParser {
 - **User experience preservation**: Maintain all epy features while improving performance
 - **Epy reference**: Initialize the `epy` submodule to consult the original code; if SSH access is unavailable, switch the submodule URL to HTTPS before running `git submodule update --init --recursive`.
 
+## Layout Parity TODOs (epy vs repy)
+
+- **Header bar**: Add chapter/title line centered with right-aligned reading percent (epy shows chapter name and percent at top).
+- **Minimal chrome**: Replace boxed content/status borders with a clean, borderless layout like epy.
+- **Footer/status**: Move progress info out of a boxed status bar; match epy’s compact display (percent only when enabled).
+- **Margins/padding**: Add left/right page margins to mimic epy’s wide, centered text column.
+- **Image placeholder styling**: Match epy’s inline `[IMAGE]` placement and spacing.
+- **Line numbers toggle**: Ensure line number display matches epy’s style/placement (likely off by default).
+- **Help window parity**: Align help overlay content and key list with epy (k/j/h/l/L/H/g/G/-/+/=/M/d/t/f/o/ //s/m/`/b/B/q/?/c/!/D/R).
+
 ## Success Metrics
 
 - **Feature Parity**: 100% of epy functionality available in repy
