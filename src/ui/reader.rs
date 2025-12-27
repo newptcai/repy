@@ -38,6 +38,8 @@ pub struct ApplicationState {
     pub ui_state: UiState,
     pub should_quit: bool,
     pub count_prefix: String, // For command repetition (e.g., "5j")
+    pub jump_history: Vec<usize>,
+    pub jump_history_index: usize,
 }
 
 impl ApplicationState {
@@ -49,6 +51,61 @@ impl ApplicationState {
             ui_state: UiState::new(),
             should_quit: false,
             count_prefix: String::new(),
+            jump_history: Vec::new(),
+            jump_history_index: 0,
+        }
+    }
+
+    pub fn record_jump(&mut self) {
+        let current_row = self.reading_state.row;
+
+        // If we are in the middle of history (index < len), truncate the future
+        if self.jump_history_index < self.jump_history.len() {
+            self.jump_history.truncate(self.jump_history_index);
+        }
+
+        // Avoid duplicate consecutive entries
+        if self.jump_history.last() != Some(&current_row) {
+            self.jump_history.push(current_row);
+            // Limit history size (optional, e.g., 100 entries)
+            if self.jump_history.len() > 100 {
+                self.jump_history.remove(0);
+            }
+        }
+        
+        self.jump_history_index = self.jump_history.len();
+    }
+
+    pub fn jump_back(&mut self) {
+        if self.jump_history.is_empty() {
+             return;
+        }
+
+        if self.jump_history_index == self.jump_history.len() {
+             let current_row = self.reading_state.row;
+             if self.jump_history.last() != Some(&current_row) {
+                  self.jump_history.push(current_row);
+             }
+             // We are now at the "tip". To jump back, we start from the last element.
+             self.jump_history_index = self.jump_history.len().saturating_sub(1); 
+        }
+
+        if self.jump_history_index > 0 {
+            self.jump_history_index -= 1;
+            let row = self.jump_history[self.jump_history_index];
+            self.reading_state.row = row;
+        }
+    }
+
+    pub fn jump_forward(&mut self) {
+        if self.jump_history.is_empty() {
+             return;
+        }
+
+        if self.jump_history_index + 1 < self.jump_history.len() {
+            self.jump_history_index += 1;
+            let row = self.jump_history[self.jump_history_index];
+            self.reading_state.row = row;
         }
     }
 }
@@ -419,6 +476,17 @@ impl Reader {
     /// Handle keys in normal reading mode
     fn handle_normal_mode_keys(&mut self, key: KeyEvent, repeat_count: u32) -> eyre::Result<()> {
         match key.code {
+            // Jump History
+            KeyCode::Char('o') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.jump_back();
+            }
+            KeyCode::Tab => {
+                self.jump_forward();
+            }
+            KeyCode::Char('i') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.jump_forward();
+            }
+
             // Navigation
             KeyCode::Char('j') | KeyCode::Down => {
                 for _ in 0..repeat_count {
@@ -548,6 +616,21 @@ impl Reader {
         }
 
         Ok(())
+    }
+
+    fn record_jump_position(&mut self) {
+        let mut state = self.state.borrow_mut();
+        state.record_jump();
+    }
+
+    fn jump_back(&mut self) {
+        let mut state = self.state.borrow_mut();
+        state.jump_back();
+    }
+
+    fn jump_forward(&mut self) {
+        let mut state = self.state.borrow_mut();
+        state.jump_forward();
     }
 
     /// Handle keys in search mode
@@ -1187,6 +1270,7 @@ impl Reader {
         let current_row = self.state.borrow().reading_state.row;
         let index = Self::current_chapter_index(&rows, current_row);
         if index + 1 < rows.len() {
+            self.record_jump_position();
             let mut state = self.state.borrow_mut();
             state.reading_state.row = rows[index + 1];
         }
@@ -1200,12 +1284,14 @@ impl Reader {
         let current_row = self.state.borrow().reading_state.row;
         let index = Self::current_chapter_index(&rows, current_row);
         if index > 0 {
+            self.record_jump_position();
             let mut state = self.state.borrow_mut();
             state.reading_state.row = rows[index - 1];
         }
     }
 
     fn goto_start(&mut self) {
+        self.record_jump_position();
         let mut state = self.state.borrow_mut();
         state.reading_state.row = 0;
     }
@@ -1218,6 +1304,7 @@ impl Reader {
         }
         let current_row = self.state.borrow().reading_state.row;
         let index = Self::current_chapter_index(&rows, current_row);
+        self.record_jump_position();
         let mut state = self.state.borrow_mut();
         state.reading_state.row = rows[index];
     }
@@ -1236,12 +1323,14 @@ impl Reader {
         } else {
             total_lines.saturating_sub(1)
         };
+        self.record_jump_position();
         let mut state = self.state.borrow_mut();
         state.reading_state.row = end_row;
     }
 
     fn goto_end(&mut self) {
         let total_lines = self.board.total_lines();
+        self.record_jump_position();
         let mut state = self.state.borrow_mut();
         if total_lines > 0 {
             state.reading_state.row = total_lines - 1;
@@ -1406,6 +1495,7 @@ impl Reader {
                 .map(|result| result.line)
         };
         if let Some(row) = row {
+            self.record_jump_position();
             let mut state = self.state.borrow_mut();
             state.reading_state.row = row;
             state.ui_state.open_window(WindowType::Reader);
@@ -1437,14 +1527,16 @@ impl Reader {
             }
         }
 
-        let mut state = self.state.borrow_mut();
         if let Some(row) = target_row {
+            self.record_jump_position();
+            let mut state = self.state.borrow_mut();
             state.reading_state.row = row;
             if content_index < self.content_start_rows.len() {
                 state.reading_state.content_index = content_index;
             }
             state.ui_state.open_window(WindowType::Reader);
         } else {
+            let mut state = self.state.borrow_mut();
             state.ui_state.set_message("TOC entry not mapped to text".to_string(), MessageType::Warning);
         }
         Ok(())
@@ -1508,6 +1600,7 @@ impl Reader {
                 .map(|(_, reading_state)| reading_state.row)
         };
         if let Some(row) = row {
+            self.record_jump_position();
             let mut state = self.state.borrow_mut();
             state.reading_state.row = row;
             state.ui_state.open_window(WindowType::Reader);
@@ -1711,6 +1804,7 @@ impl Reader {
 
     fn follow_link_entry(&mut self, link: LinkEntry) -> eyre::Result<()> {
         if let Some(target_row) = self.resolve_internal_link_row(&link.url) {
+            self.record_jump_position();
             let mut state = self.state.borrow_mut();
             state.reading_state.row = target_row;
             if let Some(content_index) = self.content_index_for_row(target_row) {

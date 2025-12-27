@@ -38,6 +38,7 @@ help window inside the TUI. A few important ones:
 
 - `j` / `k` — scroll down / up.
 - `h` / `l` — page up / down.
+- `Ctrl+o` / `Ctrl+i` — jump back / forward in position history.
 - `t` — open the table of contents.
 - `m` — open the bookmarks window (`a` to add, `d` to delete, `Enter` to jump).
 - `r` — open the Library/history window:
