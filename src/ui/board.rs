@@ -6,7 +6,7 @@ use ratatui::{
     Frame,
 };
 
-use crate::models::TextStructure;
+use crate::models::{LinkEntry, TextStructure};
 use crate::ui::reader::ApplicationState;
 
 /// Board widget for rendering book text content
@@ -26,19 +26,41 @@ impl Board {
         self
     }
 
-    pub fn render(&self, frame: &mut Frame, area: Rect, state: &ApplicationState) {
+    pub fn render(
+        &self,
+        frame: &mut Frame,
+        area: Rect,
+        state: &ApplicationState,
+        content_start_rows: Option<&[usize]>,
+    ) {
         if let Some(ref text_structure) = self.text_structure {
-            self.render_content(frame, area, text_structure, state);
+            self.render_content(frame, area, text_structure, state, content_start_rows);
         } else {
             self.render_empty(frame, area);
         }
     }
 
-    fn render_content(&self, frame: &mut Frame, area: Rect, text_structure: &TextStructure, state: &ApplicationState) {
+    fn render_content(
+        &self,
+        frame: &mut Frame,
+        area: Rect,
+        text_structure: &TextStructure,
+        state: &ApplicationState,
+        content_start_rows: Option<&[usize]>,
+    ) {
         let height = area.height as usize;
         let _width = area.width as usize;
 
-        let start_line = state.reading_state.row.saturating_sub(1);
+        let mut start_line = state.reading_state.row.saturating_sub(1);
+        if let Some(content_start_rows) = content_start_rows {
+            if content_start_rows
+                .binary_search(&state.reading_state.row)
+                .is_ok()
+            {
+                // Avoid showing the previous chapter's trailing line at chapter boundaries.
+                start_line = state.reading_state.row;
+            }
+        }
         let end_line = (start_line + height).min(text_structure.text_lines.len());
 
         let selection_start = state.ui_state.selection_start;
@@ -130,8 +152,39 @@ impl Board {
             .map(|ts| ts.text_lines.as_slice())
     }
 
+    pub fn link_count_in_range(&self, start: usize, end: usize) -> usize {
+        self.text_structure
+            .as_ref()
+            .map(|ts| {
+                ts.links
+                    .iter()
+                    .filter(|link| link.row >= start && link.row < end)
+                    .count()
+            })
+            .unwrap_or(0)
+    }
+
+    pub fn links_in_range(&self, start: usize, end: usize) -> Vec<LinkEntry> {
+        self.text_structure
+            .as_ref()
+            .map(|ts| {
+                ts.links
+                    .iter()
+                    .filter(|link| link.row >= start && link.row < end)
+                    .cloned()
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
     pub fn section_rows(&self) -> Option<&std::collections::HashMap<String, usize>> {
         self.text_structure.as_ref().map(|ts| &ts.section_rows)
+    }
+
+    pub fn section_row(&self, id: &str) -> Option<usize> {
+        self.text_structure
+            .as_ref()
+            .and_then(|ts| ts.section_rows.get(id).copied())
     }
 
     pub fn get_selected_text(&self, start: usize, end: usize) -> String {
@@ -174,6 +227,7 @@ mod tests {
             image_maps: HashMap::new(),
             section_rows: HashMap::new(),
             formatting: vec![],
+            links: vec![],
         };
 
         let board = Board::new()
@@ -192,6 +246,7 @@ mod tests {
             image_maps: HashMap::new(),
             section_rows: HashMap::new(),
             formatting: vec![],
+            links: vec![],
         };
 
         board.update_text_structure(text_structure);
@@ -208,6 +263,7 @@ mod tests {
             image_maps: HashMap::new(),
             section_rows: HashMap::new(),
             formatting: vec![],
+            links: vec![],
         };
 
         board.update_text_structure(text_structure);
@@ -226,6 +282,7 @@ mod tests {
             image_maps: HashMap::new(),
             section_rows: HashMap::new(),
             formatting: vec![],
+            links: vec![],
         };
 
         board.update_text_structure(text_structure);
@@ -243,6 +300,7 @@ mod tests {
             image_maps: HashMap::new(),
             section_rows: HashMap::new(),
             formatting: vec![],
+            links: vec![],
         };
 
         board.update_text_structure(text_structure.clone());

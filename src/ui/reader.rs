@@ -19,14 +19,14 @@ use ratatui::{
 use crate::config::Config;
 use crate::ebook::{Ebook, Epub};
 use crate::models::{
-    BookMetadata, Direction as AppDirection, LibraryItem, ReadingState, SearchData, TextStructure,
-    TocEntry, WindowType,
+    BookMetadata, Direction as AppDirection, LibraryItem, LinkEntry, ReadingState, SearchData,
+    TextStructure, TocEntry, WindowType,
 };
 use crate::state::State;
 use crate::ui::board::Board;
 use crate::ui::windows::{
-    bookmarks::BookmarksWindow, help::HelpWindow, library::LibraryWindow, metadata::MetadataWindow,
-    search::SearchWindow, settings::SettingsWindow, toc::TocWindow,
+    bookmarks::BookmarksWindow, help::HelpWindow, library::LibraryWindow, links::LinksWindow,
+    metadata::MetadataWindow, search::SearchWindow, settings::SettingsWindow, toc::TocWindow,
 };
 
 /// Application state that encompasses all UI and reading state
@@ -62,6 +62,7 @@ pub struct UiState {
     pub show_bookmarks: bool,
     pub show_library: bool,
     pub show_search: bool,
+    pub show_links: bool,
     pub show_metadata: bool,
     pub show_settings: bool,
     pub search_query: String,
@@ -72,6 +73,8 @@ pub struct UiState {
     pub toc_selected_index: usize,
     pub bookmarks: Vec<(String, ReadingState)>,
     pub bookmarks_selected_index: usize,
+    pub links: Vec<LinkEntry>,
+    pub links_selected_index: usize,
     pub library_items: Vec<LibraryItem>,
     pub library_selected_index: usize,
     pub metadata: Option<BookMetadata>,
@@ -90,6 +93,7 @@ impl UiState {
             show_bookmarks: false,
             show_library: false,
             show_search: false,
+            show_links: false,
             show_metadata: false,
             show_settings: false,
             search_query: String::new(),
@@ -100,6 +104,8 @@ impl UiState {
             toc_selected_index: 0,
             bookmarks: Vec::new(),
             bookmarks_selected_index: 0,
+            links: Vec::new(),
+            links_selected_index: 0,
             library_items: Vec::new(),
             library_selected_index: 0,
             metadata: None,
@@ -128,6 +134,7 @@ impl UiState {
                 self.show_bookmarks = false;
                 self.show_library = false;
                 self.show_search = false;
+                self.show_links = false;
                 self.show_metadata = false;
                 self.show_settings = false;
                 self.selection_start = None;
@@ -137,6 +144,7 @@ impl UiState {
             WindowType::Bookmarks => self.show_bookmarks = true,
             WindowType::Library => self.show_library = true,
             WindowType::Search => self.show_search = true,
+            WindowType::Links => self.show_links = true,
             WindowType::Metadata => self.show_metadata = true,
             WindowType::Settings => self.show_settings = true,
             WindowType::Visual => {
@@ -246,6 +254,7 @@ impl Reader {
             combined_text_structure.image_maps.extend(ts.image_maps);
             combined_text_structure.section_rows.extend(ts.section_rows);
             combined_text_structure.formatting.extend(ts.formatting);
+            combined_text_structure.links.extend(ts.links);
         }
     
         self.board.update_text_structure(combined_text_structure);
@@ -305,7 +314,7 @@ impl Reader {
                 let state = self.state.clone();
                 self.terminal.draw(|f| {
                     let state_ref = state.borrow();
-                    Self::render_static(f, &state_ref, &self.board);
+                    Self::render_static(f, &state_ref, &self.board, &self.content_start_rows);
                 })?;
             }
 
@@ -352,6 +361,13 @@ impl Reader {
 
     /// Handle keyboard input events
     fn handle_key_event(&mut self, key: KeyEvent) -> eyre::Result<()> {
+        {
+            let mut state = self.state.borrow_mut();
+            if state.ui_state.message.is_some() && state.ui_state.active_window == WindowType::Reader {
+                state.ui_state.clear_message();
+            }
+        }
+
         // Handle count prefix (number repetition)
         if let KeyCode::Char(c) = key.code {
             if c.is_ascii_digit() {
@@ -386,6 +402,7 @@ impl Reader {
             WindowType::Bookmarks => self.handle_bookmarks_mode_keys(key, repeat_count)?,
             WindowType::Library => self.handle_library_mode_keys(key, repeat_count)?,
             WindowType::Settings => self.handle_settings_mode_keys(key, repeat_count)?,
+            WindowType::Links => self.handle_links_mode_keys(key, repeat_count)?,
             WindowType::Help | WindowType::Metadata => self.handle_modal_close_keys(key)?,
             _ => self.handle_normal_mode_keys(key, repeat_count)?,
         }
@@ -511,6 +528,9 @@ impl Reader {
             }
             KeyCode::Char('m') => {
                 self.open_bookmarks_window()?;
+            }
+            KeyCode::Char('u') => {
+                self.open_links_window()?;
             }
             KeyCode::Char('i') => {
                 self.open_metadata_window()?;
@@ -687,6 +707,35 @@ impl Reader {
         Ok(())
     }
 
+    fn handle_links_mode_keys(&mut self, key: KeyEvent, repeat_count: u32) -> eyre::Result<()> {
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('q') => {
+                let mut state = self.state.borrow_mut();
+                state.ui_state.open_window(WindowType::Reader);
+            }
+            KeyCode::Char('j') | KeyCode::Down => {
+                let mut state = self.state.borrow_mut();
+                if !state.ui_state.links.is_empty() {
+                    let next = state.ui_state.links_selected_index.saturating_add(repeat_count as usize);
+                    state.ui_state.links_selected_index = next.min(state.ui_state.links.len() - 1);
+                }
+            }
+            KeyCode::Char('k') | KeyCode::Up => {
+                let mut state = self.state.borrow_mut();
+                let current = state.ui_state.links_selected_index;
+                state.ui_state.links_selected_index = current.saturating_sub(repeat_count as usize);
+            }
+            KeyCode::Enter => {
+                self.follow_selected_link()?;
+            }
+            KeyCode::Char('y') => {
+                self.copy_selected_link()?;
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
     fn handle_library_mode_keys(&mut self, key: KeyEvent, repeat_count: u32) -> eyre::Result<()> {
         match key.code {
             KeyCode::Esc | KeyCode::Char('q') => {
@@ -759,9 +808,14 @@ impl Reader {
     }
 
     /// Static render method that can be called from a closure
-    fn render_static(frame: &mut Frame, state: &ApplicationState, board: &Board) {
+    fn render_static(
+        frame: &mut Frame,
+        state: &ApplicationState,
+        board: &Board,
+        content_start_rows: &[usize],
+    ) {
         // Main reader view
-        Self::render_reader_static(frame, &state, board);
+        Self::render_reader_static(frame, &state, board, content_start_rows);
 
         // Render overlays/modals if active
         if state.ui_state.show_help {
@@ -816,6 +870,13 @@ impl Reader {
                 &state.ui_state.search_query,
                 &entries,
                 state.ui_state.selected_search_result,
+            );
+        } else if state.ui_state.show_links {
+            LinksWindow::render(
+                frame,
+                frame.area(),
+                &state.ui_state.links,
+                state.ui_state.links_selected_index,
             );
         } else if state.ui_state.show_metadata {
             MetadataWindow::render(frame, frame.area(), state.ui_state.metadata.as_ref());
@@ -899,7 +960,12 @@ impl Reader {
     }
 
     /// Static method to render the main reader view
-    fn render_reader_static(frame: &mut Frame, state: &ApplicationState, board: &Board) {
+    fn render_reader_static(
+        frame: &mut Frame,
+        state: &ApplicationState,
+        board: &Board,
+        content_start_rows: &[usize],
+    ) {
         let frame_area = frame.area();
         let percent_text = if state.config.settings.show_progress_indicator {
             let total_lines = board.total_lines();
@@ -927,10 +993,6 @@ impl Reader {
             ])
             .split(frame_area);
 
-        let header_line = Self::build_header_line(title, percent_text.as_deref(), chunks[0].width);
-        let header = Paragraph::new(Line::from(header_line));
-        frame.render_widget(header, chunks[0]);
-
         // Main content area with centered margins
         let desired_width = state.reading_state.textwidth as u16;
         let content_width = desired_width.min(chunks[1].width);
@@ -942,19 +1004,39 @@ impl Reader {
             height: chunks[1].height,
         };
 
-        board.render(frame, content_area, state);
+        // Link handling: keep main text untouched; show a subtle header hint only when the page has
+        // links. Pressing `u` opens a list; Enter jumps for internal anchors when possible.
+        let visible_start = state.reading_state.row.saturating_sub(1);
+        let visible_end = visible_start.saturating_add(content_area.height as usize);
+        let link_count = board.link_count_in_range(visible_start, visible_end);
+        let link_hint = if link_count > 0 {
+            Some(format!("links:{} (u)", link_count))
+        } else {
+            None
+        };
+        let right_text = match (link_hint, percent_text) {
+            (Some(link_hint), Some(percent_text)) => Some(format!("{} {}", link_hint, percent_text)),
+            (Some(link_hint), None) => Some(link_hint),
+            (None, Some(percent_text)) => Some(percent_text),
+            (None, None) => None,
+        };
+        let header_line = Self::build_header_line(title, right_text.as_deref(), chunks[0].width);
+        let header = Paragraph::new(Line::from(header_line));
+        frame.render_widget(header, chunks[0]);
+
+        board.render(frame, content_area, state, Some(content_start_rows));
     }
 
-    fn build_header_line(title: &str, percent: Option<&str>, width: u16) -> String {
+    fn build_header_line(title: &str, right_text: Option<&str>, width: u16) -> String {
         let width = width as usize;
         if width == 0 {
             return String::new();
         }
 
         let mut buffer = vec![' '; width];
-        let percent_len = percent.map(|text| text.len()).unwrap_or(0);
-        let content_width = if percent_len > 0 {
-            width.saturating_sub(percent_len + 1)
+        let right_len = right_text.map(|text| text.len()).unwrap_or(0);
+        let content_width = if right_len > 0 {
+            width.saturating_sub(right_len + 1)
         } else {
             width
         };
@@ -970,9 +1052,9 @@ impl Reader {
             }
         }
 
-        if let Some(percent) = percent {
-            let start = width.saturating_sub(percent_len);
-            for (i, ch) in percent.chars().enumerate() {
+        if let Some(right_text) = right_text {
+            let start = width.saturating_sub(right_len);
+            for (i, ch) in right_text.chars().enumerate() {
                 if start + i < buffer.len() {
                     buffer[start + i] = ch;
                 }
@@ -1029,6 +1111,22 @@ impl Reader {
         state.ui_state.bookmarks = bookmarks;
         state.ui_state.bookmarks_selected_index = 0;
         state.ui_state.open_window(WindowType::Bookmarks);
+        Ok(())
+    }
+
+    fn open_links_window(&mut self) -> eyre::Result<()> {
+        let (start, end) = self.visible_line_range();
+        let links = self.board.links_in_range(start, end);
+        let mut state = self.state.borrow_mut();
+        if links.is_empty() {
+            state
+                .ui_state
+                .set_message("No links on this page".to_string(), MessageType::Info);
+            return Ok(());
+        }
+        state.ui_state.links = links;
+        state.ui_state.links_selected_index = 0;
+        state.ui_state.open_window(WindowType::Links);
         Ok(())
     }
 
@@ -1153,6 +1251,30 @@ impl Reader {
             Ok((_cols, rows)) => rows.saturating_sub(1) as usize,
             Err(_) => 0,
         }
+    }
+
+    fn visible_line_range(&self) -> (usize, usize) {
+        let height = self.page_size();
+        let start = self.state.borrow().reading_state.row.saturating_sub(1);
+        let end = start
+            .saturating_add(height)
+            .min(self.board.total_lines());
+        (start, end)
+    }
+
+    fn content_index_for_row(&self, row: usize) -> Option<usize> {
+        if self.content_start_rows.is_empty() {
+            return None;
+        }
+        let mut index = 0;
+        for (i, start) in self.content_start_rows.iter().enumerate() {
+            if *start <= row {
+                index = i;
+            } else {
+                break;
+            }
+        }
+        Some(index)
     }
 
     fn chapter_rows(&self) -> Vec<usize> {
@@ -1523,6 +1645,7 @@ impl Reader {
             combined_text_structure.image_maps.extend(ts.image_maps);
             combined_text_structure.section_rows.extend(ts.section_rows);
             combined_text_structure.formatting.extend(ts.formatting);
+            combined_text_structure.links.extend(ts.links);
         }
         self.board.update_text_structure(combined_text_structure);
         self.content_start_rows = content_start_rows;
@@ -1546,5 +1669,127 @@ impl Reader {
             ui_state.open_window(WindowType::Reader);
         }
         Ok(())
+    }
+
+    fn copy_selected_link(&mut self) -> eyre::Result<()> {
+        let url = {
+            let state = self.state.borrow();
+            state
+                .ui_state
+                .links
+                .get(state.ui_state.links_selected_index)
+                .map(|link| link.url.clone())
+        };
+        if let Some(url) = url {
+            self.clipboard.set_text(url)?;
+            let ui_state = &mut self.state.borrow_mut().ui_state;
+            ui_state.set_message("Link copied to clipboard".to_string(), MessageType::Info);
+            ui_state.open_window(WindowType::Reader);
+        }
+        Ok(())
+    }
+
+    fn follow_selected_link(&mut self) -> eyre::Result<()> {
+        let link = {
+            let state = self.state.borrow();
+            state
+                .ui_state
+                .links
+                .get(state.ui_state.links_selected_index)
+                .cloned()
+        };
+
+        let Some(link) = link else {
+            return Ok(());
+        };
+
+        if let Some(target_row) = self.resolve_internal_link_row(&link.url) {
+            let mut state = self.state.borrow_mut();
+            state.reading_state.row = target_row;
+            if let Some(content_index) = self.content_index_for_row(target_row) {
+                state.reading_state.content_index = content_index;
+            }
+            state.ui_state.open_window(WindowType::Reader);
+            return Ok(());
+        }
+
+        if Self::is_external_link(&link.url) {
+            match self.open_external_link(&link.url) {
+                Ok(true) => {
+                    let ui_state = &mut self.state.borrow_mut().ui_state;
+                    ui_state.set_message("Opened link in browser".to_string(), MessageType::Info);
+                    ui_state.open_window(WindowType::Reader);
+                    return Ok(());
+                }
+                Ok(false) | Err(_) => {
+                    self.clipboard.set_text(link.url)?;
+                    let ui_state = &mut self.state.borrow_mut().ui_state;
+                    ui_state.set_message("Failed to open; link copied".to_string(), MessageType::Warning);
+                    ui_state.open_window(WindowType::Reader);
+                    return Ok(());
+                }
+            }
+        }
+
+        self.clipboard.set_text(link.url)?;
+        let ui_state = &mut self.state.borrow_mut().ui_state;
+        ui_state.set_message("Link copied to clipboard".to_string(), MessageType::Info);
+        ui_state.open_window(WindowType::Reader);
+        Ok(())
+    }
+
+    fn resolve_internal_link_row(&self, href: &str) -> Option<usize> {
+        let trimmed = href.trim();
+        if trimmed.is_empty() || Self::is_external_link(trimmed) {
+            return None;
+        }
+
+        if let Some(id) = trimmed.strip_prefix('#') {
+            if !id.is_empty() {
+                return self.board.section_row(id);
+            }
+            return None;
+        }
+
+        let (path, fragment) = match trimmed.split_once('#') {
+            Some((path, fragment)) => (path, Some(fragment)),
+            None => (trimmed, None),
+        };
+
+        if let Some(fragment) = fragment {
+            if !fragment.is_empty() {
+                if let Some(row) = self.board.section_row(fragment) {
+                    return Some(row);
+                }
+            }
+        }
+
+        if let Some(epub) = self.ebook.as_ref() {
+            if let Some(content_index) = epub.content_index_for_href(path) {
+                return self.content_start_rows.get(content_index).copied();
+            }
+        }
+
+        None
+    }
+
+    fn is_external_link(href: &str) -> bool {
+        let href = href.to_ascii_lowercase();
+        href.starts_with("http://")
+            || href.starts_with("https://")
+            || href.starts_with("mailto:")
+            || href.starts_with("tel:")
+            || href.starts_with("ftp://")
+    }
+
+    fn open_external_link(&self, url: &str) -> eyre::Result<bool> {
+        // Use a system opener to keep link handling out of the TUI.
+        let status = std::process::Command::new("xdg-open")
+            .arg(url)
+            .status();
+        match status {
+            Ok(status) => Ok(status.success()),
+            Err(err) => Err(err.into()),
+        }
     }
 }

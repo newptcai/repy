@@ -39,6 +39,16 @@ impl Epub {
         }
     }
 
+    pub fn content_index_for_href(&self, href: &str) -> Option<usize> {
+        let doc = self.doc.as_ref()?;
+        let path = href.split('#').next().unwrap_or("");
+        if path.is_empty() {
+            return None;
+        }
+        let resource_path = PathBuf::from(path);
+        doc.resource_uri_to_chapter(&resource_path)
+    }
+
     fn split_navpoint_target(content: &PathBuf) -> (PathBuf, Option<String>) {
         let content_str = content.to_string_lossy();
         if let Some((path, fragment)) = content_str.split_once('#') {

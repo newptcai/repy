@@ -37,6 +37,7 @@ impl HelpWindow {
             Line::from("   `  Jump To Position"),
             Line::from("   b  Add Bookmark"),
             Line::from("   B  Show Bookmarks"),
+            Line::from("   u  Links On Page (Enter follow)"),
             Line::from("   q  Quit"),
             Line::from("   ?  Help"),
             Line::from("   c  Switch Color"),

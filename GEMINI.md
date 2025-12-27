@@ -64,6 +64,7 @@ The detailed roadmap below remains the source of truth for planned work.
 12. **External Tool Integration (`src/tools/`):**
     *   [ ] **Dictionary Integration**: Multiple dictionary engines (sdcv, dict, etc.)
     *   [ ] **Image Viewer Integration**: Cross-platform image display
+    *   [x] **URL Handling**: Internal anchor jumps and external link opening
     *   [ ] **Export Functionality**: Text and highlighted content export
     *   [ ] **Sync Integration**: Cloud storage for reading progress
 
@@ -114,6 +115,7 @@ The detailed roadmap below remains the source of truth for planned work.
     *   [ ] Migration guide from epy to repy
 
 ## Development Guidelines
+- AGENTS.md, GEMINI.md, and CLAUDE.md are the same content; update all three when changing instructions here.
 - Commit frequently with small, focused changes.
 - Test-driven development for complex components.
 - Cross-platform mindset (Linux/macOS/Windows).

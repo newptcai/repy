@@ -1,4 +1,4 @@
-use crate::models::{TextStructure, InlineStyle};
+use crate::models::{InlineStyle, LinkEntry, TextStructure};
 use eyre::Result;
 use html2text::from_read;
 use scraper::{Html, Selector};
@@ -21,12 +21,14 @@ pub fn parse_html(
     let image_maps = extract_images(html_src, starting_line)?;
     let section_rows = extract_sections(html_src, &section_ids.unwrap_or_default(), starting_line, &plain_text)?;
     let formatting = extract_formatting(html_src, starting_line, &plain_text)?;
+    let links = extract_links(html_src, starting_line, &plain_text)?;
 
     Ok(TextStructure {
         text_lines: plain_text,
         image_maps,
         section_rows,
         formatting,
+        links,
     })
 }
 
@@ -53,18 +55,14 @@ fn extract_images(html: &str, starting_line: usize) -> Result<HashMap<usize, Str
     Ok(images)
 }
 
-/// Extract section information from HTML
+/// Extract section/anchor ids from HTML for TOC navigation and internal link jumps.
 fn extract_sections(
     html: &str,
-    section_ids: &HashSet<String>,
+    _section_ids: &HashSet<String>,
     starting_line: usize,
     text_lines: &[String],
 ) -> Result<HashMap<String, usize>> {
     let mut sections = HashMap::new();
-
-    if section_ids.is_empty() {
-        return Ok(sections);
-    }
 
     let fragment = Html::parse_fragment(html);
 
@@ -73,23 +71,23 @@ fn extract_sections(
 
     for element in fragment.select(&id_selector) {
         if let Some(id) = element.value().attr("id") {
-            if section_ids.contains(id) {
-                // Estimate the line number where this section starts
-                // This is approximate since html2text changes the structure
-                let element_text = element.text().collect::<String>();
+            // Track all anchors so internal links can jump, even if the ID is not in the TOC.
+            // TOC navigation still relies on TOC entries; extra anchors do not change that.
+            // Estimate the line number where this section starts.
+            // This is approximate since html2text changes the structure.
+            let element_text = element.text().collect::<String>();
 
-                // Find the closest line in our output that contains this element's text
-                for (line_num, line) in text_lines.iter().enumerate() {
-                    if line.contains(&element_text) || element_text.contains(line) {
-                        sections.insert(id.to_string(), starting_line + line_num);
-                        break;
-                    }
+            // Find the closest line in our output that contains this element's text.
+            for (line_num, line) in text_lines.iter().enumerate() {
+                if line.contains(&element_text) || element_text.contains(line) {
+                    sections.insert(id.to_string(), starting_line + line_num);
+                    break;
                 }
+            }
 
-                // If we didn't find an exact match, use the current line count as a fallback
-                if !sections.contains_key(id) {
-                    sections.insert(id.to_string(), starting_line + text_lines.len());
-                }
+            // If we didn't find an exact match, use the current line count as a fallback.
+            if !sections.contains_key(id) {
+                sections.insert(id.to_string(), starting_line + text_lines.len());
             }
         }
     }
@@ -164,6 +162,43 @@ fn extract_formatting(
     }
 
     Ok(formatting)
+}
+
+/// Extract link metadata without injecting markers into the rendered text.
+/// We keep links as separate entries so reading flow stays unchanged; link UI uses these rows.
+fn extract_links(html: &str, starting_line: usize, text_lines: &[String]) -> Result<Vec<LinkEntry>> {
+    let mut links = Vec::new();
+    let fragment = Html::parse_fragment(html);
+    let link_selector = Selector::parse("a[href]").unwrap();
+
+    for element in fragment.select(&link_selector) {
+        let href = match element.value().attr("href") {
+            Some(value) if !value.trim().is_empty() => value.trim(),
+            _ => continue,
+        };
+
+        let raw_label = element.text().collect::<String>();
+        let label = raw_label.split_whitespace().collect::<Vec<_>>().join(" ");
+        let search_text = if label.is_empty() { href } else { label.as_str() };
+
+        let mut row = None;
+        if !search_text.is_empty() {
+            for (line_num, line) in text_lines.iter().enumerate() {
+                if line.contains(search_text) {
+                    row = Some(starting_line + line_num);
+                    break;
+                }
+            }
+        }
+
+        links.push(LinkEntry {
+            row: row.unwrap_or(starting_line),
+            label: if label.is_empty() { href.to_string() } else { label },
+            url: href.to_string(),
+        });
+    }
+
+    Ok(links)
 }
 
 #[cfg(test)]

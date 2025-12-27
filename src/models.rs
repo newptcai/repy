@@ -29,6 +29,7 @@ pub enum WindowType {
     Bookmarks,
     Library,
     Search,
+    Links,
     Metadata,
     Settings,
     Visual,
@@ -127,6 +128,13 @@ pub struct TextSpan {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub struct LinkEntry {
+    pub row: usize,
+    pub label: String,
+    pub url: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct TocEntry {
     pub label: String,
     pub content_index: usize,
@@ -139,6 +147,7 @@ pub struct TextStructure {
     pub image_maps: HashMap<usize, String>,
     pub section_rows: HashMap<String, usize>,
     pub formatting: Vec<InlineStyle>,
+    pub links: Vec<LinkEntry>,
 }
 
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -435,6 +444,7 @@ mod tests {
         assert!(text_structure.image_maps.is_empty());
         assert!(text_structure.section_rows.is_empty());
         assert!(text_structure.formatting.is_empty());
+        assert!(text_structure.links.is_empty());
     }
 
     #[test]
@@ -462,6 +472,11 @@ mod tests {
             image_maps,
             section_rows,
             formatting,
+            links: vec![LinkEntry {
+                row: 1,
+                label: "Example".to_string(),
+                url: "https://example.com".to_string(),
+            }],
         };
 
         assert_eq!(text_structure.text_lines.len(), 2);
@@ -470,6 +485,8 @@ mod tests {
         assert_eq!(text_structure.section_rows.get("chapter-1"), Some(&5));
         assert_eq!(text_structure.formatting.len(), 1);
         assert_eq!(text_structure.formatting[0].n_letters, 5);
+        assert_eq!(text_structure.links.len(), 1);
+        assert_eq!(text_structure.links[0].url, "https://example.com");
     }
 
     #[test]
