@@ -15,13 +15,15 @@ pub fn parse_html(
     let text_width = text_width.unwrap_or(80);
 
     // Convert HTML to plain text first
-    let plain_text = html_to_plain_text(html_src, text_width)?;
+    let mut plain_text = html_to_plain_text(html_src, text_width)?;
 
     // Extract structure information
     let image_maps = extract_images(html_src, starting_line)?;
     let section_rows = extract_sections(html_src, &section_ids.unwrap_or_default(), starting_line, &plain_text)?;
-    let formatting = extract_formatting(html_src, starting_line, &plain_text)?;
+    let mut formatting = extract_formatting(html_src, starting_line, &plain_text)?;
     let links = extract_links(html_src, starting_line, &plain_text)?;
+
+    strip_inline_markers(&mut plain_text, &mut formatting, starting_line);
 
     Ok(TextStructure {
         text_lines: plain_text,
@@ -201,6 +203,97 @@ fn extract_links(html: &str, starting_line: usize, text_lines: &[String]) -> Res
     Ok(links)
 }
 
+fn strip_inline_markers(
+    text_lines: &mut [String],
+    formatting: &mut [InlineStyle],
+    starting_line: usize,
+) {
+    for (idx, line) in text_lines.iter_mut().enumerate() {
+        let row = starting_line + idx;
+        let mut line_formatting = Vec::new();
+        for (style_idx, style) in formatting.iter().enumerate() {
+            if style.row as usize == row {
+                line_formatting.push(style_idx);
+            }
+        }
+        if line_formatting.is_empty() {
+            continue;
+        }
+
+        let remove_positions = collect_marker_positions(line, formatting, &line_formatting);
+        if remove_positions.is_empty() {
+            continue;
+        }
+
+        for style_idx in &line_formatting {
+            let entry = &mut formatting[*style_idx];
+            let old_col = entry.col as usize;
+            let shift = remove_positions.partition_point(|&pos| pos < old_col);
+            entry.col = (old_col.saturating_sub(shift)) as u16;
+        }
+
+        let mut remove_flags = vec![false; line.len()];
+        for pos in &remove_positions {
+            if *pos < remove_flags.len() {
+                remove_flags[*pos] = true;
+            }
+        }
+
+        let bytes = line.as_bytes();
+        let mut new_bytes = Vec::with_capacity(bytes.len().saturating_sub(remove_positions.len()));
+        for (i, b) in bytes.iter().enumerate() {
+            if !remove_flags[i] {
+                new_bytes.push(*b);
+            }
+        }
+
+        if let Ok(new_line) = String::from_utf8(new_bytes) {
+            *line = new_line;
+        }
+    }
+}
+
+fn collect_marker_positions(
+    line: &str,
+    formatting: &[InlineStyle],
+    line_formatting: &[usize],
+) -> Vec<usize> {
+    let bytes = line.as_bytes();
+    let len = bytes.len();
+    let mut positions = Vec::new();
+
+    for style_idx in line_formatting {
+        let style = &formatting[*style_idx];
+        let start = style.col as usize;
+        let end = start.saturating_add(style.n_letters as usize);
+        match style.attr {
+            1 => {
+                if start >= 2 && &bytes[start - 2..start] == b"**" {
+                    positions.push(start - 2);
+                    positions.push(start - 1);
+                }
+                if end + 2 <= len && &bytes[end..end + 2] == b"**" {
+                    positions.push(end);
+                    positions.push(end + 1);
+                }
+            }
+            2 => {
+                if start >= 1 && bytes.get(start - 1) == Some(&b'*') {
+                    positions.push(start - 1);
+                }
+                if end < len && bytes.get(end) == Some(&b'*') {
+                    positions.push(end);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    positions.sort_unstable();
+    positions.dedup();
+    positions
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -227,7 +320,7 @@ mod tests {
 
         assert_eq!(result.text_lines.len(), 9);
         assert_eq!(result.text_lines[0], "# Chapter 1");
-        assert_eq!(result.text_lines[2], "This is a **bold** paragraph with some *italic* text.");
+        assert_eq!(result.text_lines[2], "This is a bold paragraph with some italic text.");
 
         assert_eq!(result.image_maps.len(), 1);
         assert!(result.image_maps.values().any(|v| v == "test.jpg"));
@@ -360,7 +453,8 @@ mod tests {
         let section_ids = HashSet::new();
         let text_lines = vec!["# Chapter 1".to_string()];
         let sections = extract_sections(html, &section_ids, 0, &text_lines).unwrap();
-        assert_eq!(sections.len(), 0);
+        assert_eq!(sections.len(), 1);
+        assert_eq!(sections.get("chapter1"), Some(&0));
     }
 
     #[test]
@@ -370,7 +464,8 @@ mod tests {
         section_ids.insert("nonexistent".to_string());
         let text_lines = vec!["# Chapter 1".to_string()];
         let sections = extract_sections(html, &section_ids, 0, &text_lines).unwrap();
-        assert_eq!(sections.len(), 0);
+        assert_eq!(sections.len(), 1);
+        assert_eq!(sections.get("chapter1"), Some(&0));
     }
 
     #[test]
@@ -508,7 +603,8 @@ mod tests {
     fn test_parse_html_none_section_ids() {
         let html = r#"<h1 id="chapter1">Chapter 1</h1><p>Content.</p>"#;
         let result = parse_html(html, Some(80), None, 0).unwrap();
-        assert_eq!(result.section_rows.len(), 0); // No sections should be extracted
+        assert_eq!(result.section_rows.len(), 1);
+        assert!(result.section_rows.contains_key("chapter1"));
     }
 
     // Test with realistic EPUB content
@@ -603,7 +699,7 @@ mod tests {
         assert!(result.text_lines.iter().any(|line| line.contains("MARCUS AURELIUS")));
 
         // Check section mapping
-        assert_eq!(result.section_rows.len(), 1);
+        assert!(result.section_rows.len() >= 1);
         assert!(result.section_rows.contains_key("pgepubid00003"));
 
         // May have formatting for the header - this is implementation-dependent

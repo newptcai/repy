@@ -488,12 +488,6 @@ mod tests {
             let _line_count = content.text_lines.len(); // Just ensure we can access it
         }
 
-        // Just ensure parsing completes without crashing
-        let total_lines: usize = all_content.iter()
-            .map(|c| c.text_lines.len())
-            .sum();
-        assert!(total_lines >= 0); // Should be able to count lines
-
         Ok(())
     }
 

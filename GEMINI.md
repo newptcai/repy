@@ -45,6 +45,7 @@ The detailed roadmap below remains the source of truth for planned work.
     *   [ ] Image placeholder styling
     *   [ ] Line numbers toggle
     *   [ ] Help window parity
+    *   [x] Inline bold/italic rendering (strip markdown markers)
 
 10. **Text-to-Speech Integration (`src/tts/`):**
     *   [ ] Create TTS trait system for multiple engine support
@@ -115,7 +116,7 @@ The detailed roadmap below remains the source of truth for planned work.
     *   [ ] Migration guide from epy to repy
 
 ## Development Guidelines
-- AGENTS.md, GEMINI.md, and CLAUDE.md are the same content; update all three when changing instructions here.
+- AGENTS.md, GEMINI.md, and CLAUDE.md are the same file; changing one updates the other two automatically.
 - Commit frequently with small, focused changes.
 - Test-driven development for complex components.
 - Cross-platform mindset (Linux/macOS/Windows).

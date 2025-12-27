@@ -6,7 +6,7 @@ use ratatui::{
     Frame,
 };
 
-use crate::models::{LinkEntry, TextStructure};
+use crate::models::{InlineStyle, LinkEntry, TextStructure};
 use crate::ui::reader::ApplicationState;
 
 /// Board widget for rendering book text content
@@ -64,6 +64,7 @@ impl Board {
         let end_line = (start_line + height).min(text_structure.text_lines.len());
 
         let selection_start = state.ui_state.selection_start;
+        let formatting = &text_structure.formatting;
 
         let visible_lines: Vec<Line> = text_structure.text_lines
             .get(start_line..end_line)
@@ -89,22 +90,17 @@ impl Board {
                     }
                 }
 
-                if let Some(ranges) = state.ui_state.search_matches.get(&line_num) {
-                    let mut last_index = 0;
-                    for (start, end) in ranges {
-                        if *start > last_index {
-                            spans.push(Span::styled(line[last_index..*start].to_string(), style));
-                        }
-                        let highlight_style = style.fg(Color::Black).bg(Color::Yellow);
-                        spans.push(Span::styled(line[*start..*end].to_string(), highlight_style));
-                        last_index = *end;
-                    }
-                    if last_index < line.len() {
-                        spans.push(Span::styled(line[last_index..].to_string(), style));
-                    }
-                } else {
-                    spans.push(Span::styled(line.clone(), style));
-                }
+                let line_spans = self.build_line_spans(
+                    line,
+                    line_num,
+                    style,
+                    formatting,
+                    state.ui_state
+                        .search_matches
+                        .get(&line_num)
+                        .map(|ranges| ranges.as_slice()),
+                );
+                spans.extend(line_spans);
                 Line::from(spans)
             })
             .collect();
@@ -127,6 +123,83 @@ impl Board {
             .wrap(Wrap { trim: true });
 
         frame.render_widget(paragraph, area);
+    }
+
+    fn build_line_spans(
+        &self,
+        line: &str,
+        line_num: usize,
+        base_style: Style,
+        formatting: &[InlineStyle],
+        search_ranges: Option<&[(usize, usize)]>,
+    ) -> Vec<Span<'_>> {
+        if line.is_empty() {
+            return vec![Span::styled(String::new(), base_style)];
+        }
+
+        let mut points = vec![0, line.len()];
+        let line_formatting: Vec<&InlineStyle> = formatting
+            .iter()
+            .filter(|style| style.row as usize == line_num)
+            .collect();
+
+        for style in &line_formatting {
+            points.push(style.col as usize);
+            points.push((style.col + style.n_letters) as usize);
+        }
+
+        if let Some(ranges) = search_ranges {
+            for (start, end) in ranges {
+                points.push(*start);
+                points.push(*end);
+            }
+        }
+
+        points.retain(|pos| *pos <= line.len());
+        points.sort_unstable();
+        points.dedup();
+
+        let mut spans = Vec::new();
+        for window in points.windows(2) {
+            let start = window[0];
+            let end = window[1];
+            if start >= end {
+                continue;
+            }
+            let Some(segment) = line.get(start..end) else {
+                continue;
+            };
+
+            let mut style = base_style;
+            if let Some(ranges) = search_ranges {
+                if ranges
+                    .iter()
+                    .any(|(range_start, range_end)| start >= *range_start && end <= *range_end)
+                {
+                    style = style.fg(Color::Black).bg(Color::Yellow);
+                }
+            }
+
+            for inline in &line_formatting {
+                let inline_start = inline.col as usize;
+                let inline_end = inline_start.saturating_add(inline.n_letters as usize);
+                if start >= inline_start && end <= inline_end {
+                    match inline.attr {
+                        1 => {
+                            style = style.add_modifier(Modifier::BOLD);
+                        }
+                        2 => {
+                            style = style.add_modifier(Modifier::ITALIC);
+                        }
+                        _ => {}
+                    }
+                }
+            }
+
+            spans.push(Span::styled(segment.to_string(), style));
+        }
+
+        spans
     }
 
     pub fn total_lines(&self) -> usize {
@@ -210,9 +283,8 @@ impl Default for Board {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::{InlineStyle, TextStructure};
+    use crate::models::TextStructure;
     use std::collections::HashMap;
-    use crate::config::Config;
 
     #[test]
     fn test_board_new() {
