@@ -150,6 +150,8 @@ pub struct TextStructure {
     pub links: Vec<LinkEntry>,
 }
 
+pub const CHAPTER_BREAK_MARKER: &str = "<repy:chapter-break>";
+
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct NoUpdate;
 

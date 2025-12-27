@@ -383,7 +383,7 @@ mod tests {
             Ok(TextStructure::default())
         }
 
-        fn get_all_parsed_content(&mut self, _text_width: usize) -> Result<Vec<TextStructure>> {
+        fn get_all_parsed_content(&mut self, _text_width: usize, _page_height: Option<usize>) -> Result<Vec<TextStructure>> {
             Ok(vec![TextStructure::default()])
         }
     }

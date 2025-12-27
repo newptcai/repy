@@ -1,4 +1,4 @@
-use crate::models::{BookMetadata, TextStructure, TocEntry};
+use crate::models::{BookMetadata, TextStructure, TocEntry, CHAPTER_BREAK_MARKER};
 use crate::parser::parse_html;
 use eyre::Result;
 use epub::doc::{EpubDoc, NavPoint};
@@ -17,7 +17,7 @@ pub trait Ebook {
     fn cleanup(&mut self) -> Result<()>;
 
     fn get_parsed_content(&mut self, content_id: &str, text_width: usize, starting_line: usize) -> Result<TextStructure>;
-    fn get_all_parsed_content(&mut self, text_width: usize) -> Result<Vec<TextStructure>>;
+    fn get_all_parsed_content(&mut self, text_width: usize, page_height: Option<usize>) -> Result<Vec<TextStructure>>;
 }
 
 pub struct Epub {
@@ -216,21 +216,42 @@ impl Ebook for Epub {
         parse_html(&raw_html, Some(text_width), Some(section_ids), starting_line)
     }
 
-    fn get_all_parsed_content(&mut self, text_width: usize) -> Result<Vec<TextStructure>> {
+    fn get_all_parsed_content(&mut self, text_width: usize, page_height: Option<usize>) -> Result<Vec<TextStructure>> {
         let mut all_content = Vec::new();
         let mut starting_line = 0;
 
         // Collect all content IDs first to avoid borrowing issues
         let content_ids: Vec<String> = self.contents().clone();
+        let total_chapters = content_ids.len();
 
-        for content_id in content_ids {
-            let parsed_content = self.get_parsed_content(&content_id, text_width, starting_line)?;
+        for (index, content_id) in content_ids.into_iter().enumerate() {
+            let mut parsed_content = self.get_parsed_content(&content_id, text_width, starting_line)?;
+            if let Some(page_height) = page_height {
+                if index + 1 < total_chapters {
+                    let total_lines = starting_line + parsed_content.text_lines.len();
+                    let break_lines = build_chapter_break(page_height, total_lines);
+                    parsed_content.text_lines.extend(break_lines);
+                }
+            }
             starting_line += parsed_content.text_lines.len();
             all_content.push(parsed_content);
         }
 
         Ok(all_content)
     }
+}
+
+fn build_chapter_break(page_height: usize, total_lines: usize) -> Vec<String> {
+    let mut lines = Vec::new();
+    lines.push(String::new());
+    lines.push(CHAPTER_BREAK_MARKER.to_string());
+    if page_height == 0 {
+        return lines;
+    }
+    let remainder = (total_lines + lines.len()) % page_height;
+    let pad = if remainder == 0 { 0 } else { page_height - remainder };
+    lines.extend(std::iter::repeat(String::new()).take(pad));
+    lines
 }
 
 #[cfg(test)]
@@ -461,7 +482,7 @@ mod tests {
         let mut epub = Epub::new("tests/fixtures/small.epub");
         epub.initialize()?;
 
-        let all_content = epub.get_all_parsed_content(80)?;
+        let all_content = epub.get_all_parsed_content(80, None)?;
 
         // Should have content for all chapters
         assert_eq!(all_content.len(), epub.contents().len());
@@ -485,7 +506,7 @@ mod tests {
         let mut epub = Epub::new("tests/fixtures/meditations.epub");
         epub.initialize()?;
 
-        let all_content = epub.get_all_parsed_content(80)?;
+        let all_content = epub.get_all_parsed_content(80, None)?;
 
         // Should have content for all chapters
         assert_eq!(all_content.len(), epub.contents().len());
@@ -503,7 +524,7 @@ mod tests {
         let mut epub = Epub::new("tests/fixtures/small.epub");
         epub.initialize()?;
 
-        let all_content = epub.get_all_parsed_content(80)?;
+        let all_content = epub.get_all_parsed_content(80, None)?;
         let mut current_line = 0;
 
         // Check that line numbers are continuous across chapters
@@ -606,7 +627,7 @@ mod tests {
         assert!(meta.title.is_some());
 
         // Get all parsed content
-        let all_content = epub.get_all_parsed_content(80)?;
+        let all_content = epub.get_all_parsed_content(80, None)?;
         assert!(!all_content.is_empty());
 
         // Test accessing specific content
@@ -692,7 +713,7 @@ mod tests {
         let start = std::time::Instant::now();
 
         // This should complete reasonably quickly even with the large EPUB
-        let all_content = epub.get_all_parsed_content(80)?;
+        let all_content = epub.get_all_parsed_content(80, None)?;
 
         let duration = start.elapsed();
         assert!(duration.as_secs() < 10); // Should complete in under 10 seconds

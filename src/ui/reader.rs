@@ -299,7 +299,8 @@ impl Reader {
         epub.initialize()?;
     
         let text_width = self.state.borrow().config.settings.width.unwrap_or(80);
-        let all_content = epub.get_all_parsed_content(text_width)?;
+        let page_height = self.chapter_break_page_height();
+        let all_content = epub.get_all_parsed_content(text_width, page_height)?;
 
         let mut combined_text_structure = TextStructure::default();
         let mut content_start_rows = Vec::with_capacity(all_content.len());
@@ -377,10 +378,26 @@ impl Reader {
 
             // Handle events
             if let Ok(event) = crossterm::event::read() {
-                if let Event::Key(key) = event {
-                    if key.kind == KeyEventKind::Press {
-                        self.handle_key_event(key)?;
+                match event {
+                    Event::Key(key) => {
+                        if key.kind == KeyEventKind::Press {
+                            self.handle_key_event(key)?;
+                        }
                     }
+                    Event::Resize(_, _) => {
+                        let text_width = {
+                            let state = self.state.borrow();
+                            if state.config.settings.seamless_between_chapters {
+                                None
+                            } else {
+                                Some(state.config.settings.width.unwrap_or(80))
+                            }
+                        };
+                        if let Some(text_width) = text_width {
+                            self.rebuild_text_structure(text_width)?;
+                        }
+                    }
+                    _ => {}
                 }
             }
         }
@@ -1234,9 +1251,14 @@ impl Reader {
 
     // Navigation methods (placeholders)
     fn move_cursor(&mut self, direction: AppDirection) {
+        let seamless = {
+            let state = self.state.borrow();
+            state.config.settings.seamless_between_chapters
+        };
         let mut state = self.state.borrow_mut();
         let total_lines = self.board.total_lines();
         let current_row = state.reading_state.row;
+        let page = self.page_size();
 
         match direction {
             AppDirection::Up => {
@@ -1250,11 +1272,67 @@ impl Reader {
                 }
             }
             AppDirection::PageUp => {
-                let page = self.page_size();
+                if !seamless {
+                    if let Some(index) = self.content_index_for_row(current_row) {
+                        if let Some((chapter_start, _chapter_end)) = self.chapter_bounds_for_index(index) {
+                            let current_start = current_row.saturating_sub(1);
+                            if current_start <= chapter_start {
+                                if index > 0 {
+                                    if let Some((prev_start, prev_end)) = self.chapter_bounds_for_index(index - 1) {
+                                        let last_start = prev_end
+                                            .saturating_sub(page.saturating_sub(1))
+                                            .max(prev_start);
+                                        state.reading_state.row = Self::row_from_start(last_start);
+                                        return;
+                                    }
+                                }
+                                state.reading_state.row = Self::row_from_start(chapter_start);
+                                return;
+                            }
+
+                            let new_start = current_start.saturating_sub(page);
+                            let clamped = if new_start < chapter_start {
+                                chapter_start
+                            } else {
+                                new_start
+                            };
+                            state.reading_state.row = Self::row_from_start(clamped);
+                            return;
+                        }
+                    }
+                }
                 state.reading_state.row = current_row.saturating_sub(page);
             }
             AppDirection::PageDown => {
-                let page = self.page_size();
+                if !seamless {
+                    if let Some(index) = self.content_index_for_row(current_row) {
+                        if let Some((chapter_start, chapter_end)) = self.chapter_bounds_for_index(index) {
+                            let current_start = current_row.saturating_sub(1);
+                            let last_start = chapter_end
+                                .saturating_sub(page.saturating_sub(1))
+                                .max(chapter_start);
+                            if current_start >= last_start {
+                                if let Some(next_start) = self.content_start_rows.get(index + 1).copied() {
+                                    state.reading_state.row = Self::row_from_start(
+                                        next_start.min(total_lines.saturating_sub(1)),
+                                    );
+                                    return;
+                                }
+                                state.reading_state.row = Self::row_from_start(last_start);
+                                return;
+                            }
+
+                            let new_start = current_start.saturating_add(page);
+                            let clamped = if new_start > last_start {
+                                last_start
+                            } else {
+                                new_start
+                            };
+                            state.reading_state.row = Self::row_from_start(clamped);
+                            return;
+                        }
+                    }
+                }
                 let next = current_row.saturating_add(page);
                 state.reading_state.row = next.min(total_lines.saturating_sub(1));
             }
@@ -1344,6 +1422,15 @@ impl Reader {
         }
     }
 
+    fn chapter_break_page_height(&self) -> Option<usize> {
+        let state = self.state.borrow();
+        if state.config.settings.seamless_between_chapters {
+            None
+        } else {
+            Some(self.page_size())
+        }
+    }
+
     fn visible_line_range(&self) -> (usize, usize) {
         let height = self.page_size();
         let start = self.state.borrow().reading_state.row.saturating_sub(1);
@@ -1367,6 +1454,24 @@ impl Reader {
             }
         }
         Some(index)
+    }
+
+    fn chapter_bounds_for_index(&self, index: usize) -> Option<(usize, usize)> {
+        let start = *self.content_start_rows.get(index)?;
+        let end = if index + 1 < self.content_start_rows.len() {
+            self.content_start_rows[index + 1].saturating_sub(1)
+        } else {
+            self.board.total_lines().saturating_sub(1)
+        };
+        Some((start, end))
+    }
+
+    fn row_from_start(start_line: usize) -> usize {
+        if start_line == 0 {
+            0
+        } else {
+            start_line + 1
+        }
     }
 
     fn chapter_rows(&self) -> Vec<usize> {
@@ -1667,6 +1772,7 @@ impl Reader {
         };
 
         let mut state = self.state.borrow_mut();
+        let mut rebuild_chapter_breaks = false;
         match item {
             SettingItem::ShowLineNumbers => {
                 state.config.settings.show_line_numbers = !state.config.settings.show_line_numbers;
@@ -1685,6 +1791,7 @@ impl Reader {
             }
             SettingItem::SeamlessBetweenChapters => {
                 state.config.settings.seamless_between_chapters = !state.config.settings.seamless_between_chapters;
+                rebuild_chapter_breaks = true;
             }
             SettingItem::Width => {
                 state.config.settings.width = if state.config.settings.width.is_some() {
@@ -1697,6 +1804,11 @@ impl Reader {
                 self.rebuild_text_structure(text_width)?;
                 return Ok(());
             }
+        }
+        if rebuild_chapter_breaks {
+            let text_width = state.config.settings.width.unwrap_or(80);
+            drop(state);
+            self.rebuild_text_structure(text_width)?;
         }
         Ok(())
     }
@@ -1726,11 +1838,12 @@ impl Reader {
     }
 
     fn rebuild_text_structure(&mut self, text_width: usize) -> eyre::Result<()> {
+        let page_height = self.chapter_break_page_height();
         let epub = match self.ebook.as_mut() {
             Some(epub) => epub,
             None => return Ok(()),
         };
-        let all_content = epub.get_all_parsed_content(text_width)?;
+        let all_content = epub.get_all_parsed_content(text_width, page_height)?;
         let mut combined_text_structure = TextStructure::default();
         let mut content_start_rows = Vec::with_capacity(all_content.len());
         let mut row_offset = 0;

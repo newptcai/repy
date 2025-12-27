@@ -104,7 +104,7 @@ fn test_epub_loading() -> Result<(), Box<dyn std::error::Error>> {
         println!("\n=== MULTIPLE CHAPTERS TEST ===");
         println!("Parsing first 3 chapters...");
 
-        let all_content = epub.get_all_parsed_content(80)?;
+        let all_content = epub.get_all_parsed_content(80, None)?;
         println!("Successfully parsed {} chapters", all_content.len());
 
         let mut total_lines = 0;

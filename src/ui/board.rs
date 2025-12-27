@@ -1,12 +1,12 @@
 use ratatui::{
-    layout::Rect,
+    layout::{Alignment, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Paragraph, Wrap},
     Frame,
 };
 
-use crate::models::{InlineStyle, LinkEntry, TextStructure};
+use crate::models::{InlineStyle, LinkEntry, TextStructure, CHAPTER_BREAK_MARKER};
 use crate::ui::reader::ApplicationState;
 
 /// Board widget for rendering book text content
@@ -52,6 +52,7 @@ impl Board {
         let _width = area.width as usize;
 
         let mut start_line = state.reading_state.row.saturating_sub(1);
+        let mut chapter_end = text_structure.text_lines.len().saturating_sub(1);
         if let Some(content_start_rows) = content_start_rows {
             if content_start_rows
                 .binary_search(&state.reading_state.row)
@@ -60,8 +61,32 @@ impl Board {
                 // Avoid showing the previous chapter's trailing line at chapter boundaries.
                 start_line = state.reading_state.row;
             }
+            if !state.config.settings.seamless_between_chapters && !content_start_rows.is_empty() {
+                let mut index = 0;
+                for (i, start) in content_start_rows.iter().enumerate() {
+                    if *start <= state.reading_state.row {
+                        index = i;
+                    } else {
+                        break;
+                    }
+                }
+                let chapter_start = content_start_rows[index];
+                chapter_end = if index + 1 < content_start_rows.len() {
+                    content_start_rows[index + 1].saturating_sub(1)
+                } else {
+                    text_structure.text_lines.len().saturating_sub(1)
+                };
+                if start_line < chapter_start {
+                    start_line = chapter_start;
+                }
+            }
         }
         let end_line = (start_line + height).min(text_structure.text_lines.len());
+        let end_line = if state.config.settings.seamless_between_chapters {
+            end_line
+        } else {
+            end_line.min(chapter_end.saturating_add(1))
+        };
 
         let selection_start = state.ui_state.selection_start;
         let formatting = &text_structure.formatting;
@@ -74,6 +99,10 @@ impl Board {
             .map(|(i, line)| {
                 let line_num = start_line + i;
                 let mut spans = Vec::new();
+
+                if line == CHAPTER_BREAK_MARKER {
+                    return Line::raw("***").alignment(Alignment::Center);
+                }
 
                 if state.config.settings.show_line_numbers {
                     spans.push(Span::styled(
