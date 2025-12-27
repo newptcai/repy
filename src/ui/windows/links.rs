@@ -2,7 +2,7 @@ use ratatui::{
     layout::Rect,
     style::{Color, Style},
     text::Line,
-    widgets::{Block, Borders, Clear, List, ListItem, Paragraph},
+    widgets::{Block, Borders, Clear, List, ListItem, Padding, Paragraph},
     Frame,
 };
 
@@ -20,11 +20,15 @@ impl LinksWindow {
         );
 
         frame.render_widget(Clear, popup_area);
+        let block = Block::default()
+            .title("Links")
+            .borders(Borders::ALL)
+            .padding(Padding::horizontal(1));
 
         if entries.is_empty() {
             let paragraph = Paragraph::new("No links on this page")
                 .style(Style::default().fg(Color::DarkGray))
-                .block(Block::default().title("Links").borders(Borders::ALL));
+                .block(block);
             frame.render_widget(paragraph, popup_area);
             return;
         }
@@ -47,15 +51,14 @@ impl LinksWindow {
             })
             .collect();
 
-        let list = List::new(items)
-            .block(Block::default().title("Links").borders(Borders::ALL));
+        let list = List::new(items).block(block);
 
         frame.render_widget(list, popup_area);
 
         let status_area = Rect::new(
-            popup_area.x + 1,
+            popup_area.x + 2,
             popup_area.y + popup_area.height - 2,
-            popup_area.width - 2,
+            popup_area.width - 4,
             1,
         );
         let status_line = Paragraph::new("Enter: follow  y: copy  q: close")

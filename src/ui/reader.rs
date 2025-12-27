@@ -1803,7 +1803,11 @@ impl Reader {
     }
 
     fn follow_link_entry(&mut self, link: LinkEntry) -> eyre::Result<()> {
-        if let Some(target_row) = self.resolve_internal_link_row(&link.url) {
+        let base_content = self
+            .content_index_for_row(link.row)
+            .and_then(|index| self.ebook.as_ref()?.resource_path_for_content_index(index));
+
+        if let Some(target_row) = self.resolve_internal_link_row(&link.url, base_content.as_deref()) {
             self.record_jump_position();
             let mut state = self.state.borrow_mut();
             state.reading_state.row = target_row;
@@ -1839,7 +1843,7 @@ impl Reader {
         Ok(())
     }
 
-    fn resolve_internal_link_row(&self, href: &str) -> Option<usize> {
+    fn resolve_internal_link_row(&self, href: &str, base_content: Option<&str>) -> Option<usize> {
         let trimmed = href.trim();
         if trimmed.is_empty() || Self::is_external_link(trimmed) {
             return None;
@@ -1877,9 +1881,48 @@ impl Reader {
                 }
                 return self.content_start_rows.get(content_index).copied();
             }
+
+            if let Some(resolved_path) = Self::resolve_relative_href(path, base_content) {
+                if let Some(content_index) = epub.content_index_for_href(&resolved_path) {
+                    if has_fragment {
+                        let current_index = self.state.borrow().reading_state.content_index;
+                        if content_index == current_index {
+                            return None;
+                        }
+                    }
+                    return self.content_start_rows.get(content_index).copied();
+                }
+            }
         }
 
         None
+    }
+
+    fn resolve_relative_href(href: &str, base_content: Option<&str>) -> Option<String> {
+        let href = href.trim();
+        if href.is_empty() {
+            return None;
+        }
+
+        if href.starts_with('/') {
+            return Some(href.trim_start_matches('/').to_string());
+        }
+
+        let base_content = base_content?;
+        let base_path = std::path::Path::new(base_content);
+        let base_dir = base_path.parent().unwrap_or_else(|| std::path::Path::new(""));
+        let joined = base_dir.join(href);
+        let mut normalized = std::path::PathBuf::new();
+        for component in joined.components() {
+            match component {
+                std::path::Component::ParentDir => {
+                    normalized.pop();
+                }
+                std::path::Component::CurDir => {}
+                _ => normalized.push(component.as_os_str()),
+            }
+        }
+        Some(normalized.to_string_lossy().to_string())
     }
 
     fn resolve_anchor_row(&self, fragment: &str) -> Option<usize> {
@@ -1940,5 +1983,34 @@ impl Reader {
             Ok(status) => Ok(status.success()),
             Err(err) => Err(err.into()),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Reader;
+
+    #[test]
+    fn resolve_relative_href_joins_base_dir() {
+        let resolved = Reader::resolve_relative_href(
+            "chapter007.xhtml",
+            Some("OEBPS/Text/chapter001.xhtml"),
+        );
+        assert_eq!(resolved, Some("OEBPS/Text/chapter007.xhtml".to_string()));
+    }
+
+    #[test]
+    fn resolve_relative_href_handles_parent_dirs() {
+        let resolved = Reader::resolve_relative_href(
+            "../Images/cover.jpg",
+            Some("OEBPS/Text/chapter001.xhtml"),
+        );
+        assert_eq!(resolved, Some("OEBPS/Images/cover.jpg".to_string()));
+    }
+
+    #[test]
+    fn resolve_relative_href_strips_leading_slash() {
+        let resolved = Reader::resolve_relative_href("/Text/chapter007.xhtml", None);
+        assert_eq!(resolved, Some("Text/chapter007.xhtml".to_string()));
     }
 }

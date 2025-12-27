@@ -49,6 +49,13 @@ impl Epub {
         doc.resource_uri_to_chapter(&resource_path)
     }
 
+    pub fn resource_path_for_content_index(&self, index: usize) -> Option<String> {
+        let doc = self.doc.as_ref()?;
+        let spine_item = doc.spine.get(index)?;
+        let resource = doc.resources.get(&spine_item.idref)?;
+        Some(resource.path.to_string_lossy().to_string())
+    }
+
     fn split_navpoint_target(content: &PathBuf) -> (PathBuf, Option<String>) {
         let content_str = content.to_string_lossy();
         if let Some((path, fragment)) = content_str.split_once('#') {
