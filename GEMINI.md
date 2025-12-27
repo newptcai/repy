@@ -8,6 +8,8 @@ Concise roadmap for the Rust port of `epy`.
 - SQLite-backed reading state, library/history, and bookmarks are implemented (`src/state.rs`).
 - In-TUI library/history window with selection and deletion is wired into the reader (`src/ui/reader.rs`, `src/ui/windows/library.rs`).
 - On quit, the current book position and progress are persisted; on startup with no arguments, the last-read book is reopened if available (`src/ui/reader.rs`, `src/main.rs`).
+- Jump history navigation (Ctrl+o / Ctrl+i) is implemented.
+- Footnote handling is robust (correct jumping and backlink filtering).
 - SQLite is fully managed from Rust with `rusqlite`’s `bundled` feature, so no system `libsqlite3` is required (`Cargo.toml`).
 - A user-facing `README.md` documents configuration, database paths, and basic usage.
 
@@ -16,8 +18,8 @@ What is *not* done yet (high level):
 - Layout parity polish (header/footer chrome, margins, image placeholders, line numbers toggle, help window parity).
 - Advanced search features (multi-chapter regex, search history, fuzzy search, incremental search).
 - Text-to-speech trait system and engines.
-- External tool integration (dictionary, image viewer, export, sync).
-- Utilities module parity with `epy` (`src/utils.rs`), performance work, and packaging/CI.
+- External tool integration (dictionary, image viewer, export).
+- Performance work and packaging/CI.
 
 The detailed roadmap below remains the source of truth for planned work.
 
@@ -46,6 +48,7 @@ The detailed roadmap below remains the source of truth for planned work.
     *   [ ] Line numbers toggle
     *   [ ] Help window parity
     *   [x] Inline bold/italic rendering (strip markdown markers)
+    *   [x] Navigation History (Ctrl+o / Ctrl+i)
 
 10. **Text-to-Speech Integration (`src/tts/`):**
     *   [ ] Create TTS trait system for multiple engine support
@@ -65,9 +68,8 @@ The detailed roadmap below remains the source of truth for planned work.
 12. **External Tool Integration (`src/tools/`):**
     *   [ ] **Dictionary Integration**: Multiple dictionary engines (sdcv, dict, etc.)
     *   [ ] **Image Viewer Integration**: Cross-platform image display
-    *   [x] **URL Handling**: Internal anchor jumps and external link opening
+    *   [x] **URL Handling**: Internal anchor jumps, footnotes, and external link opening
     *   [ ] **Export Functionality**: Text and highlighted content export
-    *   [ ] **Sync Integration**: Cloud storage for reading progress
 
 13. **Utilities (`src/utils.rs`):**
     *   [ ] Port the helper functions from `epy/src/epy_reader/utils.py` and `epy/src/epy_reader/lib.py` to a `utils` module.
@@ -81,12 +83,10 @@ The detailed roadmap below remains the source of truth for planned work.
     *   [ ] Implement async book loading and caching
     *   [ ] Optimize large book handling with lazy loading
     *   [ ] Add memory management for massive texts
-    *   [ ] Implement progressive loading for network books
     *   [ ] Performance profiling and benchmarking
 
 15. **Advanced Features:**
     *   [ ] **Multiple Format Support**: MOBI, AZW, FB2 parsers using trait system
-    *   [ ] **Plugin System**: Extensible architecture for custom parsers and tools
     *   [ ] **Reading Statistics**: Track reading speed, habits, and progress
     *   [ ] **Annotation System**: Marginal notes and highlighting
     *   [ ] **Custom Themes**: User-defined color schemes and layouts
@@ -101,12 +101,12 @@ The detailed roadmap below remains the source of truth for planned work.
 ### Phase 5: Integration & Deployment (PENDING ⏳)
 
 17. **Integration (`src/main.rs`):**
-    *   [ ] Tie all the modules together in the `main` function.
-    *   [ ] Initialize the configuration and state.
-    *   [ ] Parse command-line arguments.
-    *   [ ] Set up the terminal for `ratatui`.
-    *   [ ] Create and run the main `Reader` application.
-    *   [ ] Ensure graceful shutdown and terminal restoration.
+    *   [x] Tie all the modules together in the `main` function.
+    *   [x] Initialize the configuration and state.
+    *   [x] Parse command-line arguments.
+    *   [x] Set up the terminal for `ratatui`.
+    *   [x] Create and run the main `Reader` application.
+    *   [x] Ensure graceful shutdown and terminal restoration.
 
 18. **Distribution & Documentation:**
     *   [ ] Create build scripts and CI/CD pipeline
