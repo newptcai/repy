@@ -100,7 +100,25 @@ impl Ebook for Epub {
 
     fn initialize(&mut self) -> Result<()> {
         let doc = EpubDoc::new(&self.path)?;
-        self.contents = doc.spine.iter().map(|item| item.idref.clone()).collect();
+        
+        self.contents = doc.spine.iter()
+            .filter(|item| {
+                if let Some(resource) = doc.resources.get(&item.idref) {
+                    // Filter out NCX (EPUB 2 TOC)
+                    if resource.mime == "application/x-dtbncx+xml" {
+                        return false;
+                    }
+                    // Filter out Nav Document (EPUB 3 TOC)
+                    if let Some(properties) = &resource.properties {
+                        if properties.split_whitespace().any(|p| p == "nav") {
+                            return false;
+                        }
+                    }
+                }
+                true
+            })
+            .map(|item| item.idref.clone())
+            .collect();
 
         let mut toc_entries = Vec::new();
         Self::append_navpoints(&mut toc_entries, &doc.toc, &doc);
@@ -201,6 +219,20 @@ impl Ebook for Epub {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_epub_toc_filtered() -> Result<()> {
+        let mut epub = Epub::new("tests/fixtures/small.epub");
+        epub.initialize()?;
+
+        // The spine has 'htmltoc', but our contents should not
+        let contents = epub.contents();
+        
+        // We know 'htmltoc' is the ID of the TOC in small.epub
+        assert!(!contents.contains(&"htmltoc".to_string()));
+        
+        Ok(())
+    }
 
     #[test]
     fn test_epub_new() {
