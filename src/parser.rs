@@ -110,22 +110,69 @@ fn extract_sections(
             // Estimate the line number where this section starts.
             // This is approximate since html2text changes the structure.
             let element_text = element.text().collect::<String>();
-            let normalized = element_text.split_whitespace().collect::<Vec<_>>().join(" ");
-            let prefix_len = normalized.chars().count().min(32);
-            let prefix: String = normalized.chars().take(prefix_len).collect();
+            let words: Vec<&str> = element_text.split_whitespace().collect();
 
-            // Find the closest line in our output that contains this element's text.
-            for (line_num, line) in text_lines.iter().enumerate() {
-                if !normalized.is_empty()
-                    && (line.contains(&normalized)
-                        || (!prefix.is_empty() && line.contains(&prefix)))
-                {
-                    sections.insert(id.to_string(), starting_line + line_num);
-                    break;
+            // Strategy 1: Match the first few words (exact sequence)
+            let mut found = false;
+            if !words.is_empty() {
+                // Try chunks of words to avoid issues with wrapping or partial matches
+                // We try a longer prefix first, then shorter ones.
+                // We also try skipping the first word to handle cases where decoration ([1]) matches differently than plain text (1).
+                let attempts = [
+                    (0, 32), // Start at 0, take up to 32 words
+                    (0, 10), // Start at 0, take up to 10
+                    (0, 5),  // Start at 0, take up to 5
+                    (1, 32), // Skip 1, take up to 32 (handles "[1] Text" vs "1. Text")
+                    (1, 10),
+                    (1, 5),
+                ];
+
+                for (skip, take) in attempts {
+                    if skip >= words.len() {
+                        continue;
+                    }
+                    let end = (skip + take).min(words.len());
+                    if end <= skip {
+                        continue;
+                    }
+                    
+                    let search_str = words[skip..end].join(" ");
+                    if search_str.len() < 3 {
+                         // Too short to be unique
+                        continue;
+                    }
+
+                    for (line_num, line) in text_lines.iter().enumerate() {
+                        if line.contains(&search_str) {
+                            sections.insert(id.to_string(), starting_line + line_num);
+                            found = true;
+                            break;
+                        }
+                    }
+                    if found {
+                        break;
+                    }
                 }
             }
 
-            // If we didn't find an exact match, use the current line count as a fallback.
+            // Fallback: If word matching failed, try the old normalization method
+            if !found {
+                let normalized = words.join(" ");
+                let prefix_len = normalized.chars().count().min(32);
+                let prefix: String = normalized.chars().take(prefix_len).collect();
+
+                for (line_num, line) in text_lines.iter().enumerate() {
+                    if !normalized.is_empty()
+                        && (line.contains(&normalized)
+                            || (!prefix.is_empty() && line.contains(&prefix)))
+                    {
+                        sections.insert(id.to_string(), starting_line + line_num);
+                        break;
+                    }
+                }
+            }
+
+            // Final Fallback: Use the end of the current block
             if !sections.contains_key(id) {
                 sections.insert(id.to_string(), starting_line + text_lines.len());
             }
@@ -218,6 +265,36 @@ fn extract_links(html: &str, starting_line: usize, text_lines: &[String]) -> Res
             Some(value) if !value.trim().is_empty() => value.trim(),
             _ => continue,
         };
+
+        // Filter out backlinks inside footnotes
+        // Check if any ancestor has epub:type="footnote"
+        // explicitly allow epub:type="noteref" (links TO footnotes)
+        let is_noteref = element.value().attr("epub:type") == Some("noteref");
+        if !is_noteref {
+            let mut parent = element.parent();
+            let mut inside_footnote = false;
+            while let Some(node) = parent {
+                if let Some(element_ref) = scraper::ElementRef::wrap(node) {
+                     if element_ref.value().attr("epub:type") == Some("footnote") {
+                         inside_footnote = true;
+                         break;
+                     }
+                }
+                parent = node.parent();
+            }
+            
+            if inside_footnote {
+                 // heuristic: if it's an internal link, likely a backlink.
+                 // To be safer, we check if label is short (likely a number or symbol).
+                 // We keep external links and longer internal links (e.g. "See Chapter 1").
+                 if href.starts_with('#') {
+                     let text = element.text().collect::<String>().trim().to_string();
+                     if text.len() <= 4 {
+                         continue;
+                     }
+                 }
+            }
+        }
 
         let is_sup = element.select(&sup_selector).next().is_some();
         let (label, search_text) = if is_sup {
