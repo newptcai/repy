@@ -30,7 +30,6 @@ pub enum WindowType {
     Library,
     Search,
     Links,
-    Footnotes,
     Metadata,
     Settings,
     Visual,

@@ -1,7 +1,7 @@
 use crate::models::{InlineStyle, LinkEntry, TextStructure};
 use eyre::Result;
-use html2text::from_read;
-use regex::Regex;
+use html2text::config;
+use regex::{Captures, Regex};
 use scraper::{Html, Selector};
 use std::collections::{HashMap, HashSet};
 
@@ -18,6 +18,7 @@ pub fn parse_html(
 
     // Convert HTML to plain text first
     let mut plain_text = html_to_plain_text(&html_src, text_width)?;
+    replace_superscript_link_markers(&mut plain_text);
 
     // Extract structure information
     let image_maps = extract_images(&html_src, starting_line)?;
@@ -48,9 +49,26 @@ fn preprocess_inline_annotations(html: &str) -> String {
     sub_close.replace_all(&processed, "}").to_string()
 }
 
+fn replace_superscript_link_markers(lines: &mut [String]) {
+    let re = Regex::new(r"\[\^\{[^}]+\}\]").unwrap();
+    let mut counter = 0usize;
+    for line in lines.iter_mut() {
+        if !line.contains("[^{") {
+            continue;
+        }
+        let replaced = re.replace_all(line, |_caps: &Captures| {
+            counter += 1;
+            format!("^{{{}}}", counter)
+        });
+        *line = replaced.to_string();
+    }
+}
+
 /// Convert HTML to plain text using html2text library
 fn html_to_plain_text(html: &str, width: usize) -> Result<Vec<String>> {
-    let text = from_read(html.as_bytes(), width)?;
+    let text = config::plain()
+        .link_footnotes(false)
+        .string_from_read(html.as_bytes(), width)?;
     let lines: Vec<String> = text.lines().map(|s| s.to_string()).collect();
     Ok(lines)
 }
@@ -92,10 +110,16 @@ fn extract_sections(
             // Estimate the line number where this section starts.
             // This is approximate since html2text changes the structure.
             let element_text = element.text().collect::<String>();
+            let normalized = element_text.split_whitespace().collect::<Vec<_>>().join(" ");
+            let prefix_len = normalized.chars().count().min(32);
+            let prefix: String = normalized.chars().take(prefix_len).collect();
 
             // Find the closest line in our output that contains this element's text.
             for (line_num, line) in text_lines.iter().enumerate() {
-                if line.contains(&element_text) || element_text.contains(line) {
+                if !normalized.is_empty()
+                    && (line.contains(&normalized)
+                        || (!prefix.is_empty() && line.contains(&prefix)))
+                {
                     sections.insert(id.to_string(), starting_line + line_num);
                     break;
                 }
@@ -186,6 +210,8 @@ fn extract_links(html: &str, starting_line: usize, text_lines: &[String]) -> Res
     let mut links = Vec::new();
     let fragment = Html::parse_fragment(html);
     let link_selector = Selector::parse("a[href]").unwrap();
+    let sup_selector = Selector::parse("sup").unwrap();
+    let mut sup_counter = 0usize;
 
     for element in fragment.select(&link_selector) {
         let href = match element.value().attr("href") {
@@ -193,14 +219,26 @@ fn extract_links(html: &str, starting_line: usize, text_lines: &[String]) -> Res
             _ => continue,
         };
 
-        let raw_label = element.text().collect::<String>();
-        let label = raw_label.split_whitespace().collect::<Vec<_>>().join(" ");
-        let search_text = if label.is_empty() { href } else { label.as_str() };
+        let is_sup = element.select(&sup_selector).next().is_some();
+        let (label, search_text) = if is_sup {
+            sup_counter += 1;
+            let label = format!("^{{{}}}", sup_counter);
+            (label.clone(), label)
+        } else {
+            let raw_label = element.text().collect::<String>();
+            let label = raw_label.split_whitespace().collect::<Vec<_>>().join(" ");
+            let search_text = if label.is_empty() {
+                href.to_string()
+            } else {
+                label.clone()
+            };
+            (label, search_text)
+        };
 
         let mut row = None;
         if !search_text.is_empty() {
             for (line_num, line) in text_lines.iter().enumerate() {
-                if line.contains(search_text) {
+                if line.contains(&search_text) {
                     row = Some(starting_line + line_num);
                     break;
                 }
@@ -542,6 +580,13 @@ mod tests {
         let processed = preprocess_inline_annotations(html);
         assert!(processed.contains("^{2}"));
         assert!(processed.contains("_{3}"));
+    }
+
+    #[test]
+    fn test_replace_superscript_link_markers() {
+        let mut lines = vec!["See [^{2}] and [^{7}]".to_string()];
+        replace_superscript_link_markers(&mut lines);
+        assert_eq!(lines[0], "See ^{1} and ^{2}");
     }
 
     #[test]
