@@ -1,6 +1,7 @@
 use crate::models::{InlineStyle, LinkEntry, TextStructure};
 use eyre::Result;
 use html2text::from_read;
+use regex::Regex;
 use scraper::{Html, Selector};
 use std::collections::{HashMap, HashSet};
 
@@ -13,15 +14,16 @@ pub fn parse_html(
     starting_line: usize,
 ) -> Result<TextStructure> {
     let text_width = text_width.unwrap_or(80);
+    let html_src = preprocess_inline_annotations(html_src);
 
     // Convert HTML to plain text first
-    let mut plain_text = html_to_plain_text(html_src, text_width)?;
+    let mut plain_text = html_to_plain_text(&html_src, text_width)?;
 
     // Extract structure information
-    let image_maps = extract_images(html_src, starting_line)?;
-    let section_rows = extract_sections(html_src, &section_ids.unwrap_or_default(), starting_line, &plain_text)?;
-    let mut formatting = extract_formatting(html_src, starting_line, &plain_text)?;
-    let links = extract_links(html_src, starting_line, &plain_text)?;
+    let image_maps = extract_images(&html_src, starting_line)?;
+    let section_rows = extract_sections(&html_src, &section_ids.unwrap_or_default(), starting_line, &plain_text)?;
+    let mut formatting = extract_formatting(&html_src, starting_line, &plain_text)?;
+    let links = extract_links(&html_src, starting_line, &plain_text)?;
 
     strip_inline_markers(&mut plain_text, &mut formatting, starting_line);
 
@@ -32,6 +34,18 @@ pub fn parse_html(
         formatting,
         links,
     })
+}
+
+fn preprocess_inline_annotations(html: &str) -> String {
+    let sup_open = Regex::new(r"(?i)<sup[^>]*>").unwrap();
+    let sup_close = Regex::new(r"(?i)</sup>").unwrap();
+    let sub_open = Regex::new(r"(?i)<sub[^>]*>").unwrap();
+    let sub_close = Regex::new(r"(?i)</sub>").unwrap();
+
+    let mut processed = sup_open.replace_all(html, "^{").to_string();
+    processed = sup_close.replace_all(&processed, "}").to_string();
+    processed = sub_open.replace_all(&processed, "_{").to_string();
+    sub_close.replace_all(&processed, "}").to_string()
 }
 
 /// Convert HTML to plain text using html2text library
@@ -520,6 +534,14 @@ mod tests {
         let text_lines = vec!["Plain text content.".to_string()];
         let formatting = extract_formatting(html, 0, &text_lines).unwrap();
         assert_eq!(formatting.len(), 0);
+    }
+
+    #[test]
+    fn test_preprocess_inline_annotations() {
+        let html = "<p>Note<sup>2</sup> and <sub>3</sub></p>";
+        let processed = preprocess_inline_annotations(html);
+        assert!(processed.contains("^{2}"));
+        assert!(processed.contains("_{3}"));
     }
 
     #[test]

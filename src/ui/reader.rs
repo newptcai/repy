@@ -25,8 +25,9 @@ use crate::models::{
 use crate::state::State;
 use crate::ui::board::Board;
 use crate::ui::windows::{
-    bookmarks::BookmarksWindow, help::HelpWindow, library::LibraryWindow, links::LinksWindow,
-    metadata::MetadataWindow, search::SearchWindow, settings::SettingsWindow, toc::TocWindow,
+    bookmarks::BookmarksWindow, footnotes::FootnotesWindow, help::HelpWindow,
+    library::LibraryWindow, links::LinksWindow, metadata::MetadataWindow, search::SearchWindow,
+    settings::SettingsWindow, toc::TocWindow,
 };
 
 /// Application state that encompasses all UI and reading state
@@ -63,6 +64,7 @@ pub struct UiState {
     pub show_library: bool,
     pub show_search: bool,
     pub show_links: bool,
+    pub show_footnotes: bool,
     pub show_metadata: bool,
     pub show_settings: bool,
     pub search_query: String,
@@ -75,6 +77,8 @@ pub struct UiState {
     pub bookmarks_selected_index: usize,
     pub links: Vec<LinkEntry>,
     pub links_selected_index: usize,
+    pub footnotes: Vec<LinkEntry>,
+    pub footnotes_selected_index: usize,
     pub library_items: Vec<LibraryItem>,
     pub library_selected_index: usize,
     pub metadata: Option<BookMetadata>,
@@ -94,6 +98,7 @@ impl UiState {
             show_library: false,
             show_search: false,
             show_links: false,
+            show_footnotes: false,
             show_metadata: false,
             show_settings: false,
             search_query: String::new(),
@@ -106,6 +111,8 @@ impl UiState {
             bookmarks_selected_index: 0,
             links: Vec::new(),
             links_selected_index: 0,
+            footnotes: Vec::new(),
+            footnotes_selected_index: 0,
             library_items: Vec::new(),
             library_selected_index: 0,
             metadata: None,
@@ -135,6 +142,7 @@ impl UiState {
                 self.show_library = false;
                 self.show_search = false;
                 self.show_links = false;
+                self.show_footnotes = false;
                 self.show_metadata = false;
                 self.show_settings = false;
                 self.selection_start = None;
@@ -145,6 +153,7 @@ impl UiState {
             WindowType::Library => self.show_library = true,
             WindowType::Search => self.show_search = true,
             WindowType::Links => self.show_links = true,
+            WindowType::Footnotes => self.show_footnotes = true,
             WindowType::Metadata => self.show_metadata = true,
             WindowType::Settings => self.show_settings = true,
             WindowType::Visual => {
@@ -403,6 +412,7 @@ impl Reader {
             WindowType::Library => self.handle_library_mode_keys(key, repeat_count)?,
             WindowType::Settings => self.handle_settings_mode_keys(key, repeat_count)?,
             WindowType::Links => self.handle_links_mode_keys(key, repeat_count)?,
+            WindowType::Footnotes => self.handle_footnotes_mode_keys(key, repeat_count)?,
             WindowType::Help | WindowType::Metadata => self.handle_modal_close_keys(key)?,
             _ => self.handle_normal_mode_keys(key, repeat_count)?,
         }
@@ -531,6 +541,9 @@ impl Reader {
             }
             KeyCode::Char('u') => {
                 self.open_links_window()?;
+            }
+            KeyCode::Char('F') => {
+                self.open_footnotes_window()?;
             }
             KeyCode::Char('i') => {
                 self.open_metadata_window()?;
@@ -736,6 +749,32 @@ impl Reader {
         Ok(())
     }
 
+    fn handle_footnotes_mode_keys(&mut self, key: KeyEvent, repeat_count: u32) -> eyre::Result<()> {
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('q') => {
+                let mut state = self.state.borrow_mut();
+                state.ui_state.open_window(WindowType::Reader);
+            }
+            KeyCode::Char('j') | KeyCode::Down => {
+                let mut state = self.state.borrow_mut();
+                if !state.ui_state.footnotes.is_empty() {
+                    let next = state.ui_state.footnotes_selected_index.saturating_add(repeat_count as usize);
+                    state.ui_state.footnotes_selected_index = next.min(state.ui_state.footnotes.len() - 1);
+                }
+            }
+            KeyCode::Char('k') | KeyCode::Up => {
+                let mut state = self.state.borrow_mut();
+                let current = state.ui_state.footnotes_selected_index;
+                state.ui_state.footnotes_selected_index = current.saturating_sub(repeat_count as usize);
+            }
+            KeyCode::Enter => {
+                self.follow_selected_footnote()?;
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
     fn handle_library_mode_keys(&mut self, key: KeyEvent, repeat_count: u32) -> eyre::Result<()> {
         match key.code {
             KeyCode::Esc | KeyCode::Char('q') => {
@@ -878,6 +917,13 @@ impl Reader {
                 &state.ui_state.links,
                 state.ui_state.links_selected_index,
             );
+        } else if state.ui_state.show_footnotes {
+            FootnotesWindow::render(
+                frame,
+                frame.area(),
+                &state.ui_state.footnotes,
+                state.ui_state.footnotes_selected_index,
+            );
         } else if state.ui_state.show_metadata {
             MetadataWindow::render(frame, frame.area(), state.ui_state.metadata.as_ref());
         } else if state.ui_state.show_settings {
@@ -1009,16 +1055,35 @@ impl Reader {
         let visible_start = state.reading_state.row.saturating_sub(1);
         let visible_end = visible_start.saturating_add(content_area.height as usize);
         let link_count = board.link_count_in_range(visible_start, visible_end);
+        let footnote_count = board
+            .links_in_range(visible_start, visible_end)
+            .into_iter()
+            .filter(Self::is_footnote_link)
+            .count();
         let link_hint = if link_count > 0 {
             Some(format!("links:{} (u)", link_count))
         } else {
             None
         };
-        let right_text = match (link_hint, percent_text) {
-            (Some(link_hint), Some(percent_text)) => Some(format!("{} {}", link_hint, percent_text)),
-            (Some(link_hint), None) => Some(link_hint),
-            (None, Some(percent_text)) => Some(percent_text),
-            (None, None) => None,
+        let footnote_hint = if footnote_count > 0 {
+            Some(format!("notes:{} (F)", footnote_count))
+        } else {
+            None
+        };
+        let mut right_parts = Vec::new();
+        if let Some(footnote_hint) = footnote_hint {
+            right_parts.push(footnote_hint);
+        }
+        if let Some(link_hint) = link_hint {
+            right_parts.push(link_hint);
+        }
+        if let Some(percent_text) = percent_text {
+            right_parts.push(percent_text);
+        }
+        let right_text = if right_parts.is_empty() {
+            None
+        } else {
+            Some(right_parts.join(" "))
         };
         let header_line = Self::build_header_line(title, right_text.as_deref(), chunks[0].width);
         let header = Paragraph::new(Line::from(header_line));
@@ -1127,6 +1192,22 @@ impl Reader {
         state.ui_state.links = links;
         state.ui_state.links_selected_index = 0;
         state.ui_state.open_window(WindowType::Links);
+        Ok(())
+    }
+
+    fn open_footnotes_window(&mut self) -> eyre::Result<()> {
+        let (start, end) = self.visible_line_range();
+        let footnotes = self.footnotes_in_range(start, end);
+        let mut state = self.state.borrow_mut();
+        if footnotes.is_empty() {
+            state
+                .ui_state
+                .set_message("No footnotes on this page".to_string(), MessageType::Info);
+            return Ok(());
+        }
+        state.ui_state.footnotes = footnotes;
+        state.ui_state.footnotes_selected_index = 0;
+        state.ui_state.open_window(WindowType::Footnotes);
         Ok(())
     }
 
@@ -1260,6 +1341,14 @@ impl Reader {
             .saturating_add(height)
             .min(self.board.total_lines());
         (start, end)
+    }
+
+    fn footnotes_in_range(&self, start: usize, end: usize) -> Vec<LinkEntry> {
+        let links = self.board.links_in_range(start, end);
+        links
+            .into_iter()
+            .filter(Self::is_footnote_link)
+            .collect()
     }
 
     fn content_index_for_row(&self, row: usize) -> Option<usize> {
@@ -1703,6 +1792,27 @@ impl Reader {
             return Ok(());
         };
 
+        self.follow_link_entry(link)
+    }
+
+    fn follow_selected_footnote(&mut self) -> eyre::Result<()> {
+        let link = {
+            let state = self.state.borrow();
+            state
+                .ui_state
+                .footnotes
+                .get(state.ui_state.footnotes_selected_index)
+                .cloned()
+        };
+
+        let Some(link) = link else {
+            return Ok(());
+        };
+
+        self.follow_link_entry(link)
+    }
+
+    fn follow_link_entry(&mut self, link: LinkEntry) -> eyre::Result<()> {
         if let Some(target_row) = self.resolve_internal_link_row(&link.url) {
             let mut state = self.state.borrow_mut();
             state.reading_state.row = target_row;
@@ -1736,6 +1846,31 @@ impl Reader {
         ui_state.set_message("Link copied to clipboard".to_string(), MessageType::Info);
         ui_state.open_window(WindowType::Reader);
         Ok(())
+    }
+
+    fn is_footnote_link(link: &LinkEntry) -> bool {
+        let href = link.url.trim();
+        let fragment = if href.starts_with('#') {
+            href.trim_start_matches('#')
+        } else if let Some((_, fragment)) = href.split_once('#') {
+            fragment
+        } else {
+            ""
+        };
+
+        if !fragment.is_empty() {
+            let id = fragment.to_ascii_lowercase();
+            if id.starts_with("footnote")
+                || id.starts_with("endnote")
+                || id.starts_with("note")
+                || id.starts_with("fn")
+            {
+                return true;
+            }
+        }
+
+        let label_digits: String = link.label.chars().filter(|c| c.is_ascii_digit()).collect();
+        !label_digits.is_empty()
     }
 
     fn resolve_internal_link_row(&self, href: &str) -> Option<usize> {
