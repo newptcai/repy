@@ -306,8 +306,20 @@ impl Reader {
     pub fn load_ebook(&mut self, path: &str) -> eyre::Result<()> {
         let mut epub = Epub::new(path);
         epub.initialize()?;
-    
-        let text_width = self.state.borrow().config.settings.width.unwrap_or(80);
+
+        // Load last reading state early to get preferred width
+        let db_state = self.db_state.get_last_reading_state(&epub).ok();
+
+        let text_width = if let Some(ref s) = db_state {
+            if s.textwidth > 0 {
+                s.textwidth
+            } else {
+                self.state.borrow().config.settings.width.unwrap_or(80)
+            }
+        } else {
+            self.state.borrow().config.settings.width.unwrap_or(80)
+        };
+
         let page_height = self.chapter_break_page_height();
         let all_content = epub.get_all_parsed_content(text_width, page_height)?;
 
@@ -332,12 +344,13 @@ impl Reader {
             let mut state = self.state.borrow_mut();
 
             // Load last reading state from the database (or default if none)
-            if let Ok(db_state) = self.db_state.get_last_reading_state(epub) {
-                state.reading_state = db_state;
+            if let Some(s) = db_state {
+                state.reading_state = s;
             }
 
-            // Ensure text width matches current config and clamp row
+            // Ensure text width matches what we used
             state.reading_state.textwidth = text_width;
+            
             let total_lines = self.board.total_lines();
             if total_lines > 0 && state.reading_state.row >= total_lines {
                 state.reading_state.row = total_lines - 1;
@@ -399,7 +412,7 @@ impl Reader {
                             if state.config.settings.seamless_between_chapters {
                                 None
                             } else {
-                                Some(state.config.settings.width.unwrap_or(80))
+                                Some(state.reading_state.textwidth)
                             }
                         };
                         if let Some(text_width) = text_width {
@@ -646,6 +659,19 @@ impl Reader {
                 let mut state = self.state.borrow_mut();
                 state.ui_state.settings_selected_index = 0;
                 state.ui_state.open_window(WindowType::Settings);
+            }
+            KeyCode::Char('+') => {
+                self.change_width(5)?;
+            }
+            KeyCode::Char('=') => {
+                if key.modifiers.contains(KeyModifiers::SHIFT) {
+                    self.change_width(5)?;
+                } else {
+                    self.reset_width()?;
+                }
+            }
+            KeyCode::Char('-') => {
+                self.change_width(-5)?;
             }
 
             _ => {}
@@ -2034,6 +2060,22 @@ impl Reader {
             self.rebuild_text_structure(text_width)?;
         }
         Ok(())
+    }
+
+    fn change_width(&mut self, delta: i32) -> eyre::Result<()> {
+        let current_width = self.state.borrow().reading_state.textwidth as i32;
+        let term_width = match crossterm::terminal::size() {
+            Ok((w, _)) => w as i32,
+            Err(_) => 100,
+        };
+        
+        let new_width = (current_width + delta).max(20).min(term_width - 2);
+        self.rebuild_text_structure(new_width as usize)
+    }
+
+    fn reset_width(&mut self) -> eyre::Result<()> {
+        let default_width = self.state.borrow().config.settings.width.unwrap_or(80);
+        self.rebuild_text_structure(default_width)
     }
 
     fn adjust_width(&mut self, delta: i32) -> eyre::Result<()> {
