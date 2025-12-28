@@ -126,7 +126,7 @@ impl State {
             Ok(reading_state) => Ok(reading_state),
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(ReadingState {
                 content_index: 0,
-                padding: 0,
+                padding: 5,
                 row: 0,
                 rel_pctg: None,
                 section: None,
@@ -386,10 +386,9 @@ mod tests {
         let ebook1 = MockEbook::new("/path/to/book1.epub", "Book One", "Author One");
         let ebook2 = MockEbook::new("/path/to/book2.epub", "Book Two", "Author Two");
 
-        // Add books to library (must create reading states first due to foreign key constraint)
         let default_state = ReadingState {
             content_index: 0,
-            padding: 0,
+            padding: 5,
             row: 0,
             rel_pctg: None,
             section: None,
@@ -438,7 +437,7 @@ mod tests {
 
         let reading_state = state.get_last_reading_state(&ebook).unwrap();
         assert_eq!(reading_state.content_index, 0);
-        assert_eq!(reading_state.padding, 0);
+        assert_eq!(reading_state.padding, 5);
         assert_eq!(reading_state.row, 0);
         assert_eq!(reading_state.rel_pctg, None);
 

@@ -72,13 +72,25 @@ pub struct LibraryItem {
     pub reading_progress: Option<f32>,
 }
 
-#[derive(Debug, Clone, PartialEq, Default)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ReadingState {
     pub content_index: usize,
     pub padding: usize,
     pub row: usize,
     pub rel_pctg: Option<f32>,
     pub section: Option<String>,
+}
+
+impl Default for ReadingState {
+    fn default() -> Self {
+        Self {
+            content_index: 0,
+            padding: 5,
+            row: 0,
+            rel_pctg: None,
+            section: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -235,7 +247,7 @@ mod tests {
     fn test_reading_state_default() {
         let state = ReadingState::default();
         assert_eq!(state.content_index, 0);
-        assert_eq!(state.padding, 0);
+        assert_eq!(state.padding, 5);
         assert_eq!(state.row, 0);
         assert_eq!(state.rel_pctg, None);
         assert_eq!(state.section, None);

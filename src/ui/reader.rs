@@ -320,7 +320,7 @@ impl Reader {
              s.padding
         } else {
              let preferred_width = self.state.borrow().config.settings.width.unwrap_or(80);
-             term_width.saturating_sub(preferred_width) / 2
+             (term_width.saturating_sub(preferred_width) / 2).max(5)
         };
 
         let text_width = term_width.saturating_sub(padding * 2).max(20).min(term_width);
