@@ -63,11 +63,12 @@ position. Otherwise, it starts in the reader UI without a book loaded.
 ### Other options
 
 ```sh
-repy -r          # Print reading history
 repy -c FILE     # Use a specific configuration file
-repy --dump      # Dump the content of the ebook to stdout
-repy -v          # Increase verbosity
+repy -v          # Increase verbosity (for debugging)
+repy --debug     # Enable debug output
 ```
+
+Note: `-r` (history) and `--dump` options are defined but not yet implemented.
 
 ## Keybindings
 
