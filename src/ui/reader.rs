@@ -1510,7 +1510,8 @@ impl Reader {
     }
 
     /// Find the actual last content line of a chapter by searching backwards
-    /// from the next chapter start, skipping chapter break padding.
+    /// from the next chapter start, stopping at the chapter break marker.
+    /// Includes empty padding lines to match the page-down behavior.
     fn find_chapter_end(&self, chapter_start: usize, next_chapter_start: usize) -> usize {
         use crate::models::CHAPTER_BREAK_MARKER;
 
@@ -1524,8 +1525,12 @@ impl Reader {
 
         while row > chapter_start {
             if let Some(line) = self.board.get_line(row) {
-                // Skip empty lines and chapter break markers
-                if !line.is_empty() && line != CHAPTER_BREAK_MARKER {
+                // Stop at the chapter break marker, but include empty padding lines
+                if line == CHAPTER_BREAK_MARKER {
+                    return row.saturating_sub(1);
+                }
+                // If we hit actual content, this is the end
+                if !line.is_empty() {
                     return row;
                 }
             }
