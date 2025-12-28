@@ -10,8 +10,9 @@ Concise roadmap for the Rust port of `epy`.
 - On quit, the current book position and progress are persisted; on startup with no arguments, the last-read book is reopened if available (`src/ui/reader.rs`, `src/main.rs`).
 - Jump history navigation (Ctrl+o / Ctrl+i) is implemented.
 - Footnote handling is robust (correct jumping, backlink filtering, and contextual preview in the links window).
-- SQLite is fully managed from Rust with `rusqlite`’s `bundled` feature, so no system `libsqlite3` is required (`Cargo.toml`).
+- SQLite is fully managed from Rust with `rusqlite`'s `bundled` feature, so no system `libsqlite3` is required (`Cargo.toml`).
 - A user-facing `README.md` documents configuration, database paths, and basic usage.
+- **Performance optimization**: Padding/width adjustments now only re-parse the current chapter instead of the entire book, making +/- key presses nearly instant even for large books.
 
 What is *not* done yet (high level):
 
@@ -19,7 +20,7 @@ What is *not* done yet (high level):
 - Advanced search features (multi-chapter regex, search history, fuzzy search, incremental search).
 - Text-to-speech trait system and engines.
 - External tool integration (dictionary, export).
-- Performance work and packaging/CI.
+- Additional performance work and packaging/CI.
 
 The detailed roadmap below remains the source of truth for planned work.
 
@@ -82,6 +83,7 @@ The detailed roadmap below remains the source of truth for planned work.
 ### Phase 4: Performance & Polish (PENDING ⏳)
 
 14. **Performance Optimization:**
+    *   [x] Per-chapter text structure caching for fast padding/width adjustments (O(1) instead of O(n))
     *   [ ] Implement async book loading and caching
     *   [ ] Optimize large book handling with lazy loading
     *   [ ] Add memory management for massive texts
