@@ -1198,39 +1198,28 @@ impl Reader {
             .and_then(|meta| meta.title.as_deref())
             .unwrap_or("repy");
 
-        let (chunks, header_height) = if state.config.settings.show_top_bar {
-            let chunks = Layout::default()
-                .direction(ratatui::layout::Direction::Vertical)
-                .constraints([
-                    Constraint::Length(1), // Header
-                    Constraint::Min(0),    // Main content
-                ])
-                .split(frame_area);
-            (chunks, 1)
-        } else {
-            let chunks = Layout::default()
-                .direction(ratatui::layout::Direction::Vertical)
-                .constraints([
-                    Constraint::Min(0),    // Main content (no header)
-                ])
-                .split(frame_area);
-            (chunks, 0)
-        };
+        // Always reserve space for the header, but only render it when show_top_bar is true
+        let chunks = Layout::default()
+            .direction(ratatui::layout::Direction::Vertical)
+            .constraints([
+                Constraint::Length(1), // Header (always reserved)
+                Constraint::Min(0),    // Main content
+            ])
+            .split(frame_area);
 
         // Main content area with centered margins
         // Calculate desired width from padding
         let padding = state.reading_state.padding;
-        let content_chunk_index = if header_height > 0 { 1 } else { 0 };
-        let available_width = chunks[content_chunk_index].width as usize;
+        let available_width = chunks[1].width as usize;
         let desired_width = available_width.saturating_sub(padding * 2).max(20) as u16;
         
-        let content_width = desired_width.min(chunks[content_chunk_index].width);
-        let left_pad = (chunks[content_chunk_index].width.saturating_sub(content_width)) / 2;
+        let content_width = desired_width.min(chunks[1].width);
+        let left_pad = (chunks[1].width.saturating_sub(content_width)) / 2;
         let content_area = Rect {
-            x: chunks[content_chunk_index].x + left_pad,
-            y: chunks[content_chunk_index].y,
+            x: chunks[1].x + left_pad,
+            y: chunks[1].y,
             width: content_width,
-            height: chunks[content_chunk_index].height,
+            height: chunks[1].height,
         };
 
         // Link handling: keep main text untouched; show a subtle header hint only when the page has
