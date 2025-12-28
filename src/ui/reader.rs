@@ -307,18 +307,28 @@ impl Reader {
         let mut epub = Epub::new(path);
         epub.initialize()?;
 
-        // Load last reading state early to get preferred width
+        // Load last reading state early to get preferred padding
         let db_state = self.db_state.get_last_reading_state(&epub).ok();
-
-        let text_width = if let Some(ref s) = db_state {
-            if s.textwidth > 0 {
-                s.textwidth
-            } else {
-                self.state.borrow().config.settings.width.unwrap_or(80)
-            }
-        } else {
-            self.state.borrow().config.settings.width.unwrap_or(80)
+        
+        // Determine padding: use DB value if available, otherwise calculate from config width
+        let term_width = match crossterm::terminal::size() {
+            Ok((w, _)) => w as usize,
+            Err(_) => 100,
         };
+
+        let padding = if let Some(ref s) = db_state {
+             s.padding
+        } else {
+             let preferred_width = self.state.borrow().config.settings.width.unwrap_or(80);
+             term_width.saturating_sub(preferred_width) / 2
+        };
+
+        let text_width = term_width.saturating_sub(padding * 2).max(20).min(term_width);
+        
+        // Also update the state with the decided padding immediately so we are consistent
+        if let Some(mut s) = db_state.clone() {
+             s.padding = padding;
+        }
 
         let page_height = self.chapter_break_page_height();
         let all_content = epub.get_all_parsed_content(text_width, page_height)?;
@@ -348,8 +358,8 @@ impl Reader {
                 state.reading_state = s;
             }
 
-            // Ensure text width matches what we used
-            state.reading_state.textwidth = text_width;
+            // Ensure padding matches what we used
+            state.reading_state.padding = padding;
             
             let total_lines = self.board.total_lines();
             if total_lines > 0 && state.reading_state.row >= total_lines {
@@ -407,16 +417,16 @@ impl Reader {
                         }
                     }
                     Event::Resize(_, _) => {
-                        let text_width = {
+                        let padding = {
                             let state = self.state.borrow();
                             if state.config.settings.seamless_between_chapters {
                                 None
                             } else {
-                                Some(state.reading_state.textwidth)
+                                Some(state.reading_state.padding)
                             }
                         };
-                        if let Some(text_width) = text_width {
-                            self.rebuild_text_structure(text_width)?;
+                        if let Some(padding) = padding {
+                            self.rebuild_text_structure(padding)?;
                         }
                     }
                     _ => {}
@@ -1174,7 +1184,11 @@ impl Reader {
             .split(frame_area);
 
         // Main content area with centered margins
-        let desired_width = state.reading_state.textwidth as u16;
+        // Calculate desired width from padding
+        let padding = state.reading_state.padding;
+        let available_width = chunks[1].width as usize;
+        let desired_width = available_width.saturating_sub(padding * 2).max(20) as u16;
+        
         let content_width = desired_width.min(chunks[1].width);
         let left_pad = (chunks[1].width.saturating_sub(content_width)) / 2;
         let content_area = Rect {
@@ -2062,20 +2076,28 @@ impl Reader {
         Ok(())
     }
 
-    fn change_width(&mut self, delta: i32) -> eyre::Result<()> {
-        let current_width = self.state.borrow().reading_state.textwidth as i32;
-        let term_width = match crossterm::terminal::size() {
-            Ok((w, _)) => w as i32,
-            Err(_) => 100,
-        };
+    fn change_width(&mut self, delta_width: i32) -> eyre::Result<()> {
+        let current_padding = self.state.borrow().reading_state.padding as i32;
         
-        let new_width = (current_width + delta).max(20).min(term_width - 2);
-        self.rebuild_text_structure(new_width as usize)
+        // If we want to INCREASE width (delta > 0), we DECREASE padding.
+        // If we want to DECREASE width (delta < 0), we INCREASE padding.
+        // delta is in terms of total width change. Since padding is on both sides,
+        // changing padding by X changes width by 2*X.
+        // To change width by approx delta, we change padding by -(delta / 2).
+        let padding_change = -(delta_width / 2);
+        
+        let new_padding = (current_padding + padding_change).max(0);
+        self.rebuild_text_structure(new_padding as usize)
     }
 
     fn reset_width(&mut self) -> eyre::Result<()> {
-        let default_width = self.state.borrow().config.settings.width.unwrap_or(80);
-        self.rebuild_text_structure(default_width)
+        let preferred_width = self.state.borrow().config.settings.width.unwrap_or(80);
+        let term_width = match crossterm::terminal::size() {
+            Ok((w, _)) => w as usize,
+            Err(_) => 100,
+        };
+        let padding = term_width.saturating_sub(preferred_width) / 2;
+        self.rebuild_text_structure(padding)
     }
 
     fn adjust_width(&mut self, delta: i32) -> eyre::Result<()> {
@@ -2088,21 +2110,10 @@ impl Reader {
         if selected != Some(SettingItem::Width) {
             return Ok(());
         }
-
-        let current_width = {
-            let state = self.state.borrow();
-            state.config.settings.width.unwrap_or(80) as i32
-        };
-        let new_width = (current_width + delta).max(20) as usize;
-        {
-            let mut state = self.state.borrow_mut();
-            state.config.settings.width = Some(new_width);
-        }
-        self.rebuild_text_structure(new_width)?;
-        Ok(())
+        self.change_width(delta)
     }
 
-    fn rebuild_text_structure(&mut self, text_width: usize) -> eyre::Result<()> {
+    fn rebuild_text_structure(&mut self, padding: usize) -> eyre::Result<()> {
         // Capture current position semantically to restore it after rebuild
         let (current_chapter_idx, current_chapter_offset) = {
             let row = self.state.borrow().reading_state.row;
@@ -2117,6 +2128,14 @@ impl Reader {
                 (idx, row.saturating_sub(start))
             }
         };
+
+        let term_width = match crossterm::terminal::size() {
+            Ok((w, _)) => w as usize,
+            Err(_) => 100,
+        };
+
+        // Calculate text width from padding
+        let text_width = term_width.saturating_sub(padding * 2).max(20).min(term_width);
 
         let page_height = self.chapter_break_page_height();
         let epub = match self.ebook.as_mut() {
@@ -2140,7 +2159,7 @@ impl Reader {
         self.content_start_rows = content_start_rows;
 
         let mut state = self.state.borrow_mut();
-        state.reading_state.textwidth = text_width;
+        state.reading_state.padding = padding;
 
         // Restore position based on semantic location
         if !self.content_start_rows.is_empty() {
