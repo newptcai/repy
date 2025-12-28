@@ -1,6 +1,6 @@
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
-    style::{Color, Style},
+    style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Clear, List, ListItem, Padding, Paragraph, Wrap},
     Frame,
@@ -63,8 +63,15 @@ impl LinksWindow {
 
                 let is_internal = entry.target_row.is_some() || !entry.url.contains("://");
                 
-                let label_text = if is_internal {
-                    entry.label.clone()
+                let display_text = if is_internal {
+                    if entry.label.starts_with("^{") && entry.label.ends_with('}') {
+                        let num = &entry.label[2..entry.label.len() - 1];
+                        format!("Footnote {}", num)
+                    } else if (entry.url.contains("fn") || entry.url.contains("note")) && entry.label.len() <= 4 {
+                        format!("Footnote ({})", entry.label)
+                    } else {
+                        entry.label.clone()
+                    }
                 } else if entry.label == entry.url {
                     entry.url.clone()
                 } else {
@@ -72,12 +79,12 @@ impl LinksWindow {
                 };
 
                 let line = if is_internal {
-                     Line::from(Span::raw(label_text))
+                    Line::from(Span::raw(display_text))
                 } else {
-                     Line::from(vec![
-                         Span::raw(label_text),
-                         Span::styled(" ↗", Style::default().fg(Color::Yellow)),
-                     ])
+                    Line::from(vec![
+                        Span::raw(display_text),
+                        Span::styled(" ↗", Style::default().fg(Color::Yellow)),
+                    ])
                 };
 
                 ListItem::new(line).style(style)
@@ -100,7 +107,10 @@ impl LinksWindow {
 
         // Preview Area
         let preview_block = Block::default()
-            .title("Preview")
+            .title(Span::styled(
+                " Preview ",
+                Style::default().add_modifier(Modifier::BOLD),
+            ))
             .borders(Borders::ALL)
             .padding(Padding::horizontal(1));
 
@@ -116,7 +126,7 @@ impl LinksWindow {
                     }
                 }
             } else {
-                preview_text = entry.url.clone();
+                preview_text = format!("URL: {}", entry.url);
             }
         }
 
