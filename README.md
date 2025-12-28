@@ -1,5 +1,11 @@
 # `repy`
 
+## ⚠️ MASSIVE WARNING ⚠️
+
+**This is complete AI-generated slop.** There is absolutely no guarantee it works besides "I use it myself." You're on your own if it eats your epub, deletes your database, or crashes your terminal. PRs welcome.
+
+---
+
 Rust port of the awesome CLI ebook reader [`epy`](https://github.com/wustho/epy).
 
 The goal is to keep the reading experience and keybindings familiar while improving
@@ -8,15 +14,27 @@ SQLite implementation.
 
 ## Status
 
-This is work-in-progress. Core TUI reading, configuration loading, and basic
-library state are implemented; some `epy` features (TTS, external tools, etc.)
-are not yet available.
+Work-in-progress. Core TUI reading, configuration loading, and basic library state
+are implemented; some `epy` features (TTS, external tools, etc.) are not yet available.
 
 ## Installation
 
-`repy` is a normal Rust binary:
+### Prerequisites
+
+You need Rust and Cargo installed. If you don't have them:
 
 ```sh
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+```
+
+### Build from source
+
+```sh
+# Clone this repository
+git clone https://github.com/xing-rep/repy.git
+cd repy
+
+# Build and install
 cargo install --path .
 ```
 
@@ -25,78 +43,149 @@ installation is required; SQLite is compiled and linked as part of the build.
 
 ## Usage
 
-Basic usage mirrors `epy`:
+### Opening a book
 
-- `repy /path/to/book.epub` — open a book in the TUI.
-- `repy` — start the TUI without an explicit file:
-  - If there is a reading history, `repy` reopens the last-read book at the
-    last saved position.
-  - Otherwise, it starts in the reader UI without a book loaded.
+To open any EPUB file (doesn't need to be in your library):
 
-Keyboard controls are intentionally close to `epy` and are documented in the
-help window inside the TUI. A few important ones:
+```sh
+repy /path/to/book.epub
+```
 
-- `j` / `k` — scroll down / up.
-- `h` / `l` — page up / down.
-- `Ctrl+o` / `Ctrl+i` — jump back / forward in position history.
-- `t` — open the table of contents.
-- `m` — open the bookmarks window (`a` to add, `d` to delete, `Enter` to jump).
-- `r` — open the Library/history window:
-  - `j` / `k` to select an entry.
-  - `Enter` to open the selected book.
-  - `d` to delete the selected history entry (and its saved reading state).
+### Starting without arguments
+
+```sh
+repy
+```
+
+If there is a reading history, `repy` reopens the last-read book at the last saved
+position. Otherwise, it starts in the reader UI without a book loaded.
+
+### Other options
+
+```sh
+repy -r          # Print reading history
+repy -c FILE     # Use a specific configuration file
+repy --dump      # Dump the content of the ebook to stdout
+repy -v          # Increase verbosity
+```
+
+## Keybindings
+
+Press `?` in the TUI to see the help window at any time.
+
+### Navigation
+- `k` / `Up` — Line Up
+- `j` / `Down` — Line Down
+- `h` / `Left` — Page Up
+- `l` / `Right` — Page Down
+- `Space` / `f` — Page Down
+- `b` — Page Up
+- `L` — Next Chapter
+- `H` — Previous Chapter
+- `g` — Chapter Start
+- `G` — Chapter End
+- `Home` — Book Start
+- `End` — Book End
+
+### Jump History
+- `Ctrl+o` — Jump Back
+- `Ctrl+i` / `Tab` — Jump Forward
+
+### Display
+- `+` / `-` — Increase/Decrease Width
+- `=` — Reset Width
+- `T` — Toggle Top Bar
+
+### Windows & Tools
+- `/` — Search
+- `v` — Visual Mode (Select & Yank)
+- `t` — Table of Contents
+- `m` — Bookmarks (`a` to add, `d` to delete, `Enter` to jump)
+- `u` — Links on Page
+- `o` — Images on Page
+- `i` — Metadata
+- `r` — Library (History)
+  - `j`/`k` to select an entry
+  - `Enter` to open the selected book
+  - `d` to delete the selected history entry
+- `s` — Settings
+- `q` — Quit / Close Window
+- `?` — Help
 
 ## Configuration
 
-Configuration is stored as JSON, in the same locations `epy` uses but under
-the `repy` directory:
+The configuration file is automatically created on first run with sensible defaults.
 
-- Linux / macOS:
-  - `~/.config/repy/configuration.json` if `XDG_CONFIG_HOME` is set, or if the
-    `~/.config/repy` directory already exists.
-  - Otherwise: `~/.repy/configuration.json`.
-- Windows:
-  - `%USERPROFILE%\.repy\configuration.json`.
+### Location
 
-The configuration file controls settings such as colors, width, mouse support,
-and keybindings. If the file does not exist, `repy` creates it with sensible
-defaults on first run.
+The config file location follows this priority order:
+
+1. **XDG_CONFIG_HOME**: `$XDG_CONFIG_HOME/repy/configuration.json`
+2. **Legacy XDG**: `~/.config/repy/configuration.json` (if the directory exists)
+3. **Legacy home**: `~/.repy/configuration.json` (fallback)
+4. **Windows**: `%USERPROFILE%\.repy\configuration.json`
+
+If you can't find the config file, run `repy -vv` to see debug output that will
+show you exactly which path is being used.
+
+### Configuration options
+
+The configuration is JSON with two sections: `Setting` and `Keymap`.
+
+Example `configuration.json`:
+
+```json
+{
+  "Setting": {
+    "default_viewer": "auto",
+    "dictionary_client": "sdcv",
+    "show_progress_indicator": true,
+    "page_scroll_animation": true,
+    "mouse_support": false,
+    "start_with_double_spread": false,
+    "seamless_between_chapters": true,
+    "default_color_fg": 15,
+    "default_color_bg": 235,
+    "dark_color_fg": 252,
+    "dark_color_bg": null,
+    "light_color_fg": 15,
+    "light_color_bg": 235,
+    "preferred_tts_engine": null,
+    "tts_engine_args": []
+  },
+  "Keymap": {
+    "scroll_up": "k",
+    "scroll_down": "j",
+    "page_up": "h",
+    "page_down": "l",
+    "quit": "q",
+    "help": "?"
+  }
+}
+```
+
+You can modify any setting or keybinding by editing this file. Changes take effect
+on next restart.
 
 ## Database and Reading State
 
-`repy` stores reading history, last positions, and bookmarks in a SQLite
-database managed entirely from Rust (no external `sqlite3` binary or library
-is required).
+`repy` stores reading history, last positions, and bookmarks in a SQLite database.
+The database file (`states.db`) is located in the same directory as your config file.
 
-The database file is located next to the configuration file:
+### Database schema
 
-- Linux / macOS:
-  - `~/.config/repy/states.db` or `~/.repy/states.db`.
-- Windows:
-  - `%USERPROFILE%\.repy\states.db`.
+- **`reading_states`** — Current position for each book
+  - `filepath`, `content_index`, `padding`, `row`, `rel_pctg`
 
-Internally, the database contains three tables:
+- **`library`** — Metadata and reading progress
+  - `filepath`, `last_read`, `title`, `author`, `reading_progress`
 
-- `reading_states` Table: Stores the current position for each book.
-    - `filepath`, `content_index`, `padding`, `row`, `rel_pctg`.
-- `library` Table: Stores metadata and reading progress.
-  - `filepath`, `last_read`, `title`, `author`, `reading_progress`.
-- `bookmarks` — named bookmarks per book:
-  - `id`, `filepath`, `name`, plus a copy of the reading position fields.
+- **`bookmarks`** — Named bookmarks per book
+  - `id`, `filepath`, `name`, plus position fields
 
-On quit (`q` from the reader window), `repy`:
-
-- Saves the current `ReadingState` for the open book into `reading_states`.
-- Updates the corresponding `library` entry (including `last_read` and
-  `reading_progress`).
-
-When you open a book (either by passing a path, or by selecting from the
-library, or via the “last book” behavior when starting with no arguments),
-`repy`:
-
-- Looks up any existing `reading_states` entry for that `filepath`.
-- Restores your last position and relative progress where possible.
-- Reloads any stored bookmarks for that book.
+When you quit (`q` from the reader window), `repy` saves your current position
+and updates the library entry. When you open a book, it restores your last position
+and any stored bookmarks.
 
 ## Contributing
 
