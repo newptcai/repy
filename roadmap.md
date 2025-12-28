@@ -44,7 +44,7 @@ The detailed roadmap below remains the source of truth for planned work.
     *   [x] Minimal chrome
     *   [ ] Bottom Status Bar (Command echo, transient messages)
     *   [x] Margins/padding (Automatic centering implemented)
-    *   [ ] Image placeholder styling
+    *   [x] Image placeholder styling (Centered and descriptive)
     *   [x] Line numbers toggle
     *   [x] Help window parity
     *   [x] Inline bold/italic rendering (strip markdown markers)
@@ -67,7 +67,7 @@ The detailed roadmap below remains the source of truth for planned work.
 
 12. **External Tool Integration (`src/tools/`):**
     *   [ ] **Dictionary Integration**: Multiple dictionary engines (sdcv, dict, etc.)
-    *   [ ] **Image Viewer Integration**: Cross-platform image display
+    *   [x] **Image Viewer Integration**: List images on page, extract and open with system viewer
     *   [x] **URL Handling**: Internal anchor jumps, footnotes, and external link opening
     *   [x] **Link Preview**: Contextual preview of internal links/footnotes in the links window
     *   [x] **Footnote Formatting**: User-friendly display of footnote labels (e.g., "Footnote 2")

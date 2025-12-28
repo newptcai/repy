@@ -32,6 +32,7 @@ pub enum WindowType {
     Links,
     Metadata,
     Settings,
+    Images,
     Visual,
 }
 

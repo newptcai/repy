@@ -104,6 +104,10 @@ impl Board {
                     return Line::raw("***").alignment(Alignment::Center);
                 }
 
+                if text_structure.image_maps.contains_key(&line_num) {
+                    return Line::raw(line).alignment(Alignment::Center);
+                }
+
                 if state.config.settings.show_line_numbers {
                     spans.push(Span::styled(
                         format!("{:>4} ", line_num + 1),
@@ -287,6 +291,12 @@ impl Board {
         self.text_structure
             .as_ref()
             .and_then(|ts| ts.section_rows.get(id).copied())
+    }
+
+    pub fn image_src(&self, line: usize) -> Option<String> {
+        self.text_structure
+            .as_ref()
+            .and_then(|ts| ts.image_maps.get(&line).cloned())
     }
 
     pub fn get_selected_text(&self, start: usize, end: usize) -> String {

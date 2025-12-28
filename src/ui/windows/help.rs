@@ -38,6 +38,7 @@ impl HelpWindow {
             Line::from("   t  Table Of Contents"),
             Line::from("   m  Bookmarks"),
             Line::from("   u  Links on Page"),
+            Line::from("   o  Images on Page"),
             Line::from("   i  Metadata"),
             Line::from("   r  Library (History)"),
             Line::from("   s  Settings"),

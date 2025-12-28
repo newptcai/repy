@@ -25,8 +25,9 @@ use crate::models::{
 use crate::state::State;
 use crate::ui::board::Board;
 use crate::ui::windows::{
-    bookmarks::BookmarksWindow, help::HelpWindow, library::LibraryWindow, links::LinksWindow,
-    metadata::MetadataWindow, search::SearchWindow, settings::SettingsWindow, toc::TocWindow,
+    bookmarks::BookmarksWindow, help::HelpWindow, images::ImagesWindow, library::LibraryWindow,
+    links::LinksWindow, metadata::MetadataWindow, search::SearchWindow, settings::SettingsWindow,
+    toc::TocWindow,
 };
 
 /// Application state that encompasses all UI and reading state
@@ -120,6 +121,7 @@ pub struct UiState {
     pub show_library: bool,
     pub show_search: bool,
     pub show_links: bool,
+    pub show_images: bool,
     pub show_metadata: bool,
     pub show_settings: bool,
     pub search_query: String,
@@ -132,6 +134,8 @@ pub struct UiState {
     pub bookmarks_selected_index: usize,
     pub links: Vec<LinkEntry>,
     pub links_selected_index: usize,
+    pub images_list: Vec<(usize, String)>,
+    pub images_selected_index: usize,
     pub library_items: Vec<LibraryItem>,
     pub library_selected_index: usize,
     pub metadata: Option<BookMetadata>,
@@ -151,6 +155,7 @@ impl UiState {
             show_library: false,
             show_search: false,
             show_links: false,
+            show_images: false,
             show_metadata: false,
             show_settings: false,
             search_query: String::new(),
@@ -163,6 +168,8 @@ impl UiState {
             bookmarks_selected_index: 0,
             links: Vec::new(),
             links_selected_index: 0,
+            images_list: Vec::new(),
+            images_selected_index: 0,
             library_items: Vec::new(),
             library_selected_index: 0,
             metadata: None,
@@ -192,6 +199,7 @@ impl UiState {
                 self.show_library = false;
                 self.show_search = false;
                 self.show_links = false;
+                self.show_images = false;
                 self.show_metadata = false;
                 self.show_settings = false;
                 self.selection_start = None;
@@ -202,6 +210,7 @@ impl UiState {
             WindowType::Library => self.show_library = true,
             WindowType::Search => self.show_search = true,
             WindowType::Links => self.show_links = true,
+            WindowType::Images => self.show_images = true,
             WindowType::Metadata => self.show_metadata = true,
             WindowType::Settings => self.show_settings = true,
             WindowType::Visual => {
@@ -477,6 +486,7 @@ impl Reader {
             WindowType::Library => self.handle_library_mode_keys(key, repeat_count)?,
             WindowType::Settings => self.handle_settings_mode_keys(key, repeat_count)?,
             WindowType::Links => self.handle_links_mode_keys(key, repeat_count)?,
+            WindowType::Images => self.handle_images_mode_keys(key, repeat_count)?,
             WindowType::Help | WindowType::Metadata => self.handle_modal_close_keys(key)?,
             _ => self.handle_normal_mode_keys(key, repeat_count)?,
         }
@@ -617,8 +627,17 @@ impl Reader {
             KeyCode::Char('u') => {
                 self.open_links_window()?;
             }
+            KeyCode::Char('o') => {
+                if !key.modifiers.contains(KeyModifiers::CONTROL) {
+                    self.open_images_window()?;
+                }
+            }
             KeyCode::Char('i') => {
-                self.open_metadata_window()?;
+                if key.modifiers.contains(KeyModifiers::CONTROL) {
+                    self.jump_forward();
+                } else {
+                    self.open_metadata_window()?;
+                }
             }
             KeyCode::Char('r') => {
                 self.open_library_window()?;
@@ -836,6 +855,32 @@ impl Reader {
         Ok(())
     }
 
+    fn handle_images_mode_keys(&mut self, key: KeyEvent, repeat_count: u32) -> eyre::Result<()> {
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('q') => {
+                let mut state = self.state.borrow_mut();
+                state.ui_state.open_window(WindowType::Reader);
+            }
+            KeyCode::Char('j') | KeyCode::Down => {
+                let mut state = self.state.borrow_mut();
+                if !state.ui_state.images_list.is_empty() {
+                    let next = state.ui_state.images_selected_index.saturating_add(repeat_count as usize);
+                    state.ui_state.images_selected_index = next.min(state.ui_state.images_list.len() - 1);
+                }
+            }
+            KeyCode::Char('k') | KeyCode::Up => {
+                let mut state = self.state.borrow_mut();
+                let current = state.ui_state.images_selected_index;
+                state.ui_state.images_selected_index = current.saturating_sub(repeat_count as usize);
+            }
+            KeyCode::Enter => {
+                self.open_selected_image()?;
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
 
     fn handle_library_mode_keys(&mut self, key: KeyEvent, repeat_count: u32) -> eyre::Result<()> {
         match key.code {
@@ -979,6 +1024,13 @@ impl Reader {
                 &state.ui_state.links,
                 state.ui_state.links_selected_index,
                 board,
+            );
+        } else if state.ui_state.show_images {
+            ImagesWindow::render(
+                frame,
+                frame.area(),
+                &state.ui_state.images_list,
+                state.ui_state.images_selected_index,
             );
         } else if state.ui_state.show_metadata {
             MetadataWindow::render(frame, frame.area(), state.ui_state.metadata.as_ref());
@@ -1241,6 +1293,31 @@ impl Reader {
         state.ui_state.links = links;
         state.ui_state.links_selected_index = 0;
         state.ui_state.open_window(WindowType::Links);
+        Ok(())
+    }
+
+    fn open_images_window(&mut self) -> eyre::Result<()> {
+        let (start, end) = self.visible_line_range();
+        
+        let mut images = Vec::new();
+        if let Some(_lines) = self.board.lines() {
+             for i in start..end {
+                 if let Some(src) = self.board.image_src(i) {
+                     images.push((i, src));
+                 }
+             }
+        }
+
+        let mut state = self.state.borrow_mut();
+        if images.is_empty() {
+            state
+                .ui_state
+                .set_message("No images on this page".to_string(), MessageType::Info);
+            return Ok(());
+        }
+        state.ui_state.images_list = images;
+        state.ui_state.images_selected_index = 0;
+        state.ui_state.open_window(WindowType::Images);
         Ok(())
     }
 
@@ -1767,6 +1844,63 @@ impl Reader {
                 state
                     .ui_state
                     .set_message("Selected file no longer exists".to_string(), MessageType::Warning);
+            }
+        }
+        Ok(())
+    }
+
+    fn open_selected_image(&mut self) -> eyre::Result<()> {
+        let image_src = {
+            let state = self.state.borrow();
+            state
+                .ui_state
+                .images_list
+                .get(state.ui_state.images_selected_index)
+                .map(|(_, src)| src.clone())
+        };
+
+        if let Some(src) = image_src {
+            if let Some(epub) = self.ebook.as_mut() {
+                // Resolve relative path
+                let current_index = self.state.borrow().reading_state.content_index;
+                let base_path = epub.resource_path_for_content_index(current_index);
+                let resolved_path = if let Some(base) = base_path {
+                     Self::resolve_relative_href(&src, Some(&base)).unwrap_or(src.clone())
+                } else {
+                    src.clone()
+                };
+
+                match epub.get_img_bytestr(&resolved_path) {
+                    Ok((mime, bytes)) => {
+                        // Create a temporary file with the correct extension
+                        let extension = match mime.as_str() {
+                            "image/jpeg" => "jpg",
+                            "image/png" => "png",
+                            "image/gif" => "gif",
+                            "image/svg+xml" => "svg",
+                             _ => "jpg", // Fallback
+                        };
+                        
+                        let temp_dir = std::env::temp_dir();
+                        let filename = std::path::Path::new(&src)
+                            .file_name()
+                            .and_then(|n| n.to_str())
+                            .unwrap_or("image");
+                        let temp_path = temp_dir.join(format!("{}_{}.{}", "repy_img", filename, extension));
+                        
+                        std::fs::write(&temp_path, bytes)?;
+                        
+                        self.open_external_link(&temp_path.to_string_lossy())?;
+                        
+                        let mut state = self.state.borrow_mut();
+                        state.ui_state.set_message("Opened image".to_string(), MessageType::Info);
+                        state.ui_state.open_window(WindowType::Reader);
+                    }
+                    Err(e) => {
+                        let mut state = self.state.borrow_mut();
+                        state.ui_state.set_message(format!("Failed to load image: {}", e), MessageType::Error);
+                    }
+                }
             }
         }
         Ok(())

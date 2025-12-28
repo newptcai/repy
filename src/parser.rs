@@ -15,13 +15,14 @@ pub fn parse_html(
 ) -> Result<TextStructure> {
     let text_width = text_width.unwrap_or(80);
     let html_src = preprocess_inline_annotations(html_src);
+    let html_src = preprocess_images(&html_src);
 
     // Convert HTML to plain text first
     let mut plain_text = html_to_plain_text(&html_src, text_width)?;
     replace_superscript_link_markers(&mut plain_text);
 
     // Extract structure information
-    let image_maps = extract_images(&html_src, starting_line)?;
+    let image_maps = extract_images(&html_src, starting_line, &plain_text)?;
     let section_rows = extract_sections(&html_src, &section_ids.unwrap_or_default(), starting_line, &plain_text)?;
     let mut formatting = extract_formatting(&html_src, starting_line, &plain_text)?;
     let links = extract_links(&html_src, starting_line, &plain_text)?;
@@ -73,16 +74,32 @@ fn html_to_plain_text(html: &str, width: usize) -> Result<Vec<String>> {
     Ok(lines)
 }
 
-/// Extract image information from HTML
-fn extract_images(html: &str, starting_line: usize) -> Result<HashMap<usize, String>> {
+/// Extract image information from HTML and map to text lines
+fn extract_images(html: &str, starting_line: usize, text_lines: &[String]) -> Result<HashMap<usize, String>> {
     let mut images = HashMap::new();
     let fragment = Html::parse_fragment(html);
-
     let img_selector = Selector::parse("img").unwrap();
-
-    for (line_num, element) in fragment.select(&img_selector).enumerate() {
+    
+    // Get all image sources in order
+    let mut image_sources: Vec<String> = Vec::new();
+    for element in fragment.select(&img_selector) {
         if let Some(src) = element.value().attr("src") {
-            images.insert(starting_line + line_num, src.to_string());
+            image_sources.push(src.to_string());
+        }
+    }
+
+    // Find image placeholders in text lines and map them
+    let mut image_idx = 0;
+    for (line_num, line) in text_lines.iter().enumerate() {
+        if image_idx >= image_sources.len() {
+            break;
+        }
+        
+        // Check for [Image: ...] or [[Image: ...]] pattern
+        // html2text wraps alt in [], and our alt is [Image: ...], so it becomes [[Image: ...]]
+        if line.contains("[Image:") || line.contains("[[Image:") {
+            images.insert(starting_line + line_num, image_sources[image_idx].clone());
+            image_idx += 1;
         }
     }
 
@@ -503,8 +520,12 @@ mod tests {
 
     #[test]
     fn test_extract_images() {
-        let html = r#"<p>Here's an image: <img src="test.jpg" alt="Test Image"></p>"#;
-        let images = extract_images(html, 0).unwrap();
+        let html = r#"<p>Here's an image: <img src="test.jpg" alt="[Image: test.jpg]"></p>"#;
+        // Mock text lines that html2text would produce
+        let text_lines = vec![
+            "Here's an image: [[Image: test.jpg]]".to_string()
+        ];
+        let images = extract_images(html, 0, &text_lines).unwrap();
         assert_eq!(images.len(), 1);
         assert_eq!(images.get(&0), Some(&"test.jpg".to_string()));
     }
@@ -512,11 +533,19 @@ mod tests {
     #[test]
     fn test_extract_images_multiple() {
         let html = r#"
-        <p>First image: <img src="image1.jpg" alt="First"></p>
-        <p>Second image: <img src="image2.png" alt="Second"></p>
-        <img src="image3.gif" alt="Third">
+        <p>First image: <img src="image1.jpg" alt="[Image: image1.jpg]"></p>
+        <p>Second image: <img src="image2.png" alt="[Image: image2.png]"></p>
+        <img src="image3.gif" alt="[Image: image3.gif]">
         "#;
-        let images = extract_images(html, 5).unwrap();
+        
+        // Mock text lines
+        let text_lines = vec![
+            "First image: [[Image: image1.jpg]]".to_string(),
+            "Second image: [[Image: image2.png]]".to_string(),
+            "[[Image: image3.gif]]".to_string(),
+        ];
+        
+        let images = extract_images(html, 5, &text_lines).unwrap();
         assert_eq!(images.len(), 3);
         assert_eq!(images.get(&5), Some(&"image1.jpg".to_string()));
         assert_eq!(images.get(&6), Some(&"image2.png".to_string()));
@@ -526,14 +555,16 @@ mod tests {
     #[test]
     fn test_extract_images_none() {
         let html = "<p>No images here.</p>";
-        let images = extract_images(html, 0).unwrap();
+        let text_lines = vec!["No images here.".to_string()];
+        let images = extract_images(html, 0, &text_lines).unwrap();
         assert_eq!(images.len(), 0);
     }
 
     #[test]
     fn test_extract_images_without_src() {
         let html = "<p><img alt=\"Image without src\"></p>";
-        let images = extract_images(html, 0).unwrap();
+        let text_lines = vec!["[[Image without src]]".to_string()];
+        let images = extract_images(html, 0, &text_lines).unwrap();
         assert_eq!(images.len(), 0);
     }
 
@@ -908,4 +939,50 @@ mod tests {
         assert!(result.iter().any(|l| l.trim().contains("Text with extra spaces")));
         assert!(result.iter().any(|l| l.trim().contains("Text with newlines and spaces")));
     }
+
+    }
 }
+
+fn preprocess_images(html: &str) -> String {
+    let img_re = Regex::new(r#"(?i)<img\s+([^>]+)>"#).unwrap();
+    img_re.replace_all(html, |caps: &Captures| {
+        let attrs_str = &caps[1];
+        let src_re = Regex::new(r#"src=["']([^"']+)["']"#).unwrap();
+        let alt_re = Regex::new(r#"alt=["']([^"']*)["']"#).unwrap();
+        let title_re = Regex::new(r#"title=["']([^"']*)["']"#).unwrap();
+
+        let src = src_re.captures(attrs_str).map(|c| c.get(1).unwrap().as_str().to_string());
+        let alt = alt_re.captures(attrs_str).map(|c| c.get(1).unwrap().as_str().to_string());
+        let title = title_re.captures(attrs_str).map(|c| c.get(1).unwrap().as_str().to_string());
+
+        if let Some(src) = src {
+             let filename = std::path::Path::new(&src)
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("image");
+             
+             let new_alt_text = if let Some(t) = title {
+                 format!("[Image: {}]", t)
+             } else if let Some(a) = alt.as_ref() {
+                 if a.trim().is_empty() || a.to_lowercase() == "image" {
+                     format!("[Image: {}]", filename)
+                 } else {
+                     format!("[Image: {}]", a)
+                 }
+             } else {
+                 format!("[Image: {}]", filename)
+             };
+             
+             let new_attrs = if alt.is_some() {
+                 alt_re.replace(attrs_str, format!(r#"alt="{}""#, new_alt_text)).to_string()
+             } else {
+                 format!(r#"{} alt="{}""#, attrs_str, new_alt_text)
+             };
+             
+             format!("<img {}>", new_attrs)
+        } else {
+            caps[0].to_string()
+        }
+    }).to_string()
+}
+

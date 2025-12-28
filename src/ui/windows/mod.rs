@@ -6,3 +6,4 @@ pub mod search;
 pub mod links;
 pub mod settings;
 pub mod metadata;
+pub mod images;
