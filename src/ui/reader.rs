@@ -2063,16 +2063,24 @@ impl Reader {
                 } else {
                     Some(80)
                 };
-                let text_width = state.config.settings.width.unwrap_or(80);
+                // Calculate proper padding for the new setting
+                let preferred_width = state.config.settings.width.unwrap_or(80);
                 drop(state);
-                self.rebuild_text_structure(text_width)?;
+                
+                let term_width = match crossterm::terminal::size() {
+                    Ok((w, _)) => w as usize,
+                    Err(_) => 100,
+                };
+                let padding = (term_width.saturating_sub(preferred_width) / 2).max(5);
+                self.rebuild_text_structure(padding)?;
                 return Ok(());
             }
         }
         if rebuild_chapter_breaks {
-            let text_width = state.config.settings.width.unwrap_or(80);
+            // Use current padding
+            let padding = state.reading_state.padding;
             drop(state);
-            self.rebuild_text_structure(text_width)?;
+            self.rebuild_text_structure(padding)?;
         }
         Ok(())
     }
