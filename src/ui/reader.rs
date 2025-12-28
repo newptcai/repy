@@ -1486,6 +1486,7 @@ impl Reader {
         let current_row = self.state.borrow().reading_state.row;
         let index = Self::current_chapter_index(&rows, current_row);
         let total_lines = self.board.total_lines();
+        let page = self.page_size();
 
         // Find the actual last content line by skipping chapter break padding
         let next_chapter_start = if index + 1 < rows.len() {
@@ -1494,10 +1495,16 @@ impl Reader {
             total_lines
         };
 
-        let end_row = self.find_chapter_end(rows[index], next_chapter_start);
+        let chapter_end = self.find_chapter_end(rows[index], next_chapter_start);
+        
+        // Position like page-down: show last content line at bottom of screen
+        let last_start = chapter_end
+            .saturating_sub(page.saturating_sub(1))
+            .max(rows[index]);
+        
         self.record_jump_position();
         let mut state = self.state.borrow_mut();
-        state.reading_state.row = end_row;
+        state.reading_state.row = Self::row_from_start(last_start);
     }
 
     fn goto_end(&mut self) {
@@ -1522,23 +1529,25 @@ impl Reader {
 
         // Search backwards from the line before next chapter starts
         let mut row = next_chapter_start.saturating_sub(1);
+        let mut last_content_row = None;
 
         while row > chapter_start {
             if let Some(line) = self.board.get_line(row) {
-                // Stop at the chapter break marker, but include empty padding lines
-                if line == CHAPTER_BREAK_MARKER {
-                    return row.saturating_sub(1);
-                }
                 // If we hit actual content, this is the end
-                if !line.is_empty() {
+                if !line.is_empty() && line != CHAPTER_BREAK_MARKER {
                     return row;
+                }
+                // Remember the last non-empty line (could be chapter break marker)
+                if !line.is_empty() {
+                    last_content_row = Some(row);
                 }
             }
             row = row.saturating_sub(1);
         }
 
-        // Fallback to chapter start if nothing found
-        chapter_start
+        // If we found a chapter break marker or other non-empty line, return it
+        // Otherwise return the line before next chapter start (including padding)
+        last_content_row.unwrap_or_else(|| next_chapter_start.saturating_sub(1))
     }
 
     fn page_size(&self) -> usize {
