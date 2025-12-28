@@ -15,10 +15,10 @@ Concise roadmap for the Rust port of `epy`.
 
 What is *not* done yet (high level):
 
-- Layout parity polish (header/footer chrome, margins, image placeholders, line numbers toggle, help window parity).
+- Layout parity polish (header/footer chrome, line numbers toggle, help window parity).
 - Advanced search features (multi-chapter regex, search history, fuzzy search, incremental search).
 - Text-to-speech trait system and engines.
-- External tool integration (dictionary, image viewer, export).
+- External tool integration (dictionary, export).
 - Performance work and packaging/CI.
 
 The detailed roadmap below remains the source of truth for planned work.

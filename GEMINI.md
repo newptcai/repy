@@ -72,8 +72,12 @@ Example
 ## Feature Details
 
 ### Image Handling
-- Images are preprocessed to include descriptive alt text (e.g., `[Image: filename.jpg]`)
+- Images are preprocessed to include descriptive alt text (e.g., `[Image: filename.jpg]`).
 - Image placeholders are centered in the reader view.
 - Pressing `o` opens an image list for the current page.
-- Selecting an image extracts it to a temporary file and opens it with the system default viewer (`xdg-open` on Linux).
+- Selecting an image extracts it to a temporary file.
+- The viewer attempts to open the image using:
+    1. The user-configured `default_viewer`.
+    2. `feh` (if installed).
+    3. The system default (`xdg-open`).
 - Relative paths for images are resolved against the content document path.
