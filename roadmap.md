@@ -40,13 +40,13 @@ The detailed roadmap below remains the source of truth for planned work.
 ### Phase 3: Advanced Features (PENDING ⏳)
 
 9.  **Layout Parity (epy vs repy):**
-    *   [ ] Header bar
-    *   [ ] Minimal chrome
-    *   [ ] Footer/status
-    *   [ ] Margins/padding
+    *   [x] Header bar (Implemented with title and status)
+    *   [x] Minimal chrome
+    *   [ ] Footer/status (Status is currently in header)
+    *   [x] Margins/padding (Automatic centering implemented)
     *   [ ] Image placeholder styling
-    *   [ ] Line numbers toggle
-    *   [ ] Help window parity
+    *   [x] Line numbers toggle
+    *   [x] Help window parity
     *   [x] Inline bold/italic rendering (strip markdown markers)
     *   [x] Navigation History (Ctrl+o / Ctrl+i)
 
@@ -59,8 +59,8 @@ The detailed roadmap below remains the source of truth for planned work.
     *   [ ] Implement reading position synchronization with TTS
 
 11. **Advanced Search (`src/search.rs`):**
-    *   [ ] Multi-chapter regex search with performance optimization
-    *   [ ] Search result highlighting with configurable colors
+    *   [x] Multi-chapter regex search (Search iterates over full loaded book content)
+    *   [x] Search result highlighting with configurable colors
     *   [ ] Search history and saved searches
     *   [ ] Fuzzy search and typo tolerance
     *   [ ] Incremental search with real-time results
@@ -77,7 +77,7 @@ The detailed roadmap below remains the source of truth for planned work.
     *   [ ] Port the helper functions from `epy/src/epy_reader/utils.py` and `epy/src/epy_reader/lib.py` to a `utils` module.
     *   [ ] Add platform-specific utilities (Windows/Linux/macOS)
     *   [ ] Implement file format detection and validation
-    *   [ ] Add logging and debugging utilities
+    *   [x] Add logging and debugging utilities (Basic implementation in `src/logging.rs`)
 
 ### Phase 4: Performance & Polish (PENDING ⏳)
 
@@ -94,7 +94,7 @@ The detailed roadmap below remains the source of truth for planned work.
     *   [ ] **Custom Themes**: User-defined color schemes and layouts
 
 16. **Quality Assurance:**
-    *   [ ] Comprehensive test suite with integration tests
+    *   [x] Comprehensive test suite with integration tests
     *   [ ] Property-based testing for critical components
     *   [ ] Performance testing and memory profiling
     *   [ ] Cross-platform compatibility testing
