@@ -42,7 +42,7 @@ The detailed roadmap below remains the source of truth for planned work.
 9.  **Layout Parity (epy vs repy):**
     *   [x] Header bar (Implemented with title and status)
     *   [x] Minimal chrome
-    *   [ ] Footer/status (Status is currently in header)
+    *   [ ] Bottom Status Bar (Command echo, transient messages)
     *   [x] Margins/padding (Automatic centering implemented)
     *   [ ] Image placeholder styling
     *   [x] Line numbers toggle
