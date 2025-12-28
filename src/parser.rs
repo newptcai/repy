@@ -326,6 +326,7 @@ fn extract_links(html: &str, starting_line: usize, text_lines: &[String]) -> Res
             row: row.unwrap_or(starting_line),
             label: if label.is_empty() { href.to_string() } else { label },
             url: href.to_string(),
+            target_row: None,
         });
     }
 

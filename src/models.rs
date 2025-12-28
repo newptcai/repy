@@ -132,6 +132,7 @@ pub struct LinkEntry {
     pub row: usize,
     pub label: String,
     pub url: String,
+    pub target_row: Option<usize>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -478,6 +479,7 @@ mod tests {
                 row: 1,
                 label: "Example".to_string(),
                 url: "https://example.com".to_string(),
+                target_row: None,
             }],
         };
 

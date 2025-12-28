@@ -978,6 +978,7 @@ impl Reader {
                 frame.area(),
                 &state.ui_state.links,
                 state.ui_state.links_selected_index,
+                board,
             );
         } else if state.ui_state.show_metadata {
             MetadataWindow::render(frame, frame.area(), state.ui_state.metadata.as_ref());
@@ -1217,7 +1218,19 @@ impl Reader {
 
     fn open_links_window(&mut self) -> eyre::Result<()> {
         let (start, end) = self.visible_line_range();
-        let links = self.board.links_in_range(start, end);
+        let mut links = self.board.links_in_range(start, end);
+
+        // Resolve target rows for internal links
+        for link in &mut links {
+            let base_content = self
+                .content_index_for_row(link.row)
+                .and_then(|index| self.ebook.as_ref()?.resource_path_for_content_index(index));
+
+            if let Some(target_row) = self.resolve_internal_link_row(&link.url, base_content.as_deref()) {
+                link.target_row = Some(target_row);
+            }
+        }
+
         let mut state = self.state.borrow_mut();
         if links.is_empty() {
             state
