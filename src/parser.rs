@@ -208,60 +208,100 @@ fn extract_formatting(
     let mut formatting = Vec::new();
     let fragment = Html::parse_fragment(html);
 
-    // Extract headers (centered/bold)
-    let header_selector = Selector::parse("h1, h2, h3, h4, h5, h6").unwrap();
-    for element in fragment.select(&header_selector) {
-        let header_text = element.text().collect::<String>();
+    // Helper to normalize whitespace (collapse multiple spaces/newlines to single space)
+    let normalize_text = |text: String| -> String {
+        text.split_whitespace().collect::<Vec<_>>().join(" ")
+    };
 
-        // Find the line in our output that contains this header
-        for (line_num, line) in text_lines.iter().enumerate() {
-            if line.contains(&header_text) {
-                formatting.push(InlineStyle {
-                    row: (starting_line + line_num) as u16,
-                    col: 0,
-                    n_letters: line.len() as u16,
-                    attr: 1, // Bold (simplified)
-                });
+    let selector = Selector::parse("h1, h2, h3, h4, h5, h6, strong, b, em, i").unwrap();
+
+    // Track cursor for siblings: (line_idx, char_idx)
+    // Relative to text_lines (0-based)
+    let mut high_water_mark: (usize, usize) = (0, 0);
+
+    // Stack: (Element NodeId, match_start: (line, col), match_end: (line, col))
+    let mut stack: Vec<(_, (usize, usize), (usize, usize))> = Vec::new();
+
+    for element in fragment.select(&selector) {
+        let text = normalize_text(element.text().collect::<String>());
+        if text.is_empty() {
+            continue;
+        }
+
+        let tag_name = element.value().name();
+        let attr = match tag_name {
+            "strong" | "b" | "h1" | "h2" | "h3" | "h4" | "h5" | "h6" => 1,
+            "em" | "i" => 2,
+            _ => 1,
+        };
+
+        // Pop stack until we find a parent or stack empty
+        // We walk up the current element's ancestors
+        let mut ancestors = HashSet::new();
+        let mut curr = element.parent();
+        while let Some(node) = curr {
+            ancestors.insert(node.id());
+            curr = node.parent();
+        }
+
+        let mut parent_in_stack_idx = None;
+        loop {
+            if let Some((stack_id, _, stack_end)) = stack.last() {
+                if ancestors.contains(stack_id) {
+                    parent_in_stack_idx = Some(stack.len() - 1);
+                    break;
+                } else {
+                    let stack_end = *stack_end;
+                    // Update high_water_mark to the end of this finished block
+                    if stack_end.0 > high_water_mark.0
+                        || (stack_end.0 == high_water_mark.0 && stack_end.1 > high_water_mark.1)
+                    {
+                        high_water_mark = stack_end;
+                    }
+                    stack.pop();
+                }
+            } else {
                 break;
             }
         }
-    }
 
-    // Extract bold text
-    let bold_selector = Selector::parse("strong, b").unwrap();
-    for element in fragment.select(&bold_selector) {
-        let bold_text = element.text().collect::<String>();
+        // Determine search start
+        let (start_line, start_col) = if let Some(idx) = parent_in_stack_idx {
+            // Start from parent's start
+            stack[idx].1
+        } else {
+            // Start from high_water_mark
+            high_water_mark
+        };
 
-        // Find the line in our output that contains this bold text
-        for (line_num, line) in text_lines.iter().enumerate() {
-            if let Some(pos) = line.find(&bold_text) {
-                formatting.push(InlineStyle {
-                    row: (starting_line + line_num) as u16,
-                    col: pos as u16,
-                    n_letters: bold_text.len() as u16,
-                    attr: 1, // Bold
-                });
+        // Search for text
+        let mut matched = None;
+
+        for line_idx in start_line..text_lines.len() {
+            let line = &text_lines[line_idx];
+            let search_start_col = if line_idx == start_line { start_col } else { 0 };
+
+            if search_start_col >= line.len() {
+                continue;
+            }
+
+            if let Some(pos) = line[search_start_col..].find(&text) {
+                let abs_col = search_start_col + pos;
+                matched = Some((line_idx, abs_col));
                 break;
             }
         }
-    }
 
-    // Extract italic text
-    let italic_selector = Selector::parse("em, i").unwrap();
-    for element in fragment.select(&italic_selector) {
-        let italic_text = element.text().collect::<String>();
+        if let Some((row, col)) = matched {
+            formatting.push(InlineStyle {
+                row: (starting_line + row) as u16,
+                col: col as u16,
+                n_letters: text.len() as u16,
+                attr,
+            });
 
-        // Find the line in our output that contains this italic text
-        for (line_num, line) in text_lines.iter().enumerate() {
-            if let Some(pos) = line.find(&italic_text) {
-                formatting.push(InlineStyle {
-                    row: (starting_line + line_num) as u16,
-                    col: pos as u16,
-                    n_letters: italic_text.len() as u16,
-                    attr: 2, // Italic (simplified)
-                });
-                break;
-            }
+            let end_col = col + text.len();
+            stack.push((element.id(), (row, col), (row, end_col)));
         }
     }
 
@@ -409,27 +449,50 @@ fn collect_marker_positions(
     let len = bytes.len();
     let mut positions = Vec::new();
 
+    let is_boundary = |pos: usize| -> bool {
+        if pos >= len {
+            return true;
+        }
+        let b = bytes[pos];
+        // Boundary if it's whitespace or punctuation
+        b.is_ascii_whitespace() || b.is_ascii_punctuation()
+    };
+
     for style_idx in line_formatting {
         let style = &formatting[*style_idx];
         let start = style.col as usize;
         let end = start.saturating_add(style.n_letters as usize);
         match style.attr {
             1 => {
+                // Bold **
                 if start >= 2 && &bytes[start - 2..start] == b"**" {
-                    positions.push(start - 2);
-                    positions.push(start - 1);
+                    // Check if it's a boundary marker (preceded by boundary)
+                    if start == 2 || is_boundary(start - 3) {
+                        positions.push(start - 2);
+                        positions.push(start - 1);
+                    }
                 }
                 if end + 2 <= len && &bytes[end..end + 2] == b"**" {
-                    positions.push(end);
-                    positions.push(end + 1);
+                    // Check if it's a boundary marker (followed by boundary)
+                    if end + 2 == len || is_boundary(end + 2) {
+                        positions.push(end);
+                        positions.push(end + 1);
+                    }
                 }
             }
             2 => {
-                if start >= 1 && bytes.get(start - 1) == Some(&b'*') {
-                    positions.push(start - 1);
+                // Italic *
+                if start >= 1 && bytes[start - 1] == b'*' {
+                    // Check if it's a boundary marker
+                    if start == 1 || is_boundary(start - 2) {
+                        positions.push(start - 1);
+                    }
                 }
-                if end < len && bytes.get(end) == Some(&b'*') {
-                    positions.push(end);
+                if end < len && bytes[end] == b'*' {
+                    // Check if it's a boundary marker
+                    if end + 1 == len || is_boundary(end + 1) {
+                        positions.push(end);
+                    }
                 }
             }
             _ => {}
@@ -656,14 +719,14 @@ mod tests {
 
         // Check header 1 - html2text might format differently than expected
         let header1 = formatting.iter().find(|s| s.row == 0).unwrap();
-        assert_eq!(header1.col, 0);
-        assert_eq!(header1.n_letters, "# Header 1".len() as u16); // Use actual length
+        assert_eq!(header1.col, 2);
+        assert_eq!(header1.n_letters, "Header 1".len() as u16); // Use actual length
         assert_eq!(header1.attr, 1); // Bold
 
         // Check header 2 - html2text might format differently than expected
         let header2 = formatting.iter().find(|s| s.row == 2).unwrap();
-        assert_eq!(header2.col, 0);
-        assert_eq!(header2.n_letters, "## Header 2".len() as u16); // Use actual length
+        assert_eq!(header2.col, 3);
+        assert_eq!(header2.n_letters, "Header 2".len() as u16); // Use actual length
         assert_eq!(header2.attr, 1); // Bold
     }
 
@@ -938,6 +1001,80 @@ mod tests {
         assert!(result.len() >= 2);
         assert!(result.iter().any(|l| l.trim().contains("Text with extra spaces")));
         assert!(result.iter().any(|l| l.trim().contains("Text with newlines and spaces")));
+    }
+
+    #[test]
+    fn test_italic_marker_stripping() {
+        let html = "<p>This is <em>italic</em> text.</p>";
+        let result = parse_html(html, Some(80), None, 0).unwrap();
+        
+        // Check that markers are stripped
+        assert_eq!(result.text_lines[0], "This is italic text.");
+        
+        // Check that formatting is preserved
+        assert_eq!(result.formatting.len(), 1);
+        let style = &result.formatting[0];
+        assert_eq!(style.attr, 2); // Italic
+        assert_eq!(style.row, 0);
+        assert_eq!(style.col, 8); // "This is " length is 8
+        assert_eq!(style.n_letters, 6); // "italic" length is 6
+    }
+
+    #[test]
+    fn test_italic_marker_stripping_whitespace_mismatch() {
+        let html = "<p>This is <em>italic  text</em> with extra space.</p>";
+        let result = parse_html(html, Some(80), None, 0).unwrap();
+        
+        // This assertion might fail if my hypothesis is correct
+        assert!(!result.text_lines[0].contains("*italic text*"));
+        assert_eq!(result.text_lines[0], "This is italic text with extra space.");
+        
+        // Check that formatting is preserved
+        assert_eq!(result.formatting.len(), 1);
+        let style = &result.formatting[0];
+        assert_eq!(style.attr, 2); // Italic
+    }
+
+    #[test]
+    fn test_italic_punctuation_and_headers() {
+        let html = r#"
+        <h1>Start <em>Meditations</em>, End</h1>
+        <p>Text <em>Meditations</em>, more text.</p>
+        "#;
+        let result = parse_html(html, Some(80), None, 0).unwrap();
+        
+        // Check header
+        // html2text likely produces "# Start *Meditations*, End" or similar
+        let header_line = result.text_lines.iter().find(|l| l.contains("Start")).unwrap();
+        assert!(!header_line.contains("*Meditations*"), "Header markers not stripped: {}", header_line);
+        
+        // Check paragraph
+        let p_line = result.text_lines.iter().find(|l| l.contains("Text")).unwrap();
+        assert!(!p_line.contains("*Meditations*"), "Paragraph markers not stripped: {}", p_line);
+    }
+
+    #[test]
+    fn test_meditations_comma_stripping() {
+        let html = "<p><em>Meditations</em>,</p>";
+        let result = parse_html(html, Some(80), None, 0).unwrap();
+        assert_eq!(result.text_lines[0], "Meditations,");
+        assert_eq!(result.formatting.len(), 1);
+    }
+
+    #[test]
+    fn test_internal_asterisk_not_stripped() {
+        let mut text_lines = vec!["O*REILLY".to_string()];
+        // Manually add formatting as if "REILLY" was italic (O*REILLY)
+        let mut formatting = vec![InlineStyle {
+            row: 0,
+            col: 2, // 'R' is at index 2
+            n_letters: 6,
+            attr: 2, // Italic
+        }];
+        
+        strip_inline_markers(&mut text_lines, &mut formatting, 0);
+        // It should NOT strip the '*' because it's preceded by 'O' (not boundary)
+        assert_eq!(text_lines[0], "O*REILLY");
     }
 }
 
