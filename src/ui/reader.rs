@@ -378,6 +378,26 @@ impl Reader {
         Ok(())
     }
 
+    fn persist_state(&mut self) -> eyre::Result<()> {
+        if let Some(epub) = self.ebook.as_ref() {
+            let reading_state = {
+                let state = self.state.borrow();
+                state.reading_state.clone()
+            };
+            let total_lines = self.board.total_lines();
+            let rel_pctg = if total_lines > 0 {
+                Some(reading_state.row as f32 / total_lines as f32)
+            } else {
+                None
+            };
+            let mut to_save = reading_state.clone();
+            to_save.rel_pctg = rel_pctg;
+            self.db_state.set_last_reading_state(epub, &to_save)?;
+            self.db_state.update_library(epub, rel_pctg)?;
+        }
+        Ok(())
+    }
+
     /// Run the main application loop
     pub fn run(&mut self) -> eyre::Result<()> {
         // Initialize terminal
@@ -435,22 +455,7 @@ impl Reader {
         }
 
         // Persist current reading state to the database before cleaning up
-        if let Some(epub) = self.ebook.as_ref() {
-            let reading_state = {
-                let state = self.state.borrow();
-                state.reading_state.clone()
-            };
-            let total_lines = self.board.total_lines();
-            let rel_pctg = if total_lines > 0 {
-                Some(reading_state.row as f32 / total_lines as f32)
-            } else {
-                None
-            };
-            let mut to_save = reading_state.clone();
-            to_save.rel_pctg = rel_pctg;
-            self.db_state.set_last_reading_state(epub, &to_save)?;
-            self.db_state.update_library(epub, rel_pctg)?;
-        }
+        self.persist_state()?;
 
         // Cleanup terminal
         self.terminal.clear()?;
@@ -2088,7 +2093,8 @@ impl Reader {
     fn change_padding(&mut self, delta: i32) -> eyre::Result<()> {
         let current_padding = self.state.borrow().reading_state.padding as i32;
         let new_padding = (current_padding + delta).max(0);
-        self.rebuild_text_structure(new_padding as usize)
+        self.rebuild_text_structure(new_padding as usize)?;
+        self.persist_state()
     }
 
     fn reset_width(&mut self) -> eyre::Result<()> {
@@ -2097,8 +2103,10 @@ impl Reader {
             Ok((w, _)) => w as usize,
             Err(_) => 100,
         };
+        // Calculate padding to achieve preferred width
         let padding = (term_width.saturating_sub(preferred_width) / 2).max(5);
-        self.rebuild_text_structure(padding)
+        self.rebuild_text_structure(padding)?;
+        self.persist_state()
     }
 
     fn adjust_padding(&mut self, delta_padding: i32) -> eyre::Result<()> {
