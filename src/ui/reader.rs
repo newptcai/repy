@@ -2013,6 +2013,21 @@ impl Reader {
     }
 
     fn rebuild_text_structure(&mut self, text_width: usize) -> eyre::Result<()> {
+        // Capture current position semantically to restore it after rebuild
+        let (current_chapter_idx, current_chapter_offset) = {
+            let row = self.state.borrow().reading_state.row;
+            if self.content_start_rows.is_empty() {
+                (0, 0)
+            } else {
+                let idx = match self.content_start_rows.binary_search(&row) {
+                    Ok(i) => i,
+                    Err(i) => i.saturating_sub(1),
+                };
+                let start = self.content_start_rows[idx];
+                (idx, row.saturating_sub(start))
+            }
+        };
+
         let page_height = self.chapter_break_page_height();
         let epub = match self.ebook.as_mut() {
             Some(epub) => epub,
@@ -2033,8 +2048,26 @@ impl Reader {
         }
         self.board.update_text_structure(combined_text_structure);
         self.content_start_rows = content_start_rows;
+
         let mut state = self.state.borrow_mut();
         state.reading_state.textwidth = text_width;
+
+        // Restore position based on semantic location
+        if !self.content_start_rows.is_empty() {
+            let idx = current_chapter_idx.min(self.content_start_rows.len().saturating_sub(1));
+            let start_row = self.content_start_rows[idx];
+            
+            // Calculate length of this chapter in new structure
+            let chapter_len = if idx + 1 < self.content_start_rows.len() {
+                self.content_start_rows[idx + 1] - start_row
+            } else {
+                 self.board.total_lines() - start_row
+            };
+            
+            let new_offset = current_chapter_offset.min(chapter_len.saturating_sub(1));
+            state.reading_state.row = start_row + new_offset;
+        }
+
         let total_lines = self.board.total_lines();
         if total_lines > 0 && state.reading_state.row >= total_lines {
             state.reading_state.row = total_lines - 1;
