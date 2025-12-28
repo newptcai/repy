@@ -1,7 +1,7 @@
 ## Development Guidelines
 - **Symlinks**: `AGENTS.md`, `GEMINI.md`, and `CLAUDE.md` are linked with symbolic links. Changing one is enough.
 - **Commits**: Commit frequently with small, focused changes.
-- **Testing**: Test-driven development for complex components.
+- **Testing**: Test-driven development for complex components. Always run `cargo test` after adding a new feature or fixing a bug to ensure code quality and prevent regressions.
 - **Cross-platform**: Maintain support for Linux, macOS, and Windows.
 - **Parity**: Preserve `epy` behavior while improving performance and code safety.
 - **Reference**: Initialize the `epy` submodule (`git submodule update --init --recursive`) to consult original Python code.
