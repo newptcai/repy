@@ -17,15 +17,18 @@ pub fn parse_html(
     let html_src = preprocess_inline_annotations(html_src);
     let html_src = preprocess_images(&html_src);
 
+    // Parse HTML once
+    let fragment = Html::parse_fragment(&html_src);
+
     // Convert HTML to plain text first
     let mut plain_text = html_to_plain_text(&html_src, text_width)?;
     replace_superscript_link_markers(&mut plain_text);
 
-    // Extract structure information
-    let image_maps = extract_images(&html_src, starting_line, &plain_text)?;
-    let section_rows = extract_sections(&html_src, &section_ids.unwrap_or_default(), starting_line, &plain_text)?;
-    let mut formatting = extract_formatting(&html_src, starting_line, &plain_text)?;
-    let links = extract_links(&html_src, starting_line, &plain_text)?;
+    // Extract structure information using the parsed fragment
+    let image_maps = extract_images(&fragment, starting_line, &plain_text)?;
+    let section_rows = extract_sections(&fragment, &section_ids.unwrap_or_default(), starting_line, &plain_text)?;
+    let mut formatting = extract_formatting(&fragment, starting_line, &plain_text)?;
+    let links = extract_links(&fragment, starting_line, &plain_text)?;
 
     strip_inline_markers(&mut plain_text, &mut formatting, starting_line);
 
@@ -75,9 +78,8 @@ fn html_to_plain_text(html: &str, width: usize) -> Result<Vec<String>> {
 }
 
 /// Extract image information from HTML and map to text lines
-fn extract_images(html: &str, starting_line: usize, text_lines: &[String]) -> Result<HashMap<usize, String>> {
+fn extract_images(fragment: &Html, starting_line: usize, text_lines: &[String]) -> Result<HashMap<usize, String>> {
     let mut images = HashMap::new();
-    let fragment = Html::parse_fragment(html);
     let img_selector = Selector::parse("img").unwrap();
     
     // Get all image sources in order
@@ -108,14 +110,12 @@ fn extract_images(html: &str, starting_line: usize, text_lines: &[String]) -> Re
 
 /// Extract section/anchor ids from HTML for TOC navigation and internal link jumps.
 fn extract_sections(
-    html: &str,
+    fragment: &Html,
     _section_ids: &HashSet<String>,
     starting_line: usize,
     text_lines: &[String],
 ) -> Result<HashMap<String, usize>> {
     let mut sections = HashMap::new();
-
-    let fragment = Html::parse_fragment(html);
 
     // Look for elements with id attributes that match our section IDs
     let id_selector = Selector::parse("*[id]").unwrap();
@@ -201,12 +201,11 @@ fn extract_sections(
 
 /// Extract basic formatting information (headers, bold, italic)
 fn extract_formatting(
-    html: &str,
+    fragment: &Html,
     starting_line: usize,
     text_lines: &[String],
 ) -> Result<Vec<InlineStyle>> {
     let mut formatting = Vec::new();
-    let fragment = Html::parse_fragment(html);
 
     // Helper to normalize whitespace (collapse multiple spaces/newlines to single space)
     let normalize_text = |text: String| -> String {
@@ -310,9 +309,8 @@ fn extract_formatting(
 
 /// Extract link metadata without injecting markers into the rendered text.
 /// We keep links as separate entries so reading flow stays unchanged; link UI uses these rows.
-fn extract_links(html: &str, starting_line: usize, text_lines: &[String]) -> Result<Vec<LinkEntry>> {
+fn extract_links(fragment: &Html, starting_line: usize, text_lines: &[String]) -> Result<Vec<LinkEntry>> {
     let mut links = Vec::new();
-    let fragment = Html::parse_fragment(html);
     let link_selector = Selector::parse("a[href]").unwrap();
     let sup_selector = Selector::parse("sup").unwrap();
     let mut sup_counter = 0usize;
@@ -584,11 +582,12 @@ mod tests {
     #[test]
     fn test_extract_images() {
         let html = r#"<p>Here's an image: <img src="test.jpg" alt="[Image: test.jpg]"></p>"#;
+        let fragment = Html::parse_fragment(html);
         // Mock text lines that html2text would produce
         let text_lines = vec![
             "Here's an image: [[Image: test.jpg]]".to_string()
         ];
-        let images = extract_images(html, 0, &text_lines).unwrap();
+        let images = extract_images(&fragment, 0, &text_lines).unwrap();
         assert_eq!(images.len(), 1);
         assert_eq!(images.get(&0), Some(&"test.jpg".to_string()));
     }
@@ -600,6 +599,7 @@ mod tests {
         <p>Second image: <img src="image2.png" alt="[Image: image2.png]"></p>
         <img src="image3.gif" alt="[Image: image3.gif]">
         "#;
+        let fragment = Html::parse_fragment(html);
         
         // Mock text lines
         let text_lines = vec![
@@ -608,7 +608,7 @@ mod tests {
             "[[Image: image3.gif]]".to_string(),
         ];
         
-        let images = extract_images(html, 5, &text_lines).unwrap();
+        let images = extract_images(&fragment, 5, &text_lines).unwrap();
         assert_eq!(images.len(), 3);
         assert_eq!(images.get(&5), Some(&"image1.jpg".to_string()));
         assert_eq!(images.get(&6), Some(&"image2.png".to_string()));
@@ -618,26 +618,29 @@ mod tests {
     #[test]
     fn test_extract_images_none() {
         let html = "<p>No images here.</p>";
+        let fragment = Html::parse_fragment(html);
         let text_lines = vec!["No images here.".to_string()];
-        let images = extract_images(html, 0, &text_lines).unwrap();
+        let images = extract_images(&fragment, 0, &text_lines).unwrap();
         assert_eq!(images.len(), 0);
     }
 
     #[test]
     fn test_extract_images_without_src() {
         let html = "<p><img alt=\"Image without src\"></p>";
+        let fragment = Html::parse_fragment(html);
         let text_lines = vec!["[[Image without src]]".to_string()];
-        let images = extract_images(html, 0, &text_lines).unwrap();
+        let images = extract_images(&fragment, 0, &text_lines).unwrap();
         assert_eq!(images.len(), 0);
     }
 
     #[test]
     fn test_extract_sections() {
         let html = r#"<h1 id="chapter1">Chapter 1</h1>"#;
+        let fragment = Html::parse_fragment(html);
         let mut section_ids = HashSet::new();
         section_ids.insert("chapter1".to_string());
         let text_lines = vec!["# Chapter 1".to_string()];
-        let sections = extract_sections(html, &section_ids, 0, &text_lines).unwrap();
+        let sections = extract_sections(&fragment, &section_ids, 0, &text_lines).unwrap();
         assert_eq!(sections.len(), 1);
         assert_eq!(sections.get("chapter1"), Some(&0));
     }
@@ -651,6 +654,7 @@ mod tests {
         <p>More content.</p>
         <div id="conclusion">Conclusion</div>
         "#;
+        let fragment = Html::parse_fragment(html);
         let mut section_ids = HashSet::new();
         section_ids.insert("intro".to_string());
         section_ids.insert("chapter1".to_string());
@@ -664,7 +668,7 @@ mod tests {
             "Conclusion".to_string(),
         ];
 
-        let sections = extract_sections(html, &section_ids, 0, &text_lines).unwrap();
+        let sections = extract_sections(&fragment, &section_ids, 0, &text_lines).unwrap();
         assert_eq!(sections.len(), 3);
         assert_eq!(sections.get("intro"), Some(&0));
         assert_eq!(sections.get("chapter1"), Some(&2));
@@ -674,9 +678,10 @@ mod tests {
     #[test]
     fn test_extract_sections_empty_section_ids() {
         let html = r#"<h1 id="chapter1">Chapter 1</h1>"#;
+        let fragment = Html::parse_fragment(html);
         let section_ids = HashSet::new();
         let text_lines = vec!["# Chapter 1".to_string()];
-        let sections = extract_sections(html, &section_ids, 0, &text_lines).unwrap();
+        let sections = extract_sections(&fragment, &section_ids, 0, &text_lines).unwrap();
         assert_eq!(sections.len(), 1);
         assert_eq!(sections.get("chapter1"), Some(&0));
     }
@@ -684,10 +689,11 @@ mod tests {
     #[test]
     fn test_extract_sections_no_matching_sections() {
         let html = r#"<h1 id="chapter1">Chapter 1</h1>"#;
+        let fragment = Html::parse_fragment(html);
         let mut section_ids = HashSet::new();
         section_ids.insert("nonexistent".to_string());
         let text_lines = vec!["# Chapter 1".to_string()];
-        let sections = extract_sections(html, &section_ids, 0, &text_lines).unwrap();
+        let sections = extract_sections(&fragment, &section_ids, 0, &text_lines).unwrap();
         assert_eq!(sections.len(), 1);
         assert_eq!(sections.get("chapter1"), Some(&0));
     }
@@ -695,8 +701,9 @@ mod tests {
     #[test]
     fn test_extract_formatting() {
         let html = "<p>This is <strong>bold</strong> and <em>italic</em>.</p>";
+        let fragment = Html::parse_fragment(html);
         let text_lines = vec!["This is **bold** and *italic*.".to_string()];
-        let formatting = extract_formatting(html, 0, &text_lines).unwrap();
+        let formatting = extract_formatting(&fragment, 0, &text_lines).unwrap();
         assert_eq!(formatting.len(), 2);
         assert!(formatting.iter().any(|s| s.n_letters == 4 && s.attr == 1)); // bold
         assert!(formatting.iter().any(|s| s.n_letters == 6 && s.attr == 2)); // italic
@@ -709,12 +716,13 @@ mod tests {
         <p>Paragraph content.</p>
         <h2>Header 2</h2>
         "#;
+        let fragment = Html::parse_fragment(html);
         let text_lines = vec![
             "# Header 1".to_string(),
             "Paragraph content.".to_string(),
             "## Header 2".to_string(),
         ];
-        let formatting = extract_formatting(html, 0, &text_lines).unwrap();
+        let formatting = extract_formatting(&fragment, 0, &text_lines).unwrap();
         assert_eq!(formatting.len(), 2);
 
         // Check header 1 - html2text might format differently than expected
@@ -733,16 +741,18 @@ mod tests {
     #[test]
     fn test_extract_formatting_no_matching_text() {
         let html = "<p>This has <strong>bold</strong> text.</p>";
+        let fragment = Html::parse_fragment(html);
         let text_lines = vec!["Completely different text content.".to_string()];
-        let formatting = extract_formatting(html, 0, &text_lines).unwrap();
+        let formatting = extract_formatting(&fragment, 0, &text_lines).unwrap();
         assert_eq!(formatting.len(), 0);
     }
 
     #[test]
     fn test_extract_formatting_no_html() {
         let html = "";
+        let fragment = Html::parse_fragment(html);
         let text_lines = vec!["Plain text content.".to_string()];
-        let formatting = extract_formatting(html, 0, &text_lines).unwrap();
+        let formatting = extract_formatting(&fragment, 0, &text_lines).unwrap();
         assert_eq!(formatting.len(), 0);
     }
 
@@ -976,8 +986,9 @@ mod tests {
     #[test]
     fn test_nested_formatting() {
         let html = "<p>This has <strong>nested <em>bold italic</em> text</strong>.</p>";
+        let fragment = Html::parse_fragment(html);
         let text_lines = vec!["This has **nested *bold italic* text**.".to_string()];
-        let formatting = extract_formatting(html, 0, &text_lines).unwrap();
+        let formatting = extract_formatting(&fragment, 0, &text_lines).unwrap();
 
         // Should extract at least one formatting element (the parser might not handle nested well)
         assert!(!formatting.is_empty());
