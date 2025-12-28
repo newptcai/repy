@@ -1,5 +1,4 @@
 use assert_cmd::Command;
-use predicates::prelude::*;
 
 #[test]
 fn test_image_handling_cli() {
@@ -17,7 +16,6 @@ fn test_image_handling_cli() {
 mod internal_tests {
     use repy::ebook::{Ebook, Epub};
     use repy::parser::parse_html;
-    use std::collections::HashSet;
 
     #[test]
     fn test_image_placeholder_centering() {
@@ -45,7 +43,7 @@ mod internal_tests {
         
         let mut image_path = String::new();
         // The first content in small.epub that has an image is likely the cover or title page
-        for (i, content) in all_content.iter().enumerate() {
+        for (_i, content) in all_content.iter().enumerate() {
             if !content.image_maps.is_empty() {
                 let raw_src = content.image_maps.values().next().unwrap().clone();
                 // small.epub specific: images are in EPUB/covers/ or EPUB/images/

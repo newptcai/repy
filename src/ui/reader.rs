@@ -1890,7 +1890,7 @@ impl Reader {
                         
                         std::fs::write(&temp_path, bytes)?;
                         
-                        self.open_external_link(&temp_path.to_string_lossy())?;
+                        self.open_image_viewer(&temp_path.to_string_lossy())?;
                         
                         let mut state = self.state.borrow_mut();
                         state.ui_state.set_message("Opened image".to_string(), MessageType::Info);
@@ -1904,6 +1904,34 @@ impl Reader {
             }
         }
         Ok(())
+    }
+
+    fn open_image_viewer(&self, path: &str) -> eyre::Result<bool> {
+        let config_viewer = {
+            let state = self.state.borrow();
+            state.config.settings.default_viewer.clone()
+        };
+
+        // Try feh first as requested, unless user configured something specific other than "auto"
+        let viewers_to_try = if config_viewer == "auto" {
+            vec!["feh", "xdg-open"]
+        } else {
+            vec![config_viewer.as_str(), "feh", "xdg-open"]
+        };
+
+        for viewer in viewers_to_try {
+            let status = std::process::Command::new(viewer)
+                .arg(path)
+                .status();
+            
+            if let Ok(status) = status {
+                if status.success() {
+                    return Ok(true);
+                }
+            }
+        }
+
+        Err(eyre::eyre!("Failed to open image with any available viewer"))
     }
 
     fn toggle_selected_setting(&mut self) -> eyre::Result<()> {

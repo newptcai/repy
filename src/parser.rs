@@ -939,8 +939,6 @@ mod tests {
         assert!(result.iter().any(|l| l.trim().contains("Text with extra spaces")));
         assert!(result.iter().any(|l| l.trim().contains("Text with newlines and spaces")));
     }
-
-    }
 }
 
 fn preprocess_images(html: &str) -> String {
