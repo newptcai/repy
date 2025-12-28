@@ -671,17 +671,17 @@ impl Reader {
                 state.ui_state.open_window(WindowType::Settings);
             }
             KeyCode::Char('+') => {
-                self.change_width(5)?;
+                self.change_padding(-5)?;
             }
             KeyCode::Char('=') => {
                 if key.modifiers.contains(KeyModifiers::SHIFT) {
-                    self.change_width(5)?;
+                    self.change_padding(-5)?;
                 } else {
                     self.reset_width()?;
                 }
             }
             KeyCode::Char('-') => {
-                self.change_width(-5)?;
+                self.change_padding(5)?;
             }
 
             _ => {}
@@ -968,10 +968,10 @@ impl Reader {
                 self.toggle_selected_setting()?;
             }
             KeyCode::Char('+') | KeyCode::Char('=') | KeyCode::Right => {
-                self.adjust_width(5)?;
+                self.adjust_padding(-5)?;
             }
             KeyCode::Char('-') | KeyCode::Left => {
-                self.adjust_width(-5)?;
+                self.adjust_padding(5)?;
             }
             _ => {}
         }
@@ -1071,7 +1071,7 @@ impl Reader {
         } else if state.ui_state.show_metadata {
             MetadataWindow::render(frame, frame.area(), state.ui_state.metadata.as_ref());
         } else if state.ui_state.show_settings {
-            let entries = Self::settings_entries(&state.config.settings);
+            let entries = Self::settings_entries(state);
             SettingsWindow::render(
                 frame,
                 frame.area(),
@@ -1123,7 +1123,8 @@ impl Reader {
         format!("{} {}: {}", reading_progress_str, last_read_str, book_name)
     }
 
-    fn settings_entries(settings: &crate::settings::Settings) -> Vec<String> {
+    fn settings_entries(state: &ApplicationState) -> Vec<String> {
+        let settings = &state.config.settings;
         SettingItem::all()
             .iter()
             .map(|item| match item {
@@ -1143,7 +1144,7 @@ impl Reader {
                 }
                 SettingItem::Width => format!(
                     "Padding: {}",
-                    settings.width.map(|_| state.borrow().reading_state.padding.to_string()).unwrap_or_else(|| "auto".to_string())
+                    settings.width.map(|_| state.reading_state.padding.to_string()).unwrap_or_else(|| "auto".to_string())
                 ),
             })
             .collect()
@@ -2076,17 +2077,9 @@ impl Reader {
         Ok(())
     }
 
-    fn change_width(&mut self, delta_width: i32) -> eyre::Result<()> {
+    fn change_padding(&mut self, delta: i32) -> eyre::Result<()> {
         let current_padding = self.state.borrow().reading_state.padding as i32;
-        
-        // If we want to INCREASE width (delta > 0), we DECREASE padding.
-        // If we want to DECREASE width (delta < 0), we INCREASE padding.
-        // delta is in terms of total width change. Since padding is on both sides,
-        // changing padding by X changes width by 2*X.
-        // To change width by approx delta, we change padding by -(delta / 2).
-        let padding_change = -(delta_width / 2);
-        
-        let new_padding = (current_padding + padding_change).max(0);
+        let new_padding = (current_padding + delta).max(0);
         self.rebuild_text_structure(new_padding as usize)
     }
 
@@ -2096,11 +2089,11 @@ impl Reader {
             Ok((w, _)) => w as usize,
             Err(_) => 100,
         };
-        let padding = term_width.saturating_sub(preferred_width) / 2;
+        let padding = (term_width.saturating_sub(preferred_width) / 2).max(5);
         self.rebuild_text_structure(padding)
     }
 
-    fn adjust_width(&mut self, delta: i32) -> eyre::Result<()> {
+    fn adjust_padding(&mut self, delta_padding: i32) -> eyre::Result<()> {
         let selected = {
             let state = self.state.borrow();
             SettingItem::all()
@@ -2110,7 +2103,7 @@ impl Reader {
         if selected != Some(SettingItem::Width) {
             return Ok(());
         }
-        self.change_width(delta)
+        self.change_padding(delta_padding)
     }
 
     fn rebuild_text_structure(&mut self, padding: usize) -> eyre::Result<()> {
