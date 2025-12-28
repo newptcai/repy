@@ -81,3 +81,9 @@ Example
     2. `feh` (if installed).
     3. The system default (`xdg-open`).
 - Relative paths for images are resolved against the content document path.
+
+### Page Width Adjustment
+- Users can dynamically adjust the text width using `+` and `-`.
+- `=` resets the width to the global default (default 80 columns).
+- The width preference is saved per-book in the database (`reading_states` table).
+- Manual adjustments are preserved even when resizing the terminal window.

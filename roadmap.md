@@ -43,7 +43,7 @@ The detailed roadmap below remains the source of truth for planned work.
     *   [x] Header bar (Implemented with title and status)
     *   [x] Minimal chrome
     *   [ ] Bottom Status Bar (Command echo, transient messages)
-    *   [x] Margins/padding (Automatic centering implemented)
+    *   [x] Margins/padding (Automatic centering and dynamic width adjustment implemented)
     *   [x] Image placeholder styling (Centered and descriptive)
     *   [x] Line numbers toggle
     *   [x] Help window parity
