@@ -1142,8 +1142,8 @@ impl Reader {
                     format!("Seamless between chapters: {}", settings.seamless_between_chapters)
                 }
                 SettingItem::Width => format!(
-                    "Text width: {}",
-                    settings.width.map(|w| w.to_string()).unwrap_or_else(|| "auto".to_string())
+                    "Padding: {}",
+                    settings.width.map(|_| state.borrow().reading_state.padding.to_string()).unwrap_or_else(|| "auto".to_string())
                 ),
             })
             .collect()

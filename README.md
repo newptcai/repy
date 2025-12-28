@@ -77,9 +77,9 @@ The database file is located next to the configuration file:
 
 Internally, the database contains three tables:
 
-- `reading_states` — last known position per book:
-  - `filepath`, `content_index`, `textwidth`, `row`, `rel_pctg`.
-- `library` — reading history and metadata:
+- `reading_states` Table: Stores the current position for each book.
+    - `filepath`, `content_index`, `padding`, `row`, `rel_pctg`.
+- `library` Table: Stores metadata and reading progress.
   - `filepath`, `last_read`, `title`, `author`, `reading_progress`.
 - `bookmarks` — named bookmarks per book:
   - `id`, `filepath`, `name`, plus a copy of the reading position fields.
