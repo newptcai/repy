@@ -1,7 +1,7 @@
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Style},
-    text::Line,
+    text::{Line, Span},
     widgets::{Block, Borders, Clear, List, ListItem, Padding, Paragraph, Wrap},
     Frame,
 };
@@ -19,12 +19,7 @@ impl LinksWindow {
         selected_index: usize,
         board: &Board,
     ) {
-        let popup_area = Rect::new(
-            area.x + area.width / 5,
-            area.y + area.height / 6,
-            area.width * 3 / 5,
-            area.height * 2 / 3,
-        );
+        let popup_area = Self::centered_popup_area(area, 60, 70);
 
         frame.render_widget(Clear, popup_area);
 
@@ -65,12 +60,27 @@ impl LinksWindow {
                 } else {
                     Style::default()
                 };
-                let label = if entry.label == entry.url {
+
+                let is_internal = entry.target_row.is_some() || !entry.url.contains("://");
+                
+                let label_text = if is_internal {
+                    entry.label.clone()
+                } else if entry.label == entry.url {
                     entry.url.clone()
                 } else {
-                    format!("{} -> {}", entry.label, entry.url)
+                    format!("{} ({})", entry.label, entry.url)
                 };
-                ListItem::new(Line::from(label)).style(style)
+
+                let line = if is_internal {
+                     Line::from(Span::raw(label_text))
+                } else {
+                     Line::from(vec![
+                         Span::raw(label_text),
+                         Span::styled(" ↗", Style::default().fg(Color::Yellow)),
+                     ])
+                };
+
+                ListItem::new(line).style(style)
             })
             .collect();
 
@@ -114,5 +124,14 @@ impl LinksWindow {
             .block(preview_block)
             .wrap(Wrap { trim: true });
         frame.render_widget(preview, preview_area);
+    }
+
+    fn centered_popup_area(area: Rect, width_percent: u16, height_percent: u16) -> Rect {
+        let width = (area.width * width_percent) / 100;
+        let height = (area.height * height_percent) / 100;
+        let x = area.x + (area.width - width) / 2;
+        let y = area.y + (area.height - height) / 2;
+
+        Rect::new(x, y, width, height)
     }
 }
