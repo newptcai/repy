@@ -17,7 +17,7 @@ use ratatui::{
 };
 
 use crate::config::Config;
-use crate::ebook::{Ebook, Epub};
+use crate::ebook::{build_chapter_break, Ebook, Epub};
 use crate::models::{
     BookMetadata, Direction as AppDirection, LibraryItem, LinkEntry, ReadingState, SearchData,
     TextStructure, TocEntry, WindowType,
@@ -269,6 +269,10 @@ pub struct Reader {
     clipboard: Clipboard,
     ebook: Option<Epub>,
     content_start_rows: Vec<usize>,
+    /// Per-chapter text structures for incremental rebuilds
+    chapter_text_structures: Vec<TextStructure>,
+    /// Text width used for the current chapter structures
+    current_text_width: Option<usize>,
 }
 
 impl Reader {
@@ -290,6 +294,8 @@ impl Reader {
             clipboard: Clipboard::new()?,
             ebook: None,
             content_start_rows: Vec::new(),
+            chapter_text_structures: Vec::new(),
+            current_text_width: None,
         })
     }
 
@@ -333,19 +339,23 @@ impl Reader {
         let page_height = self.chapter_break_page_height();
         let all_content = epub.get_all_parsed_content(text_width, page_height)?;
 
+        // Store per-chapter structures for incremental rebuilds
+        self.chapter_text_structures = all_content;
+        self.current_text_width = Some(text_width);
+
         let mut combined_text_structure = TextStructure::default();
-        let mut content_start_rows = Vec::with_capacity(all_content.len());
+        let mut content_start_rows = Vec::with_capacity(self.chapter_text_structures.len());
         let mut row_offset = 0;
-        for ts in all_content {
+        for ts in &self.chapter_text_structures {
             content_start_rows.push(row_offset);
             row_offset += ts.text_lines.len();
-            combined_text_structure.text_lines.extend(ts.text_lines);
-            combined_text_structure.image_maps.extend(ts.image_maps);
-            combined_text_structure.section_rows.extend(ts.section_rows);
-            combined_text_structure.formatting.extend(ts.formatting);
-            combined_text_structure.links.extend(ts.links);
+            combined_text_structure.text_lines.extend(ts.text_lines.clone());
+            combined_text_structure.image_maps.extend(ts.image_maps.clone());
+            combined_text_structure.section_rows.extend(ts.section_rows.clone());
+            combined_text_structure.formatting.extend(ts.formatting.clone());
+            combined_text_structure.links.extend(ts.links.clone());
         }
-    
+
         self.board.update_text_structure(combined_text_structure);
         self.ebook = Some(epub);
         self.content_start_rows = content_start_rows;
@@ -2146,23 +2156,61 @@ impl Reader {
         // Calculate text width from padding
         let text_width = term_width.saturating_sub(padding * 2).max(20).min(term_width);
 
+        // Collect page_height before any mutable borrows
         let page_height = self.chapter_break_page_height();
+
         let epub = match self.ebook.as_mut() {
             Some(epub) => epub,
             None => return Ok(()),
         };
-        let all_content = epub.get_all_parsed_content(text_width, page_height)?;
+
+        // Check if we need to rebuild or if width is the same
+        let needs_rebuild = self.current_text_width != Some(text_width);
+
+        if needs_rebuild {
+            // Only re-parse the current chapter for performance
+            let contents = epub.contents();
+            let total_chapters = contents.len();
+
+            if current_chapter_idx < self.chapter_text_structures.len() && current_chapter_idx < total_chapters {
+                // Clone content_id to avoid holding immutable borrow across mutable call
+                let content_id = contents[current_chapter_idx].clone();
+                let starting_line = if current_chapter_idx > 0 {
+                    self.content_start_rows[current_chapter_idx]
+                } else {
+                    0
+                };
+
+                // Parse only the current chapter with new width
+                let mut parsed_chapter = epub.get_parsed_content(&content_id, text_width, starting_line)?;
+
+                // Add chapter break if needed
+                if let Some(ph) = page_height {
+                    if current_chapter_idx + 1 < total_chapters {
+                        let total_lines = starting_line + parsed_chapter.text_lines.len();
+                        let break_lines = build_chapter_break(ph, total_lines);
+                        parsed_chapter.text_lines.extend(break_lines);
+                    }
+                }
+
+                // Update the cached structure for this chapter
+                self.chapter_text_structures[current_chapter_idx] = parsed_chapter;
+                self.current_text_width = Some(text_width);
+            }
+        }
+
+        // Rebuild combined structure from cached chapter structures
         let mut combined_text_structure = TextStructure::default();
-        let mut content_start_rows = Vec::with_capacity(all_content.len());
+        let mut content_start_rows = Vec::with_capacity(self.chapter_text_structures.len());
         let mut row_offset = 0;
-        for ts in all_content {
+        for ts in &self.chapter_text_structures {
             content_start_rows.push(row_offset);
             row_offset += ts.text_lines.len();
-            combined_text_structure.text_lines.extend(ts.text_lines);
-            combined_text_structure.image_maps.extend(ts.image_maps);
-            combined_text_structure.section_rows.extend(ts.section_rows);
-            combined_text_structure.formatting.extend(ts.formatting);
-            combined_text_structure.links.extend(ts.links);
+            combined_text_structure.text_lines.extend(ts.text_lines.clone());
+            combined_text_structure.image_maps.extend(ts.image_maps.clone());
+            combined_text_structure.section_rows.extend(ts.section_rows.clone());
+            combined_text_structure.formatting.extend(ts.formatting.clone());
+            combined_text_structure.links.extend(ts.links.clone());
         }
         self.board.update_text_structure(combined_text_structure);
         self.content_start_rows = content_start_rows;
@@ -2174,14 +2222,14 @@ impl Reader {
         if !self.content_start_rows.is_empty() {
             let idx = current_chapter_idx.min(self.content_start_rows.len().saturating_sub(1));
             let start_row = self.content_start_rows[idx];
-            
+
             // Calculate length of this chapter in new structure
             let chapter_len = if idx + 1 < self.content_start_rows.len() {
                 self.content_start_rows[idx + 1] - start_row
             } else {
                  self.board.total_lines() - start_row
             };
-            
+
             let new_offset = current_chapter_offset.min(chapter_len.saturating_sub(1));
             state.reading_state.row = start_row + new_offset;
         }

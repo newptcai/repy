@@ -248,7 +248,7 @@ impl Ebook for Epub {
     }
 }
 
-fn build_chapter_break(page_height: usize, total_lines: usize) -> Vec<String> {
+pub fn build_chapter_break(page_height: usize, total_lines: usize) -> Vec<String> {
     let mut lines = Vec::new();
     lines.push(String::new());
     lines.push(CHAPTER_BREAK_MARKER.to_string());
