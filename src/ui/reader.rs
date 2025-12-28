@@ -1486,11 +1486,15 @@ impl Reader {
         let current_row = self.state.borrow().reading_state.row;
         let index = Self::current_chapter_index(&rows, current_row);
         let total_lines = self.board.total_lines();
-        let end_row = if index + 1 < rows.len() {
-            rows[index + 1].saturating_sub(1)
+
+        // Find the actual last content line by skipping chapter break padding
+        let next_chapter_start = if index + 1 < rows.len() {
+            rows[index + 1]
         } else {
-            total_lines.saturating_sub(1)
+            total_lines
         };
+
+        let end_row = self.find_chapter_end(rows[index], next_chapter_start);
         self.record_jump_position();
         let mut state = self.state.borrow_mut();
         state.reading_state.row = end_row;
@@ -1503,6 +1507,33 @@ impl Reader {
         if total_lines > 0 {
             state.reading_state.row = total_lines - 1;
         }
+    }
+
+    /// Find the actual last content line of a chapter by searching backwards
+    /// from the next chapter start, skipping chapter break padding.
+    fn find_chapter_end(&self, chapter_start: usize, next_chapter_start: usize) -> usize {
+        use crate::models::CHAPTER_BREAK_MARKER;
+
+        // If next chapter starts immediately after current one, there's no padding
+        if next_chapter_start <= chapter_start {
+            return chapter_start;
+        }
+
+        // Search backwards from the line before next chapter starts
+        let mut row = next_chapter_start.saturating_sub(1);
+
+        while row > chapter_start {
+            if let Some(line) = self.board.get_line(row) {
+                // Skip empty lines and chapter break markers
+                if !line.is_empty() && line != CHAPTER_BREAK_MARKER {
+                    return row;
+                }
+            }
+            row = row.saturating_sub(1);
+        }
+
+        // Fallback to chapter start if nothing found
+        chapter_start
     }
 
     fn page_size(&self) -> usize {
@@ -1565,17 +1596,20 @@ impl Reader {
     }
 
     fn chapter_rows(&self) -> Vec<usize> {
-        let section_rows = match self.board.section_rows() {
-            Some(section_rows) => section_rows,
-            None => return Vec::new(),
-        };
+        let section_rows = self.board.section_rows();
         let state = self.state.borrow();
         let mut rows = Vec::new();
         for entry in &state.ui_state.toc_entries {
+            // First try to use section ID if available
             if let Some(section) = entry.section.as_ref() {
-                if let Some(row) = section_rows.get(section) {
-                    rows.push(*row);
+                if let Some(section_rows) = section_rows {
+                    if let Some(row) = section_rows.get(section) {
+                        rows.push(*row);
+                    }
                 }
+            } else if entry.content_index < self.content_start_rows.len() {
+                // Fall back to using content file index
+                rows.push(self.content_start_rows[entry.content_index]);
             }
         }
         rows.sort_unstable();
