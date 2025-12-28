@@ -54,6 +54,7 @@ pub struct Settings {
     pub tts_engine_args: Vec<String>,
     pub width: Option<usize>,
     pub show_line_numbers: bool,
+    pub show_top_bar: bool,
 }
 
 impl Settings {
@@ -79,6 +80,7 @@ impl Settings {
         }
         self.width = other.width;
         self.show_line_numbers = other.show_line_numbers;
+        self.show_top_bar = other.show_top_bar;
     }
 }
 
@@ -103,6 +105,7 @@ impl Default for Settings {
             tts_engine_args: Vec::new(),
             width: None,
             show_line_numbers: false,
+            show_top_bar: true,
         }
     }
 }

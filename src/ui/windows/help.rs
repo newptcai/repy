@@ -35,6 +35,7 @@ impl HelpWindow {
             Line::from(" Display:"),
             Line::from("   + / -       Increase/Decrease Width"),
             Line::from("   =           Reset Width"),
+            Line::from("   T           Toggle Top Bar"),
             Line::from(""),
             Line::from(" Windows & Tools:"),
             Line::from("   /  Search"),

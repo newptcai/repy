@@ -244,6 +244,7 @@ enum SettingItem {
     StartWithDoubleSpread,
     SeamlessBetweenChapters,
     Width,
+    ShowTopBar,
 }
 
 impl SettingItem {
@@ -256,6 +257,7 @@ impl SettingItem {
             SettingItem::StartWithDoubleSpread,
             SettingItem::SeamlessBetweenChapters,
             SettingItem::Width,
+            SettingItem::ShowTopBar,
         ]
     }
 }
@@ -684,6 +686,10 @@ impl Reader {
                 let mut state = self.state.borrow_mut();
                 state.ui_state.settings_selected_index = 0;
                 state.ui_state.open_window(WindowType::Settings);
+            }
+            KeyCode::Char('T') => {
+                let mut state = self.state.borrow_mut();
+                state.config.settings.show_top_bar = !state.config.settings.show_top_bar;
             }
             KeyCode::Char('+') => {
                 self.change_padding(-5)?;
@@ -1161,6 +1167,7 @@ impl Reader {
                     "Padding: {}",
                     settings.width.map(|_| state.reading_state.padding.to_string()).unwrap_or_else(|| "auto".to_string())
                 ),
+                SettingItem::ShowTopBar => format!("Show top bar: {}", settings.show_top_bar),
             })
             .collect()
     }
@@ -1191,27 +1198,39 @@ impl Reader {
             .and_then(|meta| meta.title.as_deref())
             .unwrap_or("repy");
 
-        let chunks = Layout::default()
-            .direction(ratatui::layout::Direction::Vertical)
-            .constraints([
-                Constraint::Length(1), // Header
-                Constraint::Min(0),    // Main content
-            ])
-            .split(frame_area);
+        let (chunks, header_height) = if state.config.settings.show_top_bar {
+            let chunks = Layout::default()
+                .direction(ratatui::layout::Direction::Vertical)
+                .constraints([
+                    Constraint::Length(1), // Header
+                    Constraint::Min(0),    // Main content
+                ])
+                .split(frame_area);
+            (chunks, 1)
+        } else {
+            let chunks = Layout::default()
+                .direction(ratatui::layout::Direction::Vertical)
+                .constraints([
+                    Constraint::Min(0),    // Main content (no header)
+                ])
+                .split(frame_area);
+            (chunks, 0)
+        };
 
         // Main content area with centered margins
         // Calculate desired width from padding
         let padding = state.reading_state.padding;
-        let available_width = chunks[1].width as usize;
+        let content_chunk_index = if header_height > 0 { 1 } else { 0 };
+        let available_width = chunks[content_chunk_index].width as usize;
         let desired_width = available_width.saturating_sub(padding * 2).max(20) as u16;
         
-        let content_width = desired_width.min(chunks[1].width);
-        let left_pad = (chunks[1].width.saturating_sub(content_width)) / 2;
+        let content_width = desired_width.min(chunks[content_chunk_index].width);
+        let left_pad = (chunks[content_chunk_index].width.saturating_sub(content_width)) / 2;
         let content_area = Rect {
-            x: chunks[1].x + left_pad,
-            y: chunks[1].y,
+            x: chunks[content_chunk_index].x + left_pad,
+            y: chunks[content_chunk_index].y,
             width: content_width,
-            height: chunks[1].height,
+            height: chunks[content_chunk_index].height,
         };
 
         // Link handling: keep main text untouched; show a subtle header hint only when the page has
@@ -1230,9 +1249,11 @@ impl Reader {
             (None, Some(percent_text)) => Some(percent_text),
             (None, None) => None,
         };
-        let header_line = Self::build_header_line(title, right_text.as_deref(), chunks[0].width);
-        let header = Paragraph::new(Line::from(header_line));
-        frame.render_widget(header, chunks[0]);
+        if state.config.settings.show_top_bar {
+            let header_line = Self::build_header_line(title, right_text.as_deref(), chunks[0].width);
+            let header = Paragraph::new(Line::from(header_line));
+            frame.render_widget(header, chunks[0]);
+        }
 
         board.render(frame, content_area, state, Some(content_start_rows));
     }
@@ -2089,6 +2110,9 @@ impl Reader {
                 let padding = (term_width.saturating_sub(preferred_width) / 2).max(5);
                 self.rebuild_text_structure(padding)?;
                 return Ok(());
+            }
+            SettingItem::ShowTopBar => {
+                state.config.settings.show_top_bar = !state.config.settings.show_top_bar;
             }
         }
         if rebuild_chapter_breaks {
