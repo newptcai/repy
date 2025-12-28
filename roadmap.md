@@ -24,6 +24,15 @@ What is *not* done yet (high level):
 
 The detailed roadmap below remains the source of truth for planned work.
 
+## Bugs to Fix
+
+### Italic and Bold Text
+
+Currently, when HTML is converted to text (Markdown),
+* or ** marks are added to indicate italic and bold text.
+However, if the opening and closing marks are on different lines,
+repy is not displaying them correctly.
+
 ## Roadmap
 
 ### Phase 1: Core Infrastructure (COMPLETED ✅)
