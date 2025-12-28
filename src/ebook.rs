@@ -2,7 +2,7 @@ use crate::models::{BookMetadata, TextStructure, TocEntry, CHAPTER_BREAK_MARKER}
 use crate::parser::parse_html;
 use eyre::Result;
 use epub::doc::{EpubDoc, NavPoint};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 pub trait Ebook {
@@ -26,6 +26,7 @@ pub struct Epub {
     contents: Vec<String>,
     toc: Vec<TocEntry>,
     metadata: BookMetadata,
+    raw_text_cache: HashMap<String, String>,
 }
 
 impl Epub {
@@ -36,6 +37,7 @@ impl Epub {
             contents: Vec::new(),
             toc: Vec::new(),
             metadata: BookMetadata::default(),
+            raw_text_cache: HashMap::new(),
         }
     }
 
@@ -175,10 +177,15 @@ impl Ebook for Epub {
     }
 
     fn get_raw_text(&mut self, content_id: &str) -> Result<String> {
+        if let Some(content) = self.raw_text_cache.get(content_id) {
+            return Ok(content.clone());
+        }
+
         if let Some(ref mut doc) = self.doc {
             if let Some(index) = self.contents.iter().position(|id| id == content_id) {
                 if doc.set_current_chapter(index) {
                     if let Some((content, _)) = doc.get_current_str() {
+                        self.raw_text_cache.insert(content_id.to_string(), content.clone());
                         return Ok(content);
                     }
                 }
