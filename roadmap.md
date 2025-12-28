@@ -9,7 +9,7 @@ Concise roadmap for the Rust port of `epy`.
 - In-TUI library/history window with selection and deletion is wired into the reader (`src/ui/reader.rs`, `src/ui/windows/library.rs`).
 - On quit, the current book position and progress are persisted; on startup with no arguments, the last-read book is reopened if available (`src/ui/reader.rs`, `src/main.rs`).
 - Jump history navigation (Ctrl+o / Ctrl+i) is implemented.
-- Footnote handling is robust (correct jumping and backlink filtering).
+- Footnote handling is robust (correct jumping, backlink filtering, and contextual preview in the links window).
 - SQLite is fully managed from Rust with `rusqlite`’s `bundled` feature, so no system `libsqlite3` is required (`Cargo.toml`).
 - A user-facing `README.md` documents configuration, database paths, and basic usage.
 
@@ -69,6 +69,8 @@ The detailed roadmap below remains the source of truth for planned work.
     *   [ ] **Dictionary Integration**: Multiple dictionary engines (sdcv, dict, etc.)
     *   [ ] **Image Viewer Integration**: Cross-platform image display
     *   [x] **URL Handling**: Internal anchor jumps, footnotes, and external link opening
+    *   [x] **Link Preview**: Contextual preview of internal links/footnotes in the links window
+    *   [x] **Footnote Formatting**: User-friendly display of footnote labels (e.g., "Footnote 2")
     *   [ ] **Export Functionality**: Text and highlighted content export
 
 13. **Utilities (`src/utils.rs`):**
