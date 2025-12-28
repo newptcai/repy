@@ -37,7 +37,7 @@ impl State {
             CREATE TABLE IF NOT EXISTS reading_states (
                 filepath TEXT PRIMARY KEY,
                 content_index INTEGER,
-                padding INTEGER DEFAULT 0,
+                textwidth INTEGER DEFAULT 80,
                 row INTEGER,
                 rel_pctg REAL
             );
@@ -57,7 +57,7 @@ impl State {
                 filepath TEXT,
                 name TEXT,
                 content_index INTEGER,
-                padding INTEGER DEFAULT 0,
+                textwidth INTEGER DEFAULT 80,
                 row INTEGER,
                 rel_pctg REAL,
                 FOREIGN KEY (filepath) REFERENCES reading_states(filepath)
@@ -66,10 +66,10 @@ impl State {
             ",
         )?;
 
-        // Migration: Attempt to add padding column if it doesn't exist (e.g. upgrading from textwidth schema)
+        // Migration: Attempt to add textwidth column if it doesn't exist
         // We ignore errors here which would happen if the column already exists
-        let _ = conn.execute("ALTER TABLE reading_states ADD COLUMN padding INTEGER DEFAULT 0", []);
-        let _ = conn.execute("ALTER TABLE bookmarks ADD COLUMN padding INTEGER DEFAULT 0", []);
+        let _ = conn.execute("ALTER TABLE reading_states ADD COLUMN textwidth INTEGER DEFAULT 80", []);
+        let _ = conn.execute("ALTER TABLE bookmarks ADD COLUMN textwidth INTEGER DEFAULT 80", []);
 
         Ok(())
     }
@@ -111,11 +111,11 @@ impl State {
     }
 
     pub fn get_last_reading_state(&self, ebook: &dyn crate::ebook::Ebook) -> Result<ReadingState> {
-        let mut stmt = self.conn.prepare("SELECT content_index, padding, row, rel_pctg FROM reading_states WHERE filepath=?")?;
+        let mut stmt = self.conn.prepare("SELECT content_index, textwidth, row, rel_pctg FROM reading_states WHERE filepath=?")?;
         let result = stmt.query_row(params![ebook.path()], |row| {
             Ok(ReadingState {
                 content_index: row.get(0)?,
-                padding: row.get(1)?,
+                textwidth: row.get(1)?,
                 row: row.get(2)?,
                 rel_pctg: row.get(3)?,
                 section: None,
@@ -126,7 +126,7 @@ impl State {
             Ok(reading_state) => Ok(reading_state),
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(ReadingState {
                 content_index: 0,
-                padding: 5,
+                textwidth: 80,
                 row: 0,
                 rel_pctg: None,
                 section: None,
@@ -136,15 +136,12 @@ impl State {
     }
 
     pub fn set_last_reading_state(&self, ebook: &dyn crate::ebook::Ebook, reading_state: &ReadingState) -> Result<()> {
-        // Note: we don't write textwidth anymore, but if the column exists in old DBs it will be null or default
-        // We use INSERT OR REPLACE which might clear textwidth if it was a PK, but filepath is PK.
-        // It simply replaces the row.
         self.conn.execute(
-            "INSERT OR REPLACE INTO reading_states (filepath, content_index, padding, row, rel_pctg) VALUES (?, ?, ?, ?, ?)",
+            "INSERT OR REPLACE INTO reading_states (filepath, content_index, textwidth, row, rel_pctg) VALUES (?, ?, ?, ?, ?)",
             params![
                 ebook.path(),
                 reading_state.content_index,
-                reading_state.padding,
+                reading_state.textwidth,
                 reading_state.row,
                 reading_state.rel_pctg,
             ],
@@ -160,13 +157,13 @@ impl State {
         let id = &hex::encode(hash)[..10];
 
         self.conn.execute(
-            "INSERT INTO bookmarks (id, filepath, name, content_index, padding, row, rel_pctg) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO bookmarks (id, filepath, name, content_index, textwidth, row, rel_pctg) VALUES (?, ?, ?, ?, ?, ?, ?)",
             params![
                 id,
                 ebook.path(),
                 name,
                 reading_state.content_index,
-                reading_state.padding,
+                reading_state.textwidth,
                 reading_state.row,
                 reading_state.rel_pctg,
             ],
@@ -183,13 +180,13 @@ impl State {
     }
 
     pub fn get_bookmarks(&self, ebook: &dyn crate::ebook::Ebook) -> Result<Vec<(String, ReadingState)>> {
-        let mut stmt = self.conn.prepare("SELECT name, content_index, padding, row, rel_pctg FROM bookmarks WHERE filepath=?")?;
+        let mut stmt = self.conn.prepare("SELECT name, content_index, textwidth, row, rel_pctg FROM bookmarks WHERE filepath=?")?;
         let bookmarks_iter = stmt.query_map(params![ebook.path()], |row| {
             Ok((
                 row.get(0)?,
                 ReadingState {
                     content_index: row.get(1)?,
-                    padding: row.get(2)?,
+                    textwidth: row.get(2)?,
                     row: row.get(3)?,
                     rel_pctg: row.get(4)?,
                     section: None,
@@ -311,7 +308,7 @@ mod tests {
         // Create a test state by manually opening a connection
         let conn = Connection::open(&db_path).unwrap();
 
-        // Initialize the database with padding schema
+        // Initialize the database with textwidth schema
         conn.execute_batch(
             "
             PRAGMA foreign_keys = ON;
@@ -319,7 +316,7 @@ mod tests {
             CREATE TABLE IF NOT EXISTS reading_states (
                 filepath TEXT PRIMARY KEY,
                 content_index INTEGER,
-                padding INTEGER DEFAULT 0,
+                textwidth INTEGER DEFAULT 80,
                 row INTEGER,
                 rel_pctg REAL
             );
@@ -339,7 +336,7 @@ mod tests {
                 filepath TEXT,
                 name TEXT,
                 content_index INTEGER,
-                padding INTEGER DEFAULT 0,
+                textwidth INTEGER DEFAULT 80,
                 row INTEGER,
                 rel_pctg REAL,
                 FOREIGN KEY (filepath) REFERENCES reading_states(filepath)
@@ -364,12 +361,12 @@ mod tests {
         State::init_db(&conn).unwrap();
         assert!(db_path.exists());
         
-        // Verify padding column exists
+        // Verify textwidth column exists
         let mut stmt = conn.prepare("PRAGMA table_info(reading_states)").unwrap();
         let columns: Vec<String> = stmt.query_map([], |row| row.get(1)).unwrap()
             .map(|r| r.unwrap())
             .collect();
-        assert!(columns.contains(&"padding".to_string()));
+        assert!(columns.contains(&"textwidth".to_string()));
     }
 
     #[test]
@@ -388,7 +385,7 @@ mod tests {
 
         let default_state = ReadingState {
             content_index: 0,
-            padding: 5,
+            textwidth: 80,
             row: 0,
             rel_pctg: None,
             section: None,
@@ -437,13 +434,13 @@ mod tests {
 
         let reading_state = state.get_last_reading_state(&ebook).unwrap();
         assert_eq!(reading_state.content_index, 0);
-        assert_eq!(reading_state.padding, 5);
+        assert_eq!(reading_state.textwidth, 80);
         assert_eq!(reading_state.row, 0);
         assert_eq!(reading_state.rel_pctg, None);
 
         let new_state = ReadingState {
             content_index: 5,
-            padding: 10,
+            textwidth: 80,
             row: 42,
             rel_pctg: Some(0.678),
             section: None,
@@ -452,14 +449,14 @@ mod tests {
 
         let retrieved_state = state.get_last_reading_state(&ebook).unwrap();
         assert_eq!(retrieved_state.content_index, 5);
-        assert_eq!(retrieved_state.padding, 10);
+        assert_eq!(retrieved_state.textwidth, 80);
         assert_eq!(retrieved_state.row, 42);
         assert_eq!(retrieved_state.rel_pctg, Some(0.678));
         assert_eq!(retrieved_state.section, None);
 
         let updated_state = ReadingState {
             content_index: 10,
-            padding: 20,
+            textwidth: 80,
             row: 100,
             rel_pctg: Some(0.890),
             section: None,
@@ -468,7 +465,7 @@ mod tests {
 
         let final_state = state.get_last_reading_state(&ebook).unwrap();
         assert_eq!(final_state.content_index, 10);
-        assert_eq!(final_state.padding, 20);
+        assert_eq!(final_state.textwidth, 80);
         assert_eq!(final_state.row, 100);
         assert_eq!(final_state.rel_pctg, Some(0.890));
     }
@@ -483,7 +480,7 @@ mod tests {
 
         let initial_state = ReadingState {
             content_index: 0,
-            padding: 0,
+            textwidth: 80,
             row: 0,
             rel_pctg: None,
             section: None,
@@ -492,14 +489,14 @@ mod tests {
 
         let state1 = ReadingState {
             content_index: 2,
-            padding: 5,
+            textwidth: 80,
             row: 15,
             rel_pctg: Some(0.2),
             section: None,
         };
         let state2 = ReadingState {
             content_index: 5,
-            padding: 10,
+            textwidth: 80,
             row: 42,
             rel_pctg: Some(0.5),
             section: None,
@@ -519,13 +516,13 @@ mod tests {
 
         let (_, state1_retrieved) = chapter1_bookmark.unwrap();
         assert_eq!(state1_retrieved.content_index, 2);
-        assert_eq!(state1_retrieved.padding, 5);
+        assert_eq!(state1_retrieved.textwidth, 80);
         assert_eq!(state1_retrieved.row, 15);
         assert_eq!(state1_retrieved.rel_pctg, Some(0.2));
 
         let (_, state2_retrieved) = chapter2_bookmark.unwrap();
         assert_eq!(state2_retrieved.content_index, 5);
-        assert_eq!(state2_retrieved.padding, 10);
+        assert_eq!(state2_retrieved.textwidth, 80);
         assert_eq!(state2_retrieved.row, 42);
         assert_eq!(state2_retrieved.rel_pctg, Some(0.5));
 
@@ -543,7 +540,7 @@ mod tests {
 
         let reading_state = ReadingState {
             content_index: 1,
-            padding: 5,
+            textwidth: 80,
             row: 10,
             rel_pctg: None,
             section: None,
@@ -551,7 +548,7 @@ mod tests {
 
         let default_state = ReadingState {
             content_index: 0,
-            padding: 0,
+            textwidth: 80,
             row: 0,
             rel_pctg: None,
             section: None,
@@ -582,7 +579,7 @@ mod tests {
 
         let reading_state = ReadingState {
             content_index: 1,
-            padding: 5,
+            textwidth: 80,
             row: 10,
             rel_pctg: Some(0.1),
             section: None,
@@ -630,7 +627,7 @@ mod tests {
 
         let default_state = ReadingState {
             content_index: 0,
-            padding: 0,
+            textwidth: 80,
             row: 0,
             rel_pctg: None,
             section: None,
@@ -657,7 +654,7 @@ mod tests {
 
         let state1 = ReadingState {
             content_index: 1,
-            padding: 5,
+            textwidth: 80,
             row: 10,
             rel_pctg: Some(0.1),
             section: None,
@@ -666,7 +663,7 @@ mod tests {
 
         let state2 = ReadingState {
             content_index: 5,
-            padding: 10,
+            textwidth: 80,
             row: 50,
             rel_pctg: Some(0.5),
             section: None,
@@ -675,7 +672,7 @@ mod tests {
 
         let final_state = state.get_last_reading_state(&ebook).unwrap();
         assert_eq!(final_state.content_index, 5);
-        assert_eq!(final_state.padding, 10);
+        assert_eq!(final_state.textwidth, 80);
         assert_eq!(final_state.row, 50);
         assert_eq!(final_state.rel_pctg, Some(0.5));
     }
@@ -688,9 +685,9 @@ mod tests {
         let ebook2 = MockEbook::new("/path/to/book2.epub", "Book 2", "Author 2");
         let ebook3 = MockEbook::new("/path/to/book3.epub", "Book 3", "Author 3");
 
-        let state1 = ReadingState { content_index: 1, padding: 5, row: 10, rel_pctg: Some(0.1), section: None };
-        let state2 = ReadingState { content_index: 2, padding: 5, row: 20, rel_pctg: Some(0.2), section: None };
-        let state3 = ReadingState { content_index: 3, padding: 5, row: 30, rel_pctg: Some(0.3), section: None };
+        let state1 = ReadingState { content_index: 1, textwidth: 80, row: 10, rel_pctg: Some(0.1), section: None };
+        let state2 = ReadingState { content_index: 2, textwidth: 80, row: 20, rel_pctg: Some(0.2), section: None };
+        let state3 = ReadingState { content_index: 3, textwidth: 80, row: 30, rel_pctg: Some(0.3), section: None };
 
         state.set_last_reading_state(&ebook1, &state1).unwrap();
         state.set_last_reading_state(&ebook2, &state2).unwrap();

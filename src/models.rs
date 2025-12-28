@@ -75,7 +75,7 @@ pub struct LibraryItem {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ReadingState {
     pub content_index: usize,
-    pub padding: usize,
+    pub textwidth: usize,
     pub row: usize,
     pub rel_pctg: Option<f32>,
     pub section: Option<String>,
@@ -85,7 +85,7 @@ impl Default for ReadingState {
     fn default() -> Self {
         Self {
             content_index: 0,
-            padding: 5,
+            textwidth: 80,
             row: 0,
             rel_pctg: None,
             section: None,
@@ -247,7 +247,7 @@ mod tests {
     fn test_reading_state_default() {
         let state = ReadingState::default();
         assert_eq!(state.content_index, 0);
-        assert_eq!(state.padding, 5);
+        assert_eq!(state.textwidth, 80);
         assert_eq!(state.row, 0);
         assert_eq!(state.rel_pctg, None);
         assert_eq!(state.section, None);
@@ -257,14 +257,14 @@ mod tests {
     fn test_reading_state_with_values() {
         let state = ReadingState {
             content_index: 5,
-            padding: 10,
+            textwidth: 80,
             row: 100,
             rel_pctg: Some(0.75),
             section: Some("chapter-2".to_string()),
         };
 
         assert_eq!(state.content_index, 5);
-        assert_eq!(state.padding, 10);
+        assert_eq!(state.textwidth, 80);
         assert_eq!(state.row, 100);
         assert_eq!(state.rel_pctg, Some(0.75));
         assert_eq!(state.section, Some("chapter-2".to_string()));
