@@ -119,10 +119,17 @@ impl LinksWindow {
             if let Some(target_row) = entry.target_row {
                 for i in 0..8 {
                     if let Some(line) = board.get_line(target_row + i) {
-                        if !preview_text.is_empty() {
-                            preview_text.push('\n');
+                        let trimmed = line.trim();
+                        if trimmed.is_empty() {
+                            if !preview_text.is_empty() && !preview_text.ends_with("\n\n") {
+                                preview_text.push_str("\n\n");
+                            }
+                        } else {
+                            if !preview_text.is_empty() && !preview_text.ends_with('\n') {
+                                preview_text.push(' ');
+                            }
+                            preview_text.push_str(trimmed);
                         }
-                        preview_text.push_str(line);
                     }
                 }
             } else {
