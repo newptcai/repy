@@ -2,7 +2,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, List, ListItem, Padding, Paragraph, Wrap},
+    widgets::{Block, Borders, Clear, List, ListItem, ListState, Padding, Paragraph, Wrap},
     Frame,
 };
 
@@ -92,7 +92,11 @@ impl LinksWindow {
             .collect();
 
         let list = List::new(items).block(block);
-        frame.render_widget(list, list_area);
+        
+        let mut state = ListState::default();
+        state.select(Some(selected_index));
+        
+        frame.render_stateful_widget(list, list_area, &mut state);
 
         // Status line in list area
         let status_area = Rect::new(
