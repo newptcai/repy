@@ -1332,9 +1332,39 @@ impl Reader {
         } else {
             Vec::new()
         };
+
+        let current_row = self.state.borrow().reading_state.row;
+        let mut selected_index = 0;
+
+        for (i, entry) in toc_entries.iter().enumerate() {
+            let mut target_row = None;
+
+            // Try to resolve row from section ID
+            if let Some(section_id) = &entry.section {
+                if let Some(section_rows) = self.board.section_rows() {
+                    if let Some(row) = section_rows.get(section_id) {
+                        target_row = Some(*row);
+                    }
+                }
+            }
+
+            // Fallback to content index
+            if target_row.is_none() {
+                if let Some(row) = self.content_start_rows.get(entry.content_index) {
+                    target_row = Some(*row);
+                }
+            }
+
+            if let Some(row) = target_row {
+                if row <= current_row {
+                    selected_index = i;
+                }
+            }
+        }
+
         let mut state = self.state.borrow_mut();
         state.ui_state.toc_entries = toc_entries;
-        state.ui_state.toc_selected_index = 0;
+        state.ui_state.toc_selected_index = selected_index;
         state.ui_state.open_window(WindowType::Toc);
         Ok(())
     }
