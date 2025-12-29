@@ -62,8 +62,23 @@ impl TocWindow {
             lines.push(Line::from(Span::styled(content, style)));
         }
 
+        // Calculate scroll offset to keep selected item in view (centered if possible)
+        let inner_height = popup_area.height.saturating_sub(2) as usize;
+        let visual_selection_index = selected_index + 1; // +1 for the title line
+        let total_lines = lines.len();
+
+        let scroll_offset = if total_lines <= inner_height {
+            0
+        } else {
+            // Try to center the selection
+            let target_top = visual_selection_index.saturating_sub(inner_height / 2);
+            let max_scroll = total_lines.saturating_sub(inner_height);
+            target_top.min(max_scroll)
+        };
+
         let paragraph = Paragraph::new(lines)
-            .block(Block::default().title("Table of Contents").borders(Borders::ALL));
+            .block(Block::default().title("Table of Contents").borders(Borders::ALL))
+            .scroll((scroll_offset as u16, 0));
 
         frame.render_widget(paragraph, popup_area);
     }
