@@ -49,7 +49,7 @@ impl LinksWindow {
         let block = Block::default()
             .title("Links")
             .borders(Borders::ALL)
-            .padding(Padding::horizontal(1));
+            .padding(Padding::new(1, 1, 0, 1));
 
         let items: Vec<ListItem> = entries
             .iter()
