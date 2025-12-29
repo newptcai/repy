@@ -591,12 +591,12 @@ impl Reader {
             }
 
             // Page navigation
-            KeyCode::PageDown | KeyCode::Char(' ') | KeyCode::Char('f') => {
+            KeyCode::PageDown | KeyCode::Char(' ') => {
                 for _ in 0..repeat_count {
                     self.move_cursor(AppDirection::PageDown);
                 }
             }
-            KeyCode::PageUp | KeyCode::Char('b') => {
+            KeyCode::PageUp => {
                 for _ in 0..repeat_count {
                     self.move_cursor(AppDirection::PageUp);
                 }
