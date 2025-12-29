@@ -273,38 +273,163 @@ fn extract_formatting(
             high_water_mark
         };
 
+
+
         // Search for text
-        let mut matched = None;
+        if let Some(segments) = find_text_across_lines(&text, text_lines, start_line, start_col) {
+            let mut first_start = None;
+            let mut last_end = None;
 
-        for line_idx in start_line..text_lines.len() {
-            let line = &text_lines[line_idx];
-            let search_start_col = if line_idx == start_line { start_col } else { 0 };
+            for (line_idx, start, end) in segments {
+                formatting.push(InlineStyle {
+                    row: (starting_line + line_idx) as u16,
+                    col: start as u16,
+                    n_letters: (end - start) as u16,
+                    attr,
+                });
 
-            if search_start_col >= line.len() {
-                continue;
+                if first_start.is_none() {
+                    first_start = Some((line_idx, start));
+                }
+                last_end = Some((line_idx, end));
             }
 
-            if let Some(pos) = line[search_start_col..].find(&text) {
-                let abs_col = search_start_col + pos;
-                matched = Some((line_idx, abs_col));
-                break;
+            if let (Some(s), Some(e)) = (first_start, last_end) {
+                stack.push((element.id(), s, e));
             }
-        }
-
-        if let Some((row, col)) = matched {
-            formatting.push(InlineStyle {
-                row: (starting_line + row) as u16,
-                col: col as u16,
-                n_letters: text.len() as u16,
-                attr,
-            });
-
-            let end_col = col + text.len();
-            stack.push((element.id(), (row, col), (row, end_col)));
         }
     }
 
     Ok(formatting)
+}
+
+fn find_text_across_lines(
+    text_normalized: &str,
+    text_lines: &[String],
+    start_line: usize,
+    start_col: usize,
+) -> Option<Vec<(usize, usize, usize)>> {
+    let tokens: Vec<&str> = text_normalized.split_whitespace().collect();
+    if tokens.is_empty() {
+        return None;
+    }
+
+    // Try to find the sequence of tokens starting from different positions of the first token
+    for line_idx in start_line..text_lines.len() {
+        let line = &text_lines[line_idx];
+        let search_start = if line_idx == start_line { start_col } else { 0 };
+        
+        if search_start >= line.len() {
+            continue;
+        }
+
+        let first_token = tokens[0];
+        let mut start_search_pos = search_start;
+
+        while let Some(pos) = line[start_search_pos..].find(first_token) {
+            let abs_pos = start_search_pos + pos;
+
+            if let Some(segments) = match_sequence(&tokens, text_lines, line_idx, abs_pos) {
+                return Some(segments);
+            }
+            
+            if let Some(c) = line[abs_pos..].chars().next() {
+                start_search_pos = abs_pos + c.len_utf8();
+            } else {
+                break;
+            }
+        }
+    }
+
+    None
+}
+
+fn match_sequence(
+    tokens: &[&str],
+    text_lines: &[String],
+    start_line: usize,
+    start_col: usize,
+) -> Option<Vec<(usize, usize, usize)>> {
+    let mut segments = Vec::new();
+    let mut current_line_idx = start_line;
+    let mut current_pos = start_col + tokens[0].len();
+
+    let mut current_segment_start = start_col;
+
+    for token in tokens.iter().skip(1) {
+        let line = &text_lines[current_line_idx];
+
+        let lookahead_limit = 20;
+        let search_slice = safe_slice(line, current_pos, lookahead_limit);
+
+        if let Some(rel_pos) = search_slice.find(token) {
+            // Found on same line
+            // Check gap
+            let gap = &line[current_pos..current_pos + rel_pos];
+            if is_valid_gap(gap) {
+                current_pos += rel_pos + token.len();
+                continue;
+            }
+        }
+
+        // Not found on same line (or gap invalid).
+        // Check next line
+        let remaining = &line[current_pos..];
+        if is_valid_gap(remaining) {
+            // Close current segment
+            // Trim trailing markers/whitespace from segment end?
+            // current_pos includes up to the end of the last matched token.
+            // But we checked remaining is valid gap.
+            segments.push((current_line_idx, current_segment_start, current_pos));
+
+            // Move to next line
+            current_line_idx += 1;
+            if current_line_idx >= text_lines.len() {
+                return None; // Ran out of lines but tokens remain
+            }
+
+            // Start new segment
+            // Find `token` in new line.
+            // It should be at the beginning, possibly after markers/whitespace.
+            let line = &text_lines[current_line_idx];
+            let lookahead_limit = 20;
+            let search_slice = safe_slice(line, 0, lookahead_limit);
+
+            if let Some(pos) = search_slice.find(token) {
+                let prefix = &line[..pos];
+                if is_valid_gap(prefix) {
+                    current_segment_start = pos;
+                    current_pos = pos + token.len();
+                    continue;
+                }
+            }
+            
+            return None;
+        } else {
+             return None;
+        }
+    }
+
+    segments.push((current_line_idx, current_segment_start, current_pos));
+    Some(segments)
+}
+
+fn safe_slice(s: &str, start: usize, len: usize) -> &str {
+    if start >= s.len() {
+        return "";
+    }
+    let mut end = (start + len).min(s.len());
+    while !s.is_char_boundary(end) {
+        end += 1;
+    }
+    &s[start..end]
+}
+
+fn is_valid_gap(gap: &str) -> bool {
+    // Gap can contain whitespace, *, [, ], (, ), punctuation?
+    // Usually just spaces.
+    // And for line transitions: **, *
+    gap.chars().all(|c| c.is_whitespace() || c == '*' || c == '[' || c == ']')
 }
 
 /// Extract link metadata without injecting markers into the rendered text.
