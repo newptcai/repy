@@ -70,6 +70,18 @@ repy --debug     # Enable debug output
 
 Note: `-r` (history) and `--dump` options are defined but not yet implemented.
 
+### Search
+
+Search functionality supports regular expressions.
+
+- **Start Search**: Press `/` to open the search input.
+- **Navigation**:
+  - `Enter`: Jump to the selected result (or the first one if freshly searching).
+  - `n`: Jump to the next search hit.
+  - `N`: Jump to the previous search hit.
+- **Clear Highlights**: There is no dedicated key to clear highlights. A workaround is to press `/` to start a new search (which clears existing highlights) and then `Esc` to cancel.
+- **Current Hit**: All matching text is highlighted in yellow. When navigating with `n`/`N`, the view jumps to the line containing the match, but the "current" hit is not visually distinguished from other matches on the screen.
+
 ## Keybindings
 
 Press `?` in the TUI to see the help window at any time.
