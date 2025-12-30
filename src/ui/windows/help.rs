@@ -8,7 +8,7 @@ use ratatui::{
 pub struct HelpWindow;
 
 impl HelpWindow {
-    pub fn render(frame: &mut Frame, area: Rect) {
+    pub fn render(frame: &mut Frame, area: Rect, scroll_offset: u16) {
         let help_content = vec![
             Line::from(" Key Bindings:"),
             Line::from("   k / Up            Line Up"),
@@ -26,15 +26,17 @@ impl HelpWindow {
             Line::from("   Ctrl+o            Jump Back"),
             Line::from("   Ctrl+i/Tab        Jump Forward"),
             Line::from(""),
+            Line::from(" Search:"),
+            Line::from("   /                 Start Search"),
+            Line::from("   n                 Next Hit"),
+            Line::from("   p / N             Previous Hit"),
+            Line::from(""),
             Line::from(" Display:"),
             Line::from("   + / -             Increase/Decrease Width"),
             Line::from("   =                 Reset Width"),
             Line::from("   T                 Toggle Top Bar"),
             Line::from(""),
             Line::from(" Windows & Tools:"),
-            Line::from("   /                 Search"),
-            Line::from("   n                 Search Next"),
-            Line::from("   p / N             Search Prev"),
             Line::from("   v                 Visual Mode (Select & Yank)"),
             Line::from("   t                 Table Of Contents"),
             Line::from("   m                 Bookmarks"),
@@ -58,7 +60,8 @@ impl HelpWindow {
         frame.render_widget(Clear, popup_area);
 
         let help_paragraph = Paragraph::new(help_content)
-            .block(Block::default().title("Help").borders(Borders::ALL));
+            .block(Block::default().title("Help").borders(Borders::ALL))
+            .scroll((scroll_offset, 0));
 
         frame.render_widget(help_paragraph, popup_area);
     }

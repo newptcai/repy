@@ -143,6 +143,7 @@ pub struct UiState {
     pub message: Option<String>,
     pub message_type: MessageType,
     pub selection_start: Option<usize>,
+    pub help_scroll_offset: u16,
 }
 
 impl UiState {
@@ -177,6 +178,7 @@ impl UiState {
             message: None,
             message_type: MessageType::Info,
             selection_start: None,
+            help_scroll_offset: 0,
         }
     }
 
@@ -204,7 +206,10 @@ impl UiState {
                 self.show_settings = false;
                 self.selection_start = None;
             }
-            WindowType::Help => self.show_help = true,
+            WindowType::Help => {
+                self.show_help = true;
+                self.help_scroll_offset = 0;
+            }
             WindowType::Toc => self.show_toc = true,
             WindowType::Bookmarks => self.show_bookmarks = true,
             WindowType::Library => self.show_library = true,
@@ -541,7 +546,8 @@ impl Reader {
             WindowType::Settings => self.handle_settings_mode_keys(key, repeat_count)?,
             WindowType::Links => self.handle_links_mode_keys(key, repeat_count)?,
             WindowType::Images => self.handle_images_mode_keys(key, repeat_count)?,
-            WindowType::Help | WindowType::Metadata => self.handle_modal_close_keys(key)?,
+            WindowType::Help => self.handle_help_mode_keys(key, repeat_count)?,
+            WindowType::Metadata => self.handle_modal_close_keys(key)?,
             _ => self.handle_normal_mode_keys(key, repeat_count)?,
         }
 
@@ -1015,6 +1021,27 @@ impl Reader {
         Ok(())
     }
 
+    fn handle_help_mode_keys(&mut self, key: KeyEvent, repeat_count: u32) -> eyre::Result<()> {
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('q') | KeyCode::Enter => {
+                let mut state = self.state.borrow_mut();
+                state.ui_state.open_window(WindowType::Reader);
+            }
+            KeyCode::Char('j') | KeyCode::Down => {
+                let mut state = self.state.borrow_mut();
+                state.ui_state.help_scroll_offset =
+                    state.ui_state.help_scroll_offset.saturating_add(repeat_count as u16);
+            }
+            KeyCode::Char('k') | KeyCode::Up => {
+                let mut state = self.state.borrow_mut();
+                state.ui_state.help_scroll_offset =
+                    state.ui_state.help_scroll_offset.saturating_sub(repeat_count as u16);
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
     fn handle_modal_close_keys(&mut self, key: KeyEvent) -> eyre::Result<()> {
         match key.code {
             KeyCode::Esc | KeyCode::Char('q') | KeyCode::Enter => {
@@ -1038,7 +1065,7 @@ impl Reader {
 
         // Render overlays/modals if active
         if state.ui_state.show_help {
-            HelpWindow::render(frame, frame.area());
+            HelpWindow::render(frame, frame.area(), state.ui_state.help_scroll_offset);
         } else if state.ui_state.show_toc {
             TocWindow::render(
                 frame,
