@@ -7,47 +7,53 @@ use ratatui::{
 
 pub struct HelpWindow;
 
+const HELP_TEXT: &[&str] = &[
+    " Key Bindings:",
+    "   k / Up            Line Up",
+    "   j / Down          Line Down",
+    "   h / Left          Page Up",
+    "   l / Right / Space Page Down",
+    "   L                 Next Chapter",
+    "   H                 Prev Chapter",
+    "   g                 Chapter Start",
+    "   G                 Chapter End",
+    "   Home              Book Start",
+    "   End               Book End",
+    "",
+    " Jump History:",
+    "   Ctrl+o            Jump Back",
+    "   Ctrl+i/Tab        Jump Forward",
+    "",
+    " Search:",
+    "   /                 Start Search",
+    "   n                 Next Hit",
+    "   p / N             Previous Hit",
+    "",
+    " Display:",
+    "   + / -             Increase/Decrease Width",
+    "   =                 Reset Width",
+    "   T                 Toggle Top Bar",
+    "",
+    " Windows & Tools:",
+    "   v                 Visual Mode (Select & Yank)",
+    "   t                 Table Of Contents",
+    "   m                 Bookmarks",
+    "   u                 Links on Page",
+    "   o                 Images on Page",
+    "   i                 Metadata",
+    "   r                 Library (History)",
+    "   s                 Settings",
+    "   q                 Quit / Close Window",
+    "   ?                 Help",
+];
+
 impl HelpWindow {
+    pub fn get_total_lines() -> usize {
+        HELP_TEXT.len()
+    }
+
     pub fn render(frame: &mut Frame, area: Rect, scroll_offset: u16) {
-        let help_content = vec![
-            Line::from(" Key Bindings:"),
-            Line::from("   k / Up            Line Up"),
-            Line::from("   j / Down          Line Down"),
-            Line::from("   h / Left          Page Up"),
-            Line::from("   l / Right / Space Page Down"),
-            Line::from("   L                 Next Chapter"),
-            Line::from("   H                 Prev Chapter"),
-            Line::from("   g                 Chapter Start"),
-            Line::from("   G                 Chapter End"),
-            Line::from("   Home              Book Start"),
-            Line::from("   End               Book End"),
-            Line::from(""),
-            Line::from(" Jump History:"),
-            Line::from("   Ctrl+o            Jump Back"),
-            Line::from("   Ctrl+i/Tab        Jump Forward"),
-            Line::from(""),
-            Line::from(" Search:"),
-            Line::from("   /                 Start Search"),
-            Line::from("   n                 Next Hit"),
-            Line::from("   p / N             Previous Hit"),
-            Line::from(""),
-            Line::from(" Display:"),
-            Line::from("   + / -             Increase/Decrease Width"),
-            Line::from("   =                 Reset Width"),
-            Line::from("   T                 Toggle Top Bar"),
-            Line::from(""),
-            Line::from(" Windows & Tools:"),
-            Line::from("   v                 Visual Mode (Select & Yank)"),
-            Line::from("   t                 Table Of Contents"),
-            Line::from("   m                 Bookmarks"),
-            Line::from("   u                 Links on Page"),
-            Line::from("   o                 Images on Page"),
-            Line::from("   i                 Metadata"),
-            Line::from("   r                 Library (History)"),
-            Line::from("   s                 Settings"),
-            Line::from("   q                 Quit / Close Window"),
-            Line::from("   ?                 Help"),
-        ];
+        let help_content: Vec<Line> = HELP_TEXT.iter().map(|&s| Line::from(s)).collect();
 
         let max_width = help_content.iter().map(|l| l.width()).max().unwrap_or(0) as u16;
         let width = (max_width + 4).min(area.width);

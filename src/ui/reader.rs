@@ -1028,9 +1028,13 @@ impl Reader {
                 state.ui_state.open_window(WindowType::Reader);
             }
             KeyCode::Char('j') | KeyCode::Down => {
+                let max_offset = HelpWindow::get_total_lines().saturating_sub(1) as u16;
                 let mut state = self.state.borrow_mut();
-                state.ui_state.help_scroll_offset =
-                    state.ui_state.help_scroll_offset.saturating_add(repeat_count as u16);
+                state.ui_state.help_scroll_offset = state
+                    .ui_state
+                    .help_scroll_offset
+                    .saturating_add(repeat_count as u16)
+                    .min(max_offset);
             }
             KeyCode::Char('k') | KeyCode::Up => {
                 let mut state = self.state.borrow_mut();
