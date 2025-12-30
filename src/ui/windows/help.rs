@@ -33,6 +33,8 @@ impl HelpWindow {
             Line::from(""),
             Line::from(" Windows & Tools:"),
             Line::from("   /                 Search"),
+            Line::from("   n                 Search Next"),
+            Line::from("   p / N             Search Prev"),
             Line::from("   v                 Visual Mode (Select & Yank)"),
             Line::from("   t                 Table Of Contents"),
             Line::from("   m                 Bookmarks"),

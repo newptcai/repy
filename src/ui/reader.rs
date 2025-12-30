@@ -619,6 +619,8 @@ impl Reader {
             KeyCode::Char('p') => {
                 if key.modifiers.contains(KeyModifiers::CONTROL) {
                     self.previous_chapter();
+                } else {
+                    self.search_previous();
                 }
             }
             KeyCode::Char('N') => {
