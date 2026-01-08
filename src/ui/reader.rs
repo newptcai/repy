@@ -146,6 +146,12 @@ pub struct UiState {
     pub help_scroll_offset: u16,
 }
 
+impl Default for UiState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl UiState {
     pub fn new() -> Self {
         Self {
@@ -308,10 +314,9 @@ impl Reader {
 
     /// Load the most recently read ebook, if any, using the database
     pub fn load_last_ebook_if_any(&mut self) -> eyre::Result<()> {
-        if let Some(filepath) = self.db_state.get_last_read()? {
-            if std::path::Path::new(&filepath).exists() {
+        if let Some(filepath) = self.db_state.get_last_read()?
+            && std::path::Path::new(&filepath).exists() {
                 self.load_ebook(&filepath)?;
-            }
         }
         Ok(())
     }
@@ -511,14 +516,13 @@ impl Reader {
         }
 
         // Handle count prefix (number repetition)
-        if let KeyCode::Char(c) = key.code {
-            if c.is_ascii_digit() {
+        if let KeyCode::Char(c) = key.code
+            && c.is_ascii_digit() {
                 let mut state = self.state.borrow_mut();
                 if state.count_prefix.len() < 6 {
                     state.count_prefix.push(c);
                 }
                 return Ok(());
-            }
         }
 
         // Determine repetition count
@@ -1065,7 +1069,7 @@ impl Reader {
         content_start_rows: &[usize],
     ) {
         // Main reader view
-        Self::render_reader_static(frame, &state, board, content_start_rows);
+        Self::render_reader_static(frame, state, board, content_start_rows);
 
         // Render overlays/modals if active
         if state.ui_state.show_help {
@@ -1373,25 +1377,21 @@ impl Reader {
             let mut target_row = None;
 
             // Try to resolve row from section ID
-            if let Some(section_id) = &entry.section {
-                if let Some(section_rows) = self.board.section_rows() {
-                    if let Some(row) = section_rows.get(section_id) {
-                        target_row = Some(*row);
-                    }
-                }
+            if let Some(section_id) = &entry.section
+                && let Some(section_rows) = self.board.section_rows()
+                && let Some(row) = section_rows.get(section_id) {
+                    target_row = Some(*row);
             }
 
             // Fallback to content index
-            if target_row.is_none() {
-                if let Some(row) = self.content_start_rows.get(entry.content_index) {
+            if target_row.is_none()
+                && let Some(row) = self.content_start_rows.get(entry.content_index) {
                     target_row = Some(*row);
-                }
             }
 
-            if let Some(row) = target_row {
-                if row <= current_row {
+            if let Some(row) = target_row
+                && row <= current_row {
                     selected_index = i;
-                }
             }
         }
 
@@ -1509,66 +1509,61 @@ impl Reader {
                 }
             }
             AppDirection::PageUp => {
-                if !seamless {
-                    if let Some(index) = self.content_index_for_row(current_row) {
-                        if let Some((chapter_start, _chapter_end)) = self.chapter_bounds_for_index(index) {
-                            let current_start = current_row.saturating_sub(1);
-                            if current_start <= chapter_start {
-                                if index > 0 {
-                                    if let Some((prev_start, prev_end)) = self.chapter_bounds_for_index(index - 1) {
-                                        let last_start = prev_end
-                                            .saturating_sub(page.saturating_sub(1))
-                                            .max(prev_start);
-                                        state.reading_state.row = Self::row_from_start(last_start);
-                                        return;
-                                    }
-                                }
-                                state.reading_state.row = Self::row_from_start(chapter_start);
-                                return;
+                if !seamless
+                    && let Some(index) = self.content_index_for_row(current_row)
+                    && let Some((chapter_start, _chapter_end)) = self.chapter_bounds_for_index(index) {
+                        let current_start = current_row.saturating_sub(1);
+                        if current_start <= chapter_start {
+                            if index > 0
+                                && let Some((prev_start, prev_end)) = self.chapter_bounds_for_index(index - 1) {
+                                    let last_start = prev_end
+                                        .saturating_sub(page.saturating_sub(1))
+                                        .max(prev_start);
+                                    state.reading_state.row = Self::row_from_start(last_start);
+                                    return;
                             }
-
-                            let new_start = current_start.saturating_sub(page);
-                            let clamped = if new_start < chapter_start {
-                                chapter_start
-                            } else {
-                                new_start
-                            };
-                            state.reading_state.row = Self::row_from_start(clamped);
+                            state.reading_state.row = Self::row_from_start(chapter_start);
                             return;
                         }
-                    }
+
+                        let new_start = current_start.saturating_sub(page);
+                        let clamped = if new_start < chapter_start {
+                            chapter_start
+                        } else {
+                            new_start
+                        };
+                        state.reading_state.row = Self::row_from_start(clamped);
+                        return;
                 }
                 state.reading_state.row = current_row.saturating_sub(page);
             }
             AppDirection::PageDown => {
-                if !seamless {
-                    if let Some(index) = self.content_index_for_row(current_row) {
-                        if let Some((chapter_start, chapter_end)) = self.chapter_bounds_for_index(index) {
-                            let current_start = current_row.saturating_sub(1);
-                            let last_start = chapter_end
-                                .saturating_sub(page.saturating_sub(1))
-                                .max(chapter_start);
-                            if current_start >= last_start {
-                                if let Some(next_start) = self.content_start_rows.get(index + 1).copied() {
-                                    state.reading_state.row = Self::row_from_start(
-                                        next_start.min(total_lines.saturating_sub(1)),
-                                    );
-                                    return;
-                                }
-                                state.reading_state.row = Self::row_from_start(last_start);
+                if !seamless
+                    && let Some(index) = self.content_index_for_row(current_row)
+                    && let Some((chapter_start, chapter_end)) = self.chapter_bounds_for_index(index) {
+                        let current_start = current_row.saturating_sub(1);
+                        let last_start = chapter_end
+                            .saturating_sub(page.saturating_sub(1))
+                            .max(chapter_start);
+                        if current_start >= last_start {
+                            if let Some(next_start) = self.content_start_rows.get(index + 1).copied() {
+                                state.reading_state.row = Self::row_from_start(
+                                    next_start.min(total_lines.saturating_sub(1)),
+                                );
                                 return;
                             }
-
-                            let new_start = current_start.saturating_add(page);
-                            let clamped = if new_start > last_start {
-                                last_start
-                            } else {
-                                new_start
-                            };
-                            state.reading_state.row = Self::row_from_start(clamped);
+                            state.reading_state.row = Self::row_from_start(last_start);
                             return;
                         }
-                    }
+
+                        let new_start = current_start.saturating_add(page);
+                        let clamped = if new_start > last_start {
+                            last_start
+                        } else {
+                            new_start
+                        };
+                        state.reading_state.row = Self::row_from_start(clamped);
+                        return;
                 }
                 let next = current_row.saturating_add(page);
                 state.reading_state.row = next.min(total_lines.saturating_sub(1));
@@ -1763,10 +1758,9 @@ impl Reader {
         for entry in &state.ui_state.toc_entries {
             // First try to use section ID if available
             if let Some(section) = entry.section.as_ref() {
-                if let Some(section_rows) = section_rows {
-                    if let Some(row) = section_rows.get(section) {
+                if let Some(section_rows) = section_rows
+                    && let Some(row) = section_rows.get(section) {
                         rows.push(*row);
-                    }
                 }
             } else if entry.content_index < self.content_start_rows.len() {
                 // Fall back to using content file index
@@ -1903,18 +1897,15 @@ impl Reader {
         };
 
         let mut target_row = None;
-        if let Some(section_id) = section.as_ref() {
-            if let Some(section_rows) = self.board.section_rows() {
-                if let Some(row) = section_rows.get(section_id) {
-                    target_row = Some(*row);
-                }
-            }
+        if let Some(section_id) = section.as_ref()
+            && let Some(section_rows) = self.board.section_rows()
+            && let Some(row) = section_rows.get(section_id) {
+                target_row = Some(*row);
         }
 
-        if target_row.is_none() {
-            if let Some(row) = self.content_start_rows.get(content_index) {
+        if target_row.is_none()
+            && let Some(row) = self.content_start_rows.get(content_index) {
                 target_row = Some(*row);
-            }
         }
 
         if let Some(row) = target_row {
@@ -2054,8 +2045,8 @@ impl Reader {
                 .map(|(_, src)| src.clone())
         };
 
-        if let Some(src) = image_src {
-            if let Some(epub) = self.ebook.as_mut() {
+        if let Some(src) = image_src
+            && let Some(epub) = self.ebook.as_mut() {
                 // Resolve relative path
                 let current_index = self.state.borrow().reading_state.content_index;
                 let base_path = epub.resource_path_for_content_index(current_index);
@@ -2097,7 +2088,6 @@ impl Reader {
                     }
                 }
             }
-        }
         Ok(())
     }
 
@@ -2119,10 +2109,9 @@ impl Reader {
                 .arg(path)
                 .status();
             
-            if let Ok(status) = status {
-                if status.success() {
+            if let Ok(status) = status
+                && status.success() {
                     return Ok(true);
-                }
             }
         }
 
@@ -2284,12 +2273,11 @@ impl Reader {
                 let mut parsed_chapter = epub.get_parsed_content(&content_id, text_width, starting_line)?;
 
                 // Add chapter break if needed
-                if let Some(ph) = page_height {
-                    if current_chapter_idx + 1 < total_chapters {
+                if let Some(ph) = page_height
+                    && current_chapter_idx + 1 < total_chapters {
                         let total_lines = starting_line + parsed_chapter.text_lines.len();
                         let break_lines = build_chapter_break(ph, total_lines);
                         parsed_chapter.text_lines.extend(break_lines);
-                    }
                 }
 
                 // Update the cached structure for this chapter
@@ -2448,13 +2436,12 @@ impl Reader {
         };
 
         let mut has_fragment = false;
-        if let Some(fragment) = fragment {
-            if !fragment.is_empty() {
+        if let Some(fragment) = fragment
+            && !fragment.is_empty() {
                 has_fragment = true;
                 if let Some(row) = self.resolve_anchor_row(fragment) {
                     return Some(row);
                 }
-            }
         }
 
         if let Some(epub) = self.ebook.as_ref() {
@@ -2468,8 +2455,8 @@ impl Reader {
                 return self.content_start_rows.get(content_index).copied();
             }
 
-            if let Some(resolved_path) = Self::resolve_relative_href(path, base_content) {
-                if let Some(content_index) = epub.content_index_for_href(&resolved_path) {
+            if let Some(resolved_path) = Self::resolve_relative_href(path, base_content)
+                && let Some(content_index) = epub.content_index_for_href(&resolved_path) {
                     if has_fragment {
                         let current_index = self.state.borrow().reading_state.content_index;
                         if content_index == current_index {
@@ -2477,7 +2464,6 @@ impl Reader {
                         }
                     }
                     return self.content_start_rows.get(content_index).copied();
-                }
             }
         }
 

@@ -204,13 +204,12 @@ impl Board {
             };
 
             let mut style = base_style;
-            if let Some(ranges) = search_ranges {
-                if ranges
+            if let Some(ranges) = search_ranges
+                && ranges
                     .iter()
                     .any(|(range_start, range_end)| start >= *range_start && end <= *range_end)
-                {
-                    style = style.fg(Color::Black).bg(Color::Yellow);
-                }
+            {
+                style = style.fg(Color::Black).bg(Color::Yellow);
             }
 
             for inline in &line_formatting {

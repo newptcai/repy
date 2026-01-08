@@ -1,8 +1,9 @@
 use chrono::{DateTime, Utc};
 use std::collections::HashMap;
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub enum Direction {
+    #[default]
     Forward,
     Backward,
     Up,
@@ -15,14 +16,9 @@ pub enum Direction {
     End,
 }
 
-impl Default for Direction {
-    fn default() -> Self {
-        Direction::Forward
-    }
-}
-
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub enum WindowType {
+    #[default]
     Reader,
     Help,
     Toc,
@@ -34,12 +30,6 @@ pub enum WindowType {
     Settings,
     Images,
     Visual,
-}
-
-impl Default for WindowType {
-    fn default() -> Self {
-        WindowType::Reader
-    }
 }
 
 #[derive(Debug, Clone, PartialEq)]

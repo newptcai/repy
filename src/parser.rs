@@ -244,6 +244,7 @@ fn extract_sections(
 }
 
 /// Extract basic formatting information (headers, bold, italic)
+#[allow(clippy::type_complexity)]
 fn extract_formatting(
     fragment: &Html,
     starting_line: usize,
@@ -288,23 +289,19 @@ fn extract_formatting(
         }
 
         let mut parent_in_stack_idx = None;
-        loop {
-            if let Some((stack_id, _, stack_end)) = stack.last() {
-                if ancestors.contains(stack_id) {
-                    parent_in_stack_idx = Some(stack.len() - 1);
-                    break;
-                } else {
-                    let stack_end = *stack_end;
-                    // Update high_water_mark to the end of this finished block
-                    if stack_end.0 > high_water_mark.0
-                        || (stack_end.0 == high_water_mark.0 && stack_end.1 > high_water_mark.1)
-                    {
-                        high_water_mark = stack_end;
-                    }
-                    stack.pop();
-                }
-            } else {
+        while let Some((stack_id, _, stack_end)) = stack.last() {
+            if ancestors.contains(stack_id) {
+                parent_in_stack_idx = Some(stack.len() - 1);
                 break;
+            } else {
+                let stack_end = *stack_end;
+                // Update high_water_mark to the end of this finished block
+                if stack_end.0 > high_water_mark.0
+                    || (stack_end.0 == high_water_mark.0 && stack_end.1 > high_water_mark.1)
+                {
+                    high_water_mark = stack_end;
+                }
+                stack.pop();
             }
         }
 
@@ -498,11 +495,10 @@ fn extract_links(fragment: &Html, starting_line: usize, text_lines: &[String]) -
             let mut parent = element.parent();
             let mut inside_footnote = false;
             while let Some(node) = parent {
-                if let Some(element_ref) = scraper::ElementRef::wrap(node) {
-                     if element_ref.value().attr("epub:type") == Some("footnote") {
+                if let Some(element_ref) = scraper::ElementRef::wrap(node)
+                     && element_ref.value().attr("epub:type") == Some("footnote") {
                          inside_footnote = true;
                          break;
-                     }
                 }
                 parent = node.parent();
             }

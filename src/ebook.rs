@@ -58,7 +58,7 @@ impl Epub {
         Some(resource.path.to_string_lossy().to_string())
     }
 
-    fn split_navpoint_target(content: &PathBuf) -> (PathBuf, Option<String>) {
+    fn split_navpoint_target(content: &std::path::Path) -> (PathBuf, Option<String>) {
         let content_str = content.to_string_lossy();
         if let Some((path, fragment)) = content_str.split_once('#') {
             let section = if fragment.is_empty() {
@@ -67,13 +67,13 @@ impl Epub {
                 Some(fragment.to_string())
             };
             let resource_path = if path.is_empty() {
-                content.clone()
+                content.to_path_buf()
             } else {
                 PathBuf::from(path)
             };
             (resource_path, section)
         } else {
-            (content.clone(), None)
+            (content.to_path_buf(), None)
         }
     }
 
@@ -128,10 +128,9 @@ impl Ebook for Epub {
                         return false;
                     }
                     // Filter out Nav Document (EPUB 3 TOC)
-                    if let Some(properties) = &resource.properties {
-                        if properties.split_whitespace().any(|p| p == "nav") {
+                    if let Some(properties) = &resource.properties
+                        && properties.split_whitespace().any(|p| p == "nav") {
                             return false;
-                        }
                     }
                 }
                 true
@@ -181,27 +180,23 @@ impl Ebook for Epub {
             return Ok(content.clone());
         }
 
-        if let Some(ref mut doc) = self.doc {
-            if let Some(index) = self.contents.iter().position(|id| id == content_id) {
-                if doc.set_current_chapter(index) {
-                    if let Some((content, _)) = doc.get_current_str() {
-                        self.raw_text_cache.insert(content_id.to_string(), content.clone());
-                        return Ok(content);
-                    }
-                }
-            }
+        if let Some(ref mut doc) = self.doc
+            && let Some(index) = self.contents.iter().position(|id| id == content_id)
+            && doc.set_current_chapter(index)
+            && let Some((content, _)) = doc.get_current_str() {
+                self.raw_text_cache.insert(content_id.to_string(), content.clone());
+                return Ok(content);
         }
         Err(eyre::eyre!("Content not found"))
     }
 
     fn get_img_bytestr(&mut self, path: &str) -> Result<(String, Vec<u8>)> {
-        if let Some(ref mut doc) = self.doc {
-            if let Some(bytes) = doc.get_resource_by_path(path) {
+        if let Some(ref mut doc) = self.doc
+            && let Some(bytes) = doc.get_resource_by_path(path) {
                 // For now, assume it's an image and use a generic MIME type
                 // In a real implementation, we'd determine the MIME type from the file extension
                 let mime = "image/jpeg".to_string(); // Default assumption
                 return Ok((mime, bytes));
-            }
         }
         Err(eyre::eyre!("Image not found"))
     }
@@ -233,12 +228,11 @@ impl Ebook for Epub {
 
         for (index, content_id) in content_ids.into_iter().enumerate() {
             let mut parsed_content = self.get_parsed_content(&content_id, text_width, starting_line)?;
-            if let Some(page_height) = page_height {
-                if index + 1 < total_chapters {
+            if let Some(page_height) = page_height
+                && index + 1 < total_chapters {
                     let total_lines = starting_line + parsed_content.text_lines.len();
                     let break_lines = build_chapter_break(page_height, total_lines);
                     parsed_content.text_lines.extend(break_lines);
-                }
             }
             starting_line += parsed_content.text_lines.len();
             all_content.push(parsed_content);
@@ -257,7 +251,7 @@ pub fn build_chapter_break(page_height: usize, total_lines: usize) -> Vec<String
     }
     let remainder = (total_lines + lines.len()) % page_height;
     let pad = if remainder == 0 { 0 } else { page_height - remainder };
-    lines.extend(std::iter::repeat(String::new()).take(pad));
+    lines.extend(std::iter::repeat_n(String::new(), pad));
     lines
 }
 

@@ -22,8 +22,7 @@ impl Config {
         if filepath.exists() {
             let config_str = fs::read_to_string(&filepath)?;
             if let Ok(user_config) = serde_json::from_str::<serde_json::Value>(&config_str) {
-                if let Some(user_settings_value) = user_config.get("Setting") {
-                    if let serde_json::Value::Object(user_settings_map) = user_settings_value {
+                if let Some(user_settings_map) = user_config.get("Setting").and_then(|v| v.as_object()) {
                         if let Some(val) = user_settings_map.get("default_viewer").and_then(|v| v.as_str()) { settings.default_viewer = val.to_string(); }
                         if let Some(val) = user_settings_map.get("dictionary_client").and_then(|v| v.as_str()) { settings.dictionary_client = val.to_string(); }
                         if let Some(val) = user_settings_map.get("show_progress_indicator").and_then(|v| v.as_bool()) { settings.show_progress_indicator = val; }
@@ -41,11 +40,9 @@ impl Config {
                         if let Some(val) = user_settings_map.get("tts_engine_args").and_then(|v| v.as_array()) {
                             settings.tts_engine_args = val.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect();
                         }
-                    }
                 }
 
-                if let Some(user_keymap_value) = user_config.get("Keymap") {
-                    if let serde_json::Value::Object(user_keymap_map) = user_keymap_value {
+                if let Some(user_keymap_map) = user_config.get("Keymap").and_then(|v| v.as_object()) {
                         if let Some(val) = user_keymap_map.get("scroll_up").and_then(|v| v.as_str()) { keymap_user_dict.scroll_up = val.to_string(); }
                         if let Some(val) = user_keymap_map.get("scroll_down").and_then(|v| v.as_str()) { keymap_user_dict.scroll_down = val.to_string(); }
                         if let Some(val) = user_keymap_map.get("page_up").and_then(|v| v.as_str()) { keymap_user_dict.page_up = val.to_string(); }
@@ -74,7 +71,6 @@ impl Config {
                         if let Some(val) = user_keymap_map.get("tts_toggle").and_then(|v| v.as_str()) { keymap_user_dict.tts_toggle = val.to_string(); }
                         if let Some(val) = user_keymap_map.get("double_spread_toggle").and_then(|v| v.as_str()) { keymap_user_dict.double_spread_toggle = val.to_string(); }
                         if let Some(val) = user_keymap_map.get("library").and_then(|v| v.as_str()) { keymap_user_dict.library = val.to_string(); }
-                    }
                 }
             }
         } else {
@@ -148,8 +144,7 @@ impl Config {
         if filepath.exists() {
             let config_str = fs::read_to_string(&filepath)?;
             if let Ok(user_config) = serde_json::from_str::<serde_json::Value>(&config_str) {
-                if let Some(user_settings_value) = user_config.get("Setting") {
-                    if let serde_json::Value::Object(user_settings_map) = user_settings_value {
+                if let Some(user_settings_map) = user_config.get("Setting").and_then(|v| v.as_object()) {
                         if let Some(val) = user_settings_map.get("default_viewer").and_then(|v| v.as_str()) { settings.default_viewer = val.to_string(); }
                         if let Some(val) = user_settings_map.get("dictionary_client").and_then(|v| v.as_str()) { settings.dictionary_client = val.to_string(); }
                         if let Some(val) = user_settings_map.get("show_progress_indicator").and_then(|v| v.as_bool()) { settings.show_progress_indicator = val; }
@@ -167,11 +162,9 @@ impl Config {
                         if let Some(val) = user_settings_map.get("tts_engine_args").and_then(|v| v.as_array()) {
                             settings.tts_engine_args = val.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect();
                         }
-                    }
                 }
 
-                if let Some(user_keymap_value) = user_config.get("Keymap") {
-                    if let serde_json::Value::Object(user_keymap_map) = user_keymap_value {
+                if let Some(user_keymap_map) = user_config.get("Keymap").and_then(|v| v.as_object()) {
                         if let Some(val) = user_keymap_map.get("scroll_up").and_then(|v| v.as_str()) { keymap_user_dict.scroll_up = val.to_string(); }
                         if let Some(val) = user_keymap_map.get("scroll_down").and_then(|v| v.as_str()) { keymap_user_dict.scroll_down = val.to_string(); }
                         if let Some(val) = user_keymap_map.get("page_up").and_then(|v| v.as_str()) { keymap_user_dict.page_up = val.to_string(); }
@@ -200,7 +193,6 @@ impl Config {
                         if let Some(val) = user_keymap_map.get("tts_toggle").and_then(|v| v.as_str()) { keymap_user_dict.tts_toggle = val.to_string(); }
                         if let Some(val) = user_keymap_map.get("double_spread_toggle").and_then(|v| v.as_str()) { keymap_user_dict.double_spread_toggle = val.to_string(); }
                         if let Some(val) = user_keymap_map.get("library").and_then(|v| v.as_str()) { keymap_user_dict.library = val.to_string(); }
-                    }
                 }
             }
         }
