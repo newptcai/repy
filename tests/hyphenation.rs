@@ -1,6 +1,4 @@
 use repy::parser::parse_html;
-use std::collections::HashSet;
-
 #[test]
 fn test_hyphenation_and_wrapping() {
     let html = r#"
@@ -29,4 +27,37 @@ fn test_hyphenation_and_wrapping() {
     // The next line should be indented
     let next_line = &result.text_lines[item_start_idx + 1];
     assert!(next_line.starts_with("  "), "List item should be indented: '{}'", next_line);
+}
+
+#[test]
+fn test_footnote_wrapping_expected_lines() {
+    let html = r#"
+    <p>[3] From my mother:<sup>4</sup> reverence for the gods, generosity, and the ability to abstain not only from wrongdoing
+    but even from contemplating it; also, a frugal lifestyle, far removed from the habits of the rich.<sup>5</sup></p>
+    "#;
+
+    let cases: Vec<(usize, Vec<&str>)> = vec![
+        (70, vec![
+            "[3] From my mother:^{4} reverence for the gods, generosity, and the",
+            "ability to abstain not only from wrongdoing but even from contem-",
+            "plating it; also, a frugal lifestyle, far removed from the habits of",
+            "the rich.^{5}",
+        ]),
+        (80, vec![
+            "[3] From my mother:^{4} reverence for the gods, generosity, and the ability to",
+            "abstain not only from wrongdoing but even from contemplating it; also, a frugal",
+            "lifestyle, far removed from the habits of the rich.^{5}",
+        ]),
+        (100, vec![
+            "[3] From my mother:^{4} reverence for the gods, generosity, and the ability to abstain not only from",
+            "wrongdoing but even from contemplating it; also, a frugal lifestyle, far removed from the habits of",
+            "the rich.^{5}",
+        ]),
+    ];
+
+    for (width, expected) in cases {
+        let result = parse_html(html, Some(width), None, 0).unwrap();
+        let expected_lines: Vec<String> = expected.into_iter().map(|line| line.to_string()).collect();
+        assert_eq!(result.text_lines, expected_lines, "Unexpected wrapping at width {}", width);
+    }
 }

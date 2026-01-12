@@ -54,6 +54,7 @@ fn wrap_text(lines: Vec<String>, width: usize) -> Vec<String> {
     let ordered_list_re = Regex::new(r"^(\d+)\.\s").unwrap();
 
     for line in lines {
+        let line = line.trim_end();
         if line.trim().is_empty() {
             wrapped.push(String::new());
             continue;
@@ -76,13 +77,14 @@ fn wrap_text(lines: Vec<String>, width: usize) -> Vec<String> {
             .word_splitter(WordSplitter::Hyphenation(dictionary.clone()))
             .subsequent_indent(&subsequent_indent);
 
-        let lines_wrapped = textwrap::wrap(&line, &options);
+        let lines_wrapped = textwrap::wrap(line, &options);
         for l in lines_wrapped {
-            wrapped.push(l.into_owned());
+            wrapped.push(l.trim_end().to_string());
         }
     }
     wrapped
 }
+
 
 
 fn preprocess_inline_annotations(html: &str) -> String {
@@ -1296,4 +1298,3 @@ fn preprocess_images(html: &str) -> String {
         }
     }).to_string()
 }
-
