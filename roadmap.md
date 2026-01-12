@@ -24,15 +24,6 @@ What is *not* done yet (high level):
 
 The detailed roadmap below remains the source of truth for planned work.
 
-## Bugs to Fix
-
-### Italic and Bold Text
-
-Currently, when HTML is converted to text (Markdown),
-* or ** marks are added to indicate italic and bold text.
-However, if the opening and closing marks are on different lines,
-repy is not displaying them correctly.
-
 ## Roadmap
 
 ### Phase 1: Core Infrastructure (COMPLETED ✅)
@@ -58,6 +49,7 @@ repy is not displaying them correctly.
     *   [x] Line numbers toggle
     *   [x] Help window parity
     *   [x] Inline bold/italic rendering (strip markdown markers)
+    *   [x] Hyphenation and smart wrapping
     *   [x] Navigation History (Ctrl+o / Ctrl+i)
 
 10. **Text-to-Speech Integration (`src/tts/`):**

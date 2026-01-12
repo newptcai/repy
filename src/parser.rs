@@ -1,9 +1,11 @@
 use crate::models::{InlineStyle, LinkEntry, TextStructure};
 use eyre::Result;
 use html2text::config;
+use hyphenation::{Language, Load, Standard};
 use regex::{Captures, Regex};
 use scraper::{Html, Selector};
 use std::collections::{HashMap, HashSet};
+use textwrap::{Options, WordSplitter};
 
 /// Simple HTML parser for ebook content
 /// This uses html2text for the heavy lifting and adds some basic structure tracking
@@ -20,8 +22,11 @@ pub fn parse_html(
     // Parse HTML once
     let fragment = Html::parse_fragment(&html_src);
 
-    // Convert HTML to plain text first
-    let mut plain_text = html_to_plain_text(&html_src, text_width)?;
+    // Convert HTML to plain text first with infinite width to preserve paragraphs
+    // then wrap with hyphenation
+    let raw_lines = html_to_plain_text(&html_src, usize::MAX)?;
+    let mut plain_text = wrap_text(raw_lines, text_width);
+    
     replace_superscript_link_markers(&mut plain_text);
 
     // Extract structure information using the parsed fragment
@@ -40,6 +45,45 @@ pub fn parse_html(
         links,
     })
 }
+
+fn wrap_text(lines: Vec<String>, width: usize) -> Vec<String> {
+    // Load English US dictionary for hyphenation
+    // This expects the feature "embed_en-us" to be enabled in hyphenation crate
+    let dictionary = Standard::from_embedded(Language::EnglishUS).unwrap();
+    let mut wrapped = Vec::new();
+    let ordered_list_re = Regex::new(r"^(\d+)\.\s").unwrap();
+
+    for line in lines {
+        if line.trim().is_empty() {
+            wrapped.push(String::new());
+            continue;
+        }
+
+        let subsequent_indent;
+        // Detect list markers to maintain indentation
+        if line.starts_with("* ") || line.starts_with("- ") {
+            subsequent_indent = "  ".to_string();
+        } else if line.starts_with("> ") {
+            subsequent_indent = "  ".to_string();
+        } else if let Some(mat) = ordered_list_re.find(&line) {
+            let len = mat.end();
+            subsequent_indent = " ".repeat(len);
+        } else {
+            subsequent_indent = "".to_string();
+        }
+
+        let options = Options::new(width)
+            .word_splitter(WordSplitter::Hyphenation(dictionary.clone()))
+            .subsequent_indent(&subsequent_indent);
+
+        let lines_wrapped = textwrap::wrap(&line, &options);
+        for l in lines_wrapped {
+            wrapped.push(l.into_owned());
+        }
+    }
+    wrapped
+}
+
 
 fn preprocess_inline_annotations(html: &str) -> String {
     let sup_open = Regex::new(r"(?i)<sup[^>]*>").unwrap();

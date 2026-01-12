@@ -19,6 +19,8 @@ hex = "0.4.3"
 html2text = "0.16.4"
 arboard = "3.6.1"
 regex = "1.10.6"
+hyphenation = { version = "0.8.4", features = ["embed_en-us"] }
+textwrap = { version = "0.16.1", features = ["hyphenation"] }
 
 [dev-dependencies]
 assert_cmd = "2.1.1"

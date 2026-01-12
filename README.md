@@ -15,7 +15,8 @@ SQLite implementation.
 ## Status
 
 Work-in-progress. Core TUI reading, configuration loading, and basic library state
-are implemented; some `epy` features (TTS, external tools, etc.) are not yet available.
+are implemented. Text is intelligently wrapped and hyphenated for a better reading experience.
+Some `epy` features (TTS, external tools, etc.) are not yet available.
 
 ## Installation
 
