@@ -631,6 +631,16 @@ impl Reader {
                     self.move_cursor(AppDirection::PageUp);
                 }
             }
+            KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                for _ in 0..repeat_count {
+                    self.move_cursor(AppDirection::HalfPageUp);
+                }
+            }
+            KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                for _ in 0..repeat_count {
+                    self.move_cursor(AppDirection::HalfPageDown);
+                }
+            }
 
             // Chapter navigation
             KeyCode::Char('L') => {
@@ -1586,6 +1596,68 @@ impl Reader {
                         return;
                 }
                 let next = current_row.saturating_add(page);
+                state.reading_state.row = next.min(total_lines.saturating_sub(1));
+            }
+            AppDirection::HalfPageUp => {
+                let half_page = (page / 2).max(1);
+                if !seamless
+                    && let Some(index) = self.content_index_for_row(current_row)
+                    && let Some((chapter_start, _chapter_end)) = self.chapter_bounds_for_index(index) {
+                        let current_start = current_row.saturating_sub(1);
+                        if current_start <= chapter_start {
+                            if index > 0
+                                && let Some((prev_start, prev_end)) = self.chapter_bounds_for_index(index - 1) {
+                                    let last_start = prev_end
+                                        .saturating_sub(half_page.saturating_sub(1))
+                                        .max(prev_start);
+                                    state.reading_state.row = Self::row_from_start(last_start);
+                                    return;
+                            }
+                            state.reading_state.row = Self::row_from_start(chapter_start);
+                            return;
+                        }
+
+                        let new_start = current_start.saturating_sub(half_page);
+                        let clamped = if new_start < chapter_start {
+                            chapter_start
+                        } else {
+                            new_start
+                        };
+                        state.reading_state.row = Self::row_from_start(clamped);
+                        return;
+                }
+                state.reading_state.row = current_row.saturating_sub(half_page);
+            }
+            AppDirection::HalfPageDown => {
+                let half_page = (page / 2).max(1);
+                if !seamless
+                    && let Some(index) = self.content_index_for_row(current_row)
+                    && let Some((chapter_start, chapter_end)) = self.chapter_bounds_for_index(index) {
+                        let current_start = current_row.saturating_sub(1);
+                        let last_start = chapter_end
+                            .saturating_sub(half_page.saturating_sub(1))
+                            .max(chapter_start);
+                        if current_start >= last_start {
+                            if let Some(next_start) = self.content_start_rows.get(index + 1).copied() {
+                                state.reading_state.row = Self::row_from_start(
+                                    next_start.min(total_lines.saturating_sub(1)),
+                                );
+                                return;
+                            }
+                            state.reading_state.row = Self::row_from_start(last_start);
+                            return;
+                        }
+
+                        let new_start = current_start.saturating_add(half_page);
+                        let clamped = if new_start > last_start {
+                            last_start
+                        } else {
+                            new_start
+                        };
+                        state.reading_state.row = Self::row_from_start(clamped);
+                        return;
+                }
+                let next = current_row.saturating_add(half_page);
                 state.reading_state.row = next.min(total_lines.saturating_sub(1));
             }
             _ => {}

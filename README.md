@@ -94,6 +94,8 @@ Press `?` in the TUI to see the help window at any time.
 - `l` / `Right` — Page Down
 - `Space` / `f` — Page Down
 - `b` — Page Up
+- `Ctrl+u` — Half Page Up
+- `Ctrl+d` — Half Page Down
 - `L` — Next Chapter
 - `H` — Previous Chapter
 - `g` — Chapter Start

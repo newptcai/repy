@@ -12,6 +12,8 @@ pub enum Direction {
     Right,
     PageUp,
     PageDown,
+    HalfPageUp,
+    HalfPageDown,
     Home,
     End,
 }

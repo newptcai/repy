@@ -13,6 +13,8 @@ const HELP_TEXT: &[&str] = &[
     "   j / Down          Line Down",
     "   h / Left          Page Up",
     "   l / Right / Space Page Down",
+    "   Ctrl+u            Half Page Up",
+    "   Ctrl+d            Half Page Down",
     "   L                 Next Chapter",
     "   H                 Prev Chapter",
     "   g                 Chapter Start",
