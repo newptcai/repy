@@ -1,6 +1,6 @@
 use crate::models::{LibraryItem, ReadingState};
 use eyre::Result;
-use rusqlite::{Connection, params};
+use rusqlite::{Connection, OptionalExtension, params};
 
 // Re-use the get_app_data_prefix from config.rs
 use crate::config::get_app_data_prefix;
@@ -102,6 +102,99 @@ impl State {
     pub fn delete_from_library(&self, filepath: &str) -> Result<()> {
         self.conn.execute("PRAGMA foreign_keys = ON", [])?;
         self.conn.execute("DELETE FROM reading_states WHERE filepath=?", params![filepath])?;
+        Ok(())
+    }
+
+    pub fn reconcile_filepath(&mut self, old_path: &str, new_path: &str) -> Result<()> {
+        if old_path == new_path {
+            return Ok(());
+        }
+
+        let tx = self.conn.transaction()?;
+        tx.execute("PRAGMA foreign_keys = ON", [])?;
+
+        let old_exists = tx
+            .query_row(
+                "SELECT 1 FROM reading_states WHERE filepath=? LIMIT 1",
+                params![old_path],
+                |_| Ok(()),
+            )
+            .optional()?
+            .is_some();
+        if !old_exists {
+            tx.commit()?;
+            return Ok(());
+        }
+
+        let new_exists = tx
+            .query_row(
+                "SELECT 1 FROM reading_states WHERE filepath=? LIMIT 1",
+                params![new_path],
+                |_| Ok(()),
+            )
+            .optional()?
+            .is_some();
+
+        if !new_exists {
+            tx.execute(
+                "INSERT INTO reading_states (filepath, content_index, textwidth, row, rel_pctg)
+                 SELECT ?, content_index, textwidth, row, rel_pctg FROM reading_states WHERE filepath=?",
+                params![new_path, old_path],
+            )?;
+        }
+
+        let old_library: Option<(String, Option<String>, Option<String>, Option<f32>)> = tx
+            .query_row(
+                "SELECT last_read, title, author, reading_progress FROM library WHERE filepath=?",
+                params![old_path],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .optional()?;
+        let new_library: Option<(String, Option<String>, Option<String>, Option<f32>)> = tx
+            .query_row(
+                "SELECT last_read, title, author, reading_progress FROM library WHERE filepath=?",
+                params![new_path],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .optional()?;
+
+        let should_promote_old = match (&old_library, &new_library) {
+            (Some((old_last, ..)), Some((new_last, ..))) => old_last > new_last,
+            (Some(_), None) => true,
+            _ => false,
+        };
+
+        if let Some((last_read, title, author, reading_progress)) = old_library {
+            if should_promote_old {
+                if new_library.is_some() {
+                    tx.execute(
+                        "UPDATE library SET last_read=?, title=?, author=?, reading_progress=? WHERE filepath=?",
+                        params![last_read, title, author, reading_progress, new_path],
+                    )?;
+                } else {
+                    tx.execute(
+                        "INSERT INTO library (last_read, filepath, title, author, reading_progress) VALUES (?, ?, ?, ?, ?)",
+                        params![last_read, new_path, title, author, reading_progress],
+                    )?;
+                }
+                tx.execute(
+                    "INSERT OR REPLACE INTO reading_states (filepath, content_index, textwidth, row, rel_pctg)
+                     SELECT ?, content_index, textwidth, row, rel_pctg FROM reading_states WHERE filepath=?",
+                    params![new_path, old_path],
+                )?;
+            }
+        }
+
+        tx.execute(
+            "UPDATE bookmarks SET filepath=? WHERE filepath=?",
+            params![new_path, old_path],
+        )?;
+
+        tx.execute("DELETE FROM library WHERE filepath=?", params![old_path])?;
+        tx.execute("DELETE FROM reading_states WHERE filepath=?", params![old_path])?;
+        tx.execute("DELETE FROM bookmarks WHERE filepath=?", params![old_path])?;
+
+        tx.commit()?;
         Ok(())
     }
 
@@ -645,6 +738,37 @@ mod tests {
 
         let history = state.get_from_history().unwrap();
         assert_eq!(history[0].reading_progress, None);
+    }
+
+    #[test]
+    fn test_reconcile_filepath_moves_entries() {
+        let (mut state, _temp_dir) = setup_test_state();
+        let old_ebook = MockEbook::new("/path/to/old.epub", "Old Book", "Old Author");
+        let new_ebook = MockEbook::new("/path/to/new.epub", "Old Book", "Old Author");
+
+        let reading_state = ReadingState {
+            content_index: 2,
+            textwidth: 80,
+            row: 5,
+            rel_pctg: Some(0.2),
+            section: None,
+        };
+        state.set_last_reading_state(&old_ebook, &reading_state).unwrap();
+        state.update_library(&old_ebook, Some(0.2)).unwrap();
+        state.insert_bookmark(&old_ebook, "Bookmark", &reading_state).unwrap();
+
+        state.reconcile_filepath(old_ebook.path(), new_ebook.path()).unwrap();
+
+        let history = state.get_from_history().unwrap();
+        assert_eq!(history.len(), 1);
+        assert_eq!(history[0].filepath, "/path/to/new.epub");
+
+        let migrated_state = state.get_last_reading_state(&new_ebook).unwrap();
+        assert_eq!(migrated_state.content_index, 2);
+
+        let bookmarks = state.get_bookmarks(&new_ebook).unwrap();
+        assert_eq!(bookmarks.len(), 1);
+        assert_eq!(bookmarks[0].0, "Bookmark");
     }
 
     #[test]

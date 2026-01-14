@@ -18,6 +18,7 @@ use ratatui::{
 
 use crate::config::Config;
 use crate::ebook::{build_chapter_break, Ebook, Epub};
+use crate::logging;
 use crate::models::{
     BookMetadata, Direction as AppDirection, LibraryItem, LinkEntry, ReadingState, SearchData,
     TextStructure, TocEntry, WindowType,
@@ -289,6 +290,20 @@ pub struct Reader {
 }
 
 impl Reader {
+    fn normalize_ebook_path(path: &str) -> String {
+        if path.is_empty() {
+            return path.to_string();
+        }
+
+        match std::fs::canonicalize(path) {
+            Ok(canonical) => canonical.to_string_lossy().to_string(),
+            Err(err) => {
+                logging::debug(format!("Could not canonicalize ebook path {}: {}", path, err));
+                path.to_string()
+            }
+        }
+    }
+
     /// Create a new Reader instance
     pub fn new(config: Config) -> eyre::Result<Self> {
         let backend = CrosstermBackend::new(io::stdout());
@@ -322,7 +337,12 @@ impl Reader {
     }
 
     pub fn load_ebook(&mut self, path: &str) -> eyre::Result<()> {
-        let mut epub = Epub::new(path);
+        let normalized_path = Self::normalize_ebook_path(path);
+        if normalized_path != path {
+            self.db_state.reconcile_filepath(path, &normalized_path)?;
+        }
+
+        let mut epub = Epub::new(&normalized_path);
         epub.initialize()?;
 
         // Load last reading state early to get preferred textwidth
