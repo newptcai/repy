@@ -166,6 +166,7 @@ fn extract_sections(
 
     // Look for elements with id attributes that match our section IDs
     let id_selector = Selector::parse("*[id]").unwrap();
+    let heading_selector = Selector::parse("h1, h2, h3, h4, h5, h6").unwrap();
 
     for element in fragment.select(&id_selector) {
         if let Some(id) = element.value().attr("id") {
@@ -174,6 +175,14 @@ fn extract_sections(
             // Estimate the line number where this section starts.
             // This is approximate since html2text changes the structure.
             let mut element_text = element.text().collect::<String>();
+            if !matches!(element.value().name(), "h1" | "h2" | "h3" | "h4" | "h5" | "h6") {
+                if let Some(heading) = element.select(&heading_selector).next() {
+                    let heading_text = heading.text().collect::<String>();
+                    if !heading_text.trim().is_empty() {
+                        element_text = heading_text;
+                    }
+                }
+            }
             if element_text.trim().is_empty() {
                 // Empty anchors are often used for TOC targets; fall back to nearby headings.
                 if element.value().name() == "a" {
@@ -876,6 +885,23 @@ mod tests {
         assert_eq!(sections.get("intro"), Some(&0));
         assert_eq!(sections.get("chapter1"), Some(&2));
         assert_eq!(sections.get("conclusion"), Some(&4));
+    }
+
+    #[test]
+    fn test_extract_sections_container_with_heading_child() {
+        let html = r#"
+        <div id="chapter1">
+            <h2>Chapter 1</h2>
+            <p>Some content here.</p>
+        </div>
+        "#;
+        let fragment = Html::parse_fragment(html);
+        let section_ids = HashSet::new();
+        let text_lines = vec!["## Chapter 1".to_string(), "Some content here.".to_string()];
+
+        let sections = extract_sections(&fragment, &section_ids, 0, &text_lines).unwrap();
+        assert_eq!(sections.len(), 1);
+        assert_eq!(sections.get("chapter1"), Some(&0));
     }
 
     #[test]
