@@ -81,20 +81,37 @@ impl Epub {
         toc_entries: &mut Vec<TocEntry>,
         navpoints: &[NavPoint],
         doc: &EpubDoc<std::io::BufReader<std::fs::File>>,
+        parent_path: Option<&std::path::Path>,
     ) {
         for navpoint in navpoints {
             let (resource_path, section) = Self::split_navpoint_target(&navpoint.content);
             let content_index = doc
                 .resource_uri_to_chapter(&resource_path)
                 .unwrap_or(usize::MAX);
-            toc_entries.push(TocEntry {
-                label: navpoint.label.clone(),
-                content_index,
-                section,
-            });
+            let label = navpoint.label.trim();
+            let is_subtitle = label
+                .chars()
+                .next()
+                .map(|c| c.is_lowercase())
+                .unwrap_or(false);
+            let same_content_as_parent = parent_path
+                .map(|path| path == resource_path.as_path())
+                .unwrap_or(false);
+            if !(same_content_as_parent && is_subtitle) {
+                toc_entries.push(TocEntry {
+                    label: label.to_string(),
+                    content_index,
+                    section,
+                });
+            }
 
             if !navpoint.children.is_empty() {
-                Self::append_navpoints(toc_entries, &navpoint.children, doc);
+                Self::append_navpoints(
+                    toc_entries,
+                    &navpoint.children,
+                    doc,
+                    Some(resource_path.as_path()),
+                );
             }
         }
     }
@@ -139,7 +156,7 @@ impl Ebook for Epub {
             .collect();
 
         let mut toc_entries = Vec::new();
-        Self::append_navpoints(&mut toc_entries, &doc.toc, &doc);
+        Self::append_navpoints(&mut toc_entries, &doc.toc, &doc, None);
         self.toc = toc_entries;
 
         let mut metadata = BookMetadata::default();
@@ -319,6 +336,22 @@ mod tests {
         let meta = epub.get_meta();
         assert!(meta.title.is_some());
         assert!(meta.title.as_ref().unwrap().contains("Meditations"));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_epub_toc_skips_subtitle_navpoints() -> Result<()> {
+        let mut epub = Epub::new("tests/fixtures/meditations.epub");
+        epub.initialize()?;
+
+        let toc_labels: Vec<&str> = epub
+            .toc_entries()
+            .iter()
+            .map(|entry| entry.label.as_str())
+            .collect();
+
+        assert!(!toc_labels.contains(&"concerning HIMSELF:"));
 
         Ok(())
     }

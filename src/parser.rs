@@ -162,6 +162,7 @@ fn extract_sections(
     text_lines: &[String],
 ) -> Result<HashMap<String, usize>> {
     let mut sections = HashMap::new();
+    let mut search_start = 0usize;
 
     // Look for elements with id attributes that match our section IDs
     let id_selector = Selector::parse("*[id]").unwrap();
@@ -172,8 +173,41 @@ fn extract_sections(
             // TOC navigation still relies on TOC entries; extra anchors do not change that.
             // Estimate the line number where this section starts.
             // This is approximate since html2text changes the structure.
-            let element_text = element.text().collect::<String>();
+            let mut element_text = element.text().collect::<String>();
+            if element_text.trim().is_empty() {
+                // Empty anchors are often used for TOC targets; fall back to nearby headings.
+                if element.value().name() == "a" {
+                    if let Some(parent) = element.parent().and_then(scraper::ElementRef::wrap) {
+                        let parent_name = parent.value().name();
+                        if matches!(parent_name, "h1" | "h2" | "h3" | "h4" | "h5" | "h6") {
+                            let parent_text = parent.text().collect::<String>();
+                            if !parent_text.trim().is_empty() {
+                                element_text = parent_text;
+                            }
+                        }
+                    }
+
+                    if element_text.trim().is_empty() {
+                        let mut sibling = element.next_sibling();
+                        while let Some(node) = sibling {
+                            if let Some(elem) = scraper::ElementRef::wrap(node) {
+                                let sibling_text = elem.text().collect::<String>();
+                                if !sibling_text.trim().is_empty() {
+                                    element_text = sibling_text;
+                                    break;
+                                }
+                            }
+                            sibling = node.next_sibling();
+                        }
+                    }
+                }
+            }
+
             let words: Vec<&str> = element_text.split_whitespace().collect();
+            if words.is_empty() {
+                sections.insert(id.to_string(), starting_line + search_start);
+                continue;
+            }
 
             // Strategy 1: Match the first few words (exact sequence)
             let mut found = false;
@@ -205,9 +239,10 @@ fn extract_sections(
                         continue;
                     }
 
-                    for (line_num, line) in text_lines.iter().enumerate() {
+                    for (line_num, line) in text_lines.iter().enumerate().skip(search_start) {
                         if line.contains(&search_str) {
                             sections.insert(id.to_string(), starting_line + line_num);
+                            search_start = line_num;
                             found = true;
                             break;
                         }
@@ -224,20 +259,21 @@ fn extract_sections(
                 let prefix_len = normalized.chars().count().min(32);
                 let prefix: String = normalized.chars().take(prefix_len).collect();
 
-                for (line_num, line) in text_lines.iter().enumerate() {
+                for (line_num, line) in text_lines.iter().enumerate().skip(search_start) {
                     if !normalized.is_empty()
                         && (line.contains(&normalized)
                             || (!prefix.is_empty() && line.contains(&prefix)))
                     {
                         sections.insert(id.to_string(), starting_line + line_num);
+                        search_start = line_num;
                         break;
                     }
                 }
             }
 
-            // Final Fallback: Use the end of the current block
+            // Final fallback: anchor targets often align with the current cursor.
             if !sections.contains_key(id) {
-                sections.insert(id.to_string(), starting_line + text_lines.len());
+                sections.insert(id.to_string(), starting_line + search_start);
             }
         }
     }
@@ -859,6 +895,17 @@ mod tests {
         let fragment = Html::parse_fragment(html);
         let mut section_ids = HashSet::new();
         section_ids.insert("nonexistent".to_string());
+        let text_lines = vec!["# Chapter 1".to_string()];
+        let sections = extract_sections(&fragment, &section_ids, 0, &text_lines).unwrap();
+        assert_eq!(sections.len(), 1);
+        assert_eq!(sections.get("chapter1"), Some(&0));
+    }
+
+    #[test]
+    fn test_extract_sections_empty_anchor_with_heading_sibling() {
+        let html = r#"<a id="chapter1"></a><h1>Chapter 1</h1>"#;
+        let fragment = Html::parse_fragment(html);
+        let section_ids = HashSet::new();
         let text_lines = vec!["# Chapter 1".to_string()];
         let sections = extract_sections(&fragment, &section_ids, 0, &text_lines).unwrap();
         assert_eq!(sections.len(), 1);
