@@ -24,18 +24,18 @@ pub fn parse_html(
 
     // Convert HTML to plain text first with infinite width to preserve paragraphs
     // then wrap with hyphenation
-    let raw_lines = html_to_plain_text(&html_src, usize::MAX)?;
-    let mut plain_text = wrap_text(raw_lines, text_width);
-    
-    replace_superscript_link_markers(&mut plain_text);
+    let mut raw_lines = html_to_plain_text(&html_src, usize::MAX)?;
+    replace_superscript_link_markers(&mut raw_lines);
+    // Strip inline markers before wrapping so invisible chars don't affect line breaks.
+    let mut marker_formatting = extract_formatting(&fragment, starting_line, &raw_lines)?;
+    strip_inline_markers(&mut raw_lines, &mut marker_formatting, starting_line);
+    let plain_text = wrap_text(raw_lines, text_width);
 
     // Extract structure information using the parsed fragment
     let image_maps = extract_images(&fragment, starting_line, &plain_text)?;
     let section_rows = extract_sections(&fragment, &section_ids.unwrap_or_default(), starting_line, &plain_text)?;
-    let mut formatting = extract_formatting(&fragment, starting_line, &plain_text)?;
+    let formatting = extract_formatting(&fragment, starting_line, &plain_text)?;
     let links = extract_links(&fragment, starting_line, &plain_text)?;
-
-    strip_inline_markers(&mut plain_text, &mut formatting, starting_line);
 
     Ok(TextStructure {
         text_lines: plain_text,
