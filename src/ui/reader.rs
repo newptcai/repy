@@ -348,11 +348,11 @@ impl Reader {
         // Load last reading state early to get preferred textwidth
         let db_state = self.db_state.get_last_reading_state(&epub).ok();
 
-        // Determine textwidth: use DB value if available, otherwise use config default (80)
+        // Determine textwidth: use DB value if available, otherwise use config default (70)
         let textwidth = if let Some(ref s) = db_state {
             s.textwidth
         } else {
-            self.state.borrow().config.settings.width.unwrap_or(80)
+            self.state.borrow().config.settings.width.unwrap_or(70)
         };
 
         // Calculate padding from textwidth for rendering
@@ -1279,18 +1279,25 @@ impl Reader {
             .and_then(|meta| meta.title.as_deref())
             .unwrap_or("repy");
 
-        // Always reserve space for the header, but only render it when show_top_bar is true
+        let show_top_bar = state.config.settings.show_top_bar;
+        let top_bar_height = if show_top_bar { 1 } else { 0 };
+        let top_gap_height = if show_top_bar { 2 } else { 0 };
+        let bottom_gap_height = 2;
+
+        // Reserve space for header and spacing even when the header is hidden.
         let chunks = Layout::default()
             .direction(ratatui::layout::Direction::Vertical)
             .constraints([
-                Constraint::Length(1), // Header (always reserved)
-                Constraint::Min(0),    // Main content
+                Constraint::Length(top_bar_height),
+                Constraint::Length(top_gap_height),
+                Constraint::Min(0),
+                Constraint::Length(bottom_gap_height),
             ])
             .split(frame_area);
 
         // Main content area with centered margins
         // Calculate padding from stored textwidth (minimum 5 on each side, unless window ≤ 20)
-        let available_width = chunks[1].width as usize;
+        let available_width = chunks[2].width as usize;
         let padding = if available_width <= 20 {
             0
         } else {
@@ -1298,13 +1305,13 @@ impl Reader {
         };
         let desired_width = available_width.saturating_sub(padding * 2).max(20) as u16;
 
-        let content_width = desired_width.min(chunks[1].width);
-        let left_pad = (chunks[1].width.saturating_sub(content_width)) / 2;
+        let content_width = desired_width.min(chunks[2].width);
+        let left_pad = (chunks[2].width.saturating_sub(content_width)) / 2;
         let content_area = Rect {
-            x: chunks[1].x + left_pad,
-            y: chunks[1].y,
+            x: chunks[2].x + left_pad,
+            y: chunks[2].y,
             width: content_width,
-            height: chunks[1].height,
+            height: chunks[2].height,
         };
 
         // Link handling: keep main text untouched; show a subtle header hint only when the page has
@@ -1323,7 +1330,7 @@ impl Reader {
             (None, Some(percent_text)) => Some(percent_text),
             (None, None) => None,
         };
-        if state.config.settings.show_top_bar {
+        if show_top_bar {
             let header_line = Self::build_header_line(title, right_text.as_deref(), chunks[0].width);
             let header = Paragraph::new(Line::from(header_line));
             frame.render_widget(header, chunks[0]);
@@ -2248,10 +2255,10 @@ impl Reader {
                 state.config.settings.width = if state.config.settings.width.is_some() {
                     None
                 } else {
-                    Some(80)
+                    Some(70)
                 };
                 // Set textwidth to the configured value
-                let textwidth = state.config.settings.width.unwrap_or(80);
+                let textwidth = state.config.settings.width.unwrap_or(70);
                 drop(state);
                 self.rebuild_text_structure_with_textwidth(textwidth)?;
                 return Ok(());
@@ -2277,8 +2284,8 @@ impl Reader {
     }
 
     fn reset_width(&mut self) -> eyre::Result<()> {
-        // Reset to default textwidth of 80
-        self.rebuild_text_structure_with_textwidth(80)?;
+        // Reset to default textwidth of 70
+        self.rebuild_text_structure_with_textwidth(70)?;
         self.persist_state()
     }
 
