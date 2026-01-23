@@ -25,6 +25,14 @@ pub fn parse_html(
     // Convert HTML to plain text first with infinite width to preserve paragraphs
     // then wrap with hyphenation
     let mut raw_lines = html_to_plain_text(&html_src, usize::MAX)?;
+
+    // Normalize list markers to match epy style ('- ') instead of html2text style ('* ')
+    for line in raw_lines.iter_mut() {
+        if line.starts_with("* ") {
+            *line = line.replacen("* ", "- ", 1);
+        }
+    }
+
     replace_superscript_link_markers(&mut raw_lines);
     // Strip inline markers before wrapping so invisible chars don't affect line breaks.
     let mut marker_formatting = extract_formatting(&fragment, starting_line, &raw_lines)?;
