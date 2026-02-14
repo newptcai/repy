@@ -2,7 +2,7 @@
 
 Concise roadmap for the Rust port of `epy`.
 
-## Current Progress (January 2026)
+## Current Progress (February 2026)
 
 ### Completed Features ✅
 
@@ -17,7 +17,9 @@ Concise roadmap for the Rust port of `epy`.
 - Full terminal UI with ratatui (`src/ui/reader.rs`, `src/ui/board.rs`)
 - All navigation modes: line, page, half-page, chapter, book-level
 - Jump history navigation (Ctrl+o / Ctrl+i / Tab)
-- Visual mode for text selection and yanking to clipboard
+- Two-phase visual mode with character-level cross-page selection and yanking
+- Visual-mode motions: `hjkl`, `w`/`b`/`e`, `0`, `$`
+- Basic dictionary lookup from visual selection (`d`, using `sdcv`/`dict`)
 - Regex search with highlighting (/, n, p/N)
 - Width adjustment (+/- keys, = to reset) with per-book persistence
 - Line numbers toggle (in settings window)
@@ -56,7 +58,7 @@ Concise roadmap for the Rust port of `epy`.
 - Incremental search with real-time results
 
 **External Integrations:**
-- Dictionary integration (sdcv, dict, etc.)
+- Full dictionary integration (dedicated window/config/history) beyond current basic visual-mode lookup
 - Export functionality (text, highlights)
 
 **Text-to-Speech:**
@@ -124,7 +126,7 @@ The detailed roadmap below remains the source of truth for planned work.
     *   [ ] Incremental search with real-time results
 
 12. **External Tool Integration (`src/tools/`):**
-    *   [ ] **Dictionary Integration**: Multiple dictionary engines (sdcv, dict, etc.)
+    *   [ ] **Dictionary Integration**: Add dedicated dictionary UI/config/history (baseline visual-mode `d` lookup via `sdcv`/`dict` is implemented)
     *   [x] **Image Viewer Integration**: List images on page, extract and open with system viewer
     *   [x] **URL Handling**: Internal anchor jumps, footnotes, and external link opening
     *   [x] **Link Preview**: Contextual preview of internal links/footnotes in the links window

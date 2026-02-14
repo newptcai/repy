@@ -1,5 +1,27 @@
 # Visual Mode Enhancement: Cross-Page Character-Level Selection
 
+## Progress Update (February 14, 2026)
+
+Recent implementation commits:
+- `85a363a` — add visual word motions and character selection behavior
+- `f7b4f79` — add two-phase visual mode with explicit cursor positioning
+
+Current status of this plan:
+- [x] Replace line-only selection state with `(row, col)` anchor/cursor state
+- [x] Two-phase visual flow (`v` enters cursor mode, `v` again starts selection)
+- [x] Character-level rendering for selected spans
+- [x] Cursor-only rendering in visual cursor mode
+- [x] Cross-page selection via auto-scroll while moving cursor
+- [x] Motions in visual mode: `hjkl`, `w`/`b`/`e`, `0`, `$`
+- [x] Character-range yank extraction to clipboard (`y`)
+- [x] Basic dictionary lookup from selection (`d`, `sdcv` fallback to `dict`)
+- [x] Visual indicator in header (`-- VISUAL --`)
+- [x] Fix `open_window(WindowType::Visual)` initialization bug
+- [ ] Add dedicated dictionary window instead of message preview
+- [ ] Add targeted tests for visual-mode cursor/selection edge cases
+
+The rest of this file remains as the original implementation plan for reference.
+
 ## Context
 
 The current visual mode (`v` key) is line-granularity only. It tracks `selection_start: Option<usize>` as a line index and highlights entire lines via `Modifier::REVERSED`. There is no column tracking — `h`/`l` keys call `move_cursor(Left/Right)` which are no-ops (fall through to `_ => {}` in `move_cursor`). There is also a bug: entering visual mode initializes `selection_start` to `0` instead of the current reading row.

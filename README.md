@@ -15,10 +15,10 @@ SQLite implementation.
 ## Status
 
 **Functional for daily use!** Core reading features are complete: TUI navigation, search, bookmarks,
-library management, visual mode, image viewing, and link/footnote handling all work. Text is
+library management, two-phase visual mode, image viewing, and link/footnote handling all work. Text is
 intelligently wrapped and hyphenated. Reading state and preferences are persisted per-book.
 
-**Not yet implemented:** TTS (text-to-speech), dictionary integration, export functionality,
+**Not yet implemented:** TTS (text-to-speech), full dictionary integration UI/config (basic visual-mode lookup exists), export functionality,
 advanced search features (history, fuzzy, incremental), and additional ebook formats beyond EPUB.
 
 See [to-do.md](to-do.md) for detailed feature status and roadmap.
@@ -131,6 +131,18 @@ Press `?` in the TUI to see the help window at any time.
 - `s` — Settings
 - `q` — Quit / Close Window
 - `?` — Help
+
+### Visual Mode
+
+Visual mode is two-phase:
+
+1. Press `v` in the reader to enter **cursor mode** (`-- VISUAL --` appears in the header).
+2. Move the visual cursor with `h` `j` `k` `l`, word motions `w` `b` `e`, or line motions `0` and `$`.
+3. Press `v` again to set an anchor and enter **selection mode**.
+4. Move again to expand/shrink the character-level selection (selection can cross page boundaries).
+5. Press `y` to copy the selected text to clipboard.
+6. Press `d` to run dictionary lookup on the selection (`sdcv` fallback to `dict`).
+7. Press `Esc` to leave selection mode back to cursor mode; press `Esc` again to exit visual mode.
 
 ## Configuration
 
