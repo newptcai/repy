@@ -60,7 +60,7 @@ Example
 - Test-driven development for complex components.
 - Cross-platform mindset (Linux/macOS/Windows).
 - Preserve epy behavior while improving performance.
-- Initialize the `epy` submodule to consult original code; if SSH access is unavailable, switch the submodule URL to HTTPS before running `git submodule update --init --recursive`.
+
 
 ## Success Metrics
 - Feature parity with epy
