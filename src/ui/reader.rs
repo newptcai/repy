@@ -9,16 +9,16 @@ use std::time::{Duration, Instant};
 use chrono::Local;
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::{
+    Frame, Terminal,
     backend::CrosstermBackend,
     layout::{Constraint, Layout, Rect},
     style::{Color, Style},
     text::Line,
     widgets::{Block, Borders, Clear, Paragraph, Wrap},
-    Frame, Terminal,
 };
 
 use crate::config::Config;
-use crate::ebook::{build_chapter_break, Ebook, Epub};
+use crate::ebook::{Ebook, Epub, build_chapter_break};
 use crate::logging;
 use crate::models::{
     BookMetadata, Direction as AppDirection, LibraryItem, LinkEntry, ReadingState, SearchData,
@@ -75,22 +75,22 @@ impl ApplicationState {
                 self.jump_history.remove(0);
             }
         }
-        
+
         self.jump_history_index = self.jump_history.len();
     }
 
     pub fn jump_back(&mut self) {
         if self.jump_history.is_empty() {
-             return;
+            return;
         }
 
         if self.jump_history_index == self.jump_history.len() {
-             let current_row = self.reading_state.row;
-             if self.jump_history.last() != Some(&current_row) {
-                  self.jump_history.push(current_row);
-             }
-             // We are now at the "tip". To jump back, we start from the last element.
-             self.jump_history_index = self.jump_history.len().saturating_sub(1); 
+            let current_row = self.reading_state.row;
+            if self.jump_history.last() != Some(&current_row) {
+                self.jump_history.push(current_row);
+            }
+            // We are now at the "tip". To jump back, we start from the last element.
+            self.jump_history_index = self.jump_history.len().saturating_sub(1);
         }
 
         if self.jump_history_index > 0 {
@@ -102,7 +102,7 @@ impl ApplicationState {
 
     pub fn jump_forward(&mut self) {
         if self.jump_history.is_empty() {
-             return;
+            return;
         }
 
         if self.jump_history_index + 1 < self.jump_history.len() {
@@ -145,7 +145,8 @@ pub struct UiState {
     pub message: Option<String>,
     pub message_type: MessageType,
     pub message_time: Option<Instant>,
-    pub selection_start: Option<usize>,
+    pub visual_anchor: Option<(usize, usize)>,
+    pub visual_cursor: Option<(usize, usize)>,
     pub help_scroll_offset: u16,
 }
 
@@ -187,7 +188,8 @@ impl UiState {
             message: None,
             message_type: MessageType::Info,
             message_time: None,
-            selection_start: None,
+            visual_anchor: None,
+            visual_cursor: None,
             help_scroll_offset: 0,
         }
     }
@@ -222,7 +224,8 @@ impl UiState {
                 self.show_images = false;
                 self.show_metadata = false;
                 self.show_settings = false;
-                self.selection_start = None;
+                self.visual_anchor = None;
+                self.visual_cursor = None;
             }
             WindowType::Help => {
                 self.show_help = true;
@@ -236,10 +239,7 @@ impl UiState {
             WindowType::Images => self.show_images = true,
             WindowType::Metadata => self.show_metadata = true,
             WindowType::Settings => self.show_settings = true,
-            WindowType::Visual => {
-                let current_row = self.selection_start.unwrap_or(0);
-                self.selection_start = Some(current_row);
-            }
+            WindowType::Visual => {}
         }
     }
 }
@@ -309,7 +309,10 @@ impl Reader {
         match std::fs::canonicalize(path) {
             Ok(canonical) => canonical.to_string_lossy().to_string(),
             Err(err) => {
-                logging::debug(format!("Could not canonicalize ebook path {}: {}", path, err));
+                logging::debug(format!(
+                    "Could not canonicalize ebook path {}: {}",
+                    path, err
+                ));
                 path.to_string()
             }
         }
@@ -341,8 +344,9 @@ impl Reader {
     /// Load the most recently read ebook, if any, using the database
     pub fn load_last_ebook_if_any(&mut self) -> eyre::Result<()> {
         if let Some(filepath) = self.db_state.get_last_read()?
-            && std::path::Path::new(&filepath).exists() {
-                self.load_ebook(&filepath)?;
+            && std::path::Path::new(&filepath).exists()
+        {
+            self.load_ebook(&filepath)?;
         }
         Ok(())
     }
@@ -372,7 +376,7 @@ impl Reader {
             Err(_) => 100,
         };
         let padding = if term_width <= 20 {
-            0  // Minimum width for very small windows
+            0 // Minimum width for very small windows
         } else {
             (term_width.saturating_sub(textwidth) / 2).max(5)
         };
@@ -380,7 +384,7 @@ impl Reader {
 
         // Also update the state with the decided textwidth immediately so we are consistent
         if let Some(mut s) = db_state.clone() {
-             s.textwidth = textwidth;
+            s.textwidth = textwidth;
         }
 
         let page_height = self.chapter_break_page_height();
@@ -396,10 +400,18 @@ impl Reader {
         for ts in &self.chapter_text_structures {
             content_start_rows.push(row_offset);
             row_offset += ts.text_lines.len();
-            combined_text_structure.text_lines.extend(ts.text_lines.clone());
-            combined_text_structure.image_maps.extend(ts.image_maps.clone());
-            combined_text_structure.section_rows.extend(ts.section_rows.clone());
-            combined_text_structure.formatting.extend(ts.formatting.clone());
+            combined_text_structure
+                .text_lines
+                .extend(ts.text_lines.clone());
+            combined_text_structure
+                .image_maps
+                .extend(ts.image_maps.clone());
+            combined_text_structure
+                .section_rows
+                .extend(ts.section_rows.clone());
+            combined_text_structure
+                .formatting
+                .extend(ts.formatting.clone());
             combined_text_structure.links.extend(ts.links.clone());
         }
 
@@ -431,7 +443,7 @@ impl Reader {
                 state.ui_state.bookmarks_selected_index = 0;
             }
         }
-    
+
         Ok(())
     }
 
@@ -570,19 +582,22 @@ impl Reader {
     fn handle_key_event(&mut self, key: KeyEvent) -> eyre::Result<()> {
         {
             let mut state = self.state.borrow_mut();
-            if state.ui_state.message.is_some() && state.ui_state.active_window == WindowType::Reader {
+            if state.ui_state.message.is_some()
+                && state.ui_state.active_window == WindowType::Reader
+            {
                 state.ui_state.clear_message();
             }
         }
 
         // Handle count prefix (number repetition)
         if let KeyCode::Char(c) = key.code
-            && c.is_ascii_digit() {
-                let mut state = self.state.borrow_mut();
-                if state.count_prefix.len() < 6 {
-                    state.count_prefix.push(c);
-                }
-                return Ok(());
+            && c.is_ascii_digit()
+        {
+            let mut state = self.state.borrow_mut();
+            if state.count_prefix.len() < 6 {
+                state.count_prefix.push(c);
+            }
+            return Ok(());
         }
 
         // Determine repetition count
@@ -723,31 +738,30 @@ impl Reader {
 
             // Search
             KeyCode::Char('/') => {
-                {
-                    let mut state = self.state.borrow_mut();
-                    state.search_data = Some(SearchData::default());
-                    state.ui_state.search_query.clear();
-                    state.ui_state.search_results.clear();
-                    state.ui_state.search_matches.clear();
-                    state.ui_state.open_window(WindowType::Search);
-                }
+                let mut state = self.state.borrow_mut();
+                state.search_data = Some(SearchData::default());
+                state.ui_state.search_query.clear();
+                state.ui_state.search_results.clear();
+                state.ui_state.search_matches.clear();
+                state.ui_state.open_window(WindowType::Search);
             }
 
             // Visual Mode
             KeyCode::Char('v') => {
                 let mut state = self.state.borrow_mut();
+                let current_row = state.reading_state.row;
+                state.ui_state.visual_anchor = Some((current_row, 0));
+                state.ui_state.visual_cursor = Some((current_row, 0));
                 state.ui_state.open_window(WindowType::Visual);
             }
 
             // Windows
             KeyCode::Char('q') => {
-                {
-                    let mut state = self.state.borrow_mut();
-                    if state.ui_state.active_window != WindowType::Reader {
-                        state.ui_state.open_window(WindowType::Reader);
-                    } else {
-                        state.should_quit = true;
-                    }
+                let mut state = self.state.borrow_mut();
+                if state.ui_state.active_window != WindowType::Reader {
+                    state.ui_state.open_window(WindowType::Reader);
+                } else {
+                    state.should_quit = true;
                 }
             }
             KeyCode::Char('?') => {
@@ -867,7 +881,11 @@ impl Reader {
                 if !state.ui_state.search_results.is_empty() {
                     let current = state.ui_state.selected_search_result;
                     state.ui_state.selected_search_result = current.saturating_sub(1);
-                    if let Some(result) = state.ui_state.search_results.get(state.ui_state.selected_search_result) {
+                    if let Some(result) = state
+                        .ui_state
+                        .search_results
+                        .get(state.ui_state.selected_search_result)
+                    {
                         state.reading_state.row = result.line;
                     }
                 }
@@ -895,25 +913,43 @@ impl Reader {
             KeyCode::Char('y') => {
                 self.yank_selection()?;
             }
+            KeyCode::Char('d') => {
+                self.dictionary_lookup()?;
+            }
             // Navigation
             KeyCode::Char('j') | KeyCode::Down => {
                 for _ in 0..repeat_count {
-                    self.move_cursor(AppDirection::Down);
+                    self.move_visual_cursor(AppDirection::Down);
                 }
             }
             KeyCode::Char('k') | KeyCode::Up => {
                 for _ in 0..repeat_count {
-                    self.move_cursor(AppDirection::Up);
+                    self.move_visual_cursor(AppDirection::Up);
                 }
             }
             KeyCode::Char('h') | KeyCode::Left => {
                 for _ in 0..repeat_count {
-                    self.move_cursor(AppDirection::Left);
+                    self.move_visual_cursor(AppDirection::Left);
                 }
             }
             KeyCode::Char('l') | KeyCode::Right => {
                 for _ in 0..repeat_count {
-                    self.move_cursor(AppDirection::Right);
+                    self.move_visual_cursor(AppDirection::Right);
+                }
+            }
+            KeyCode::Char('w') => {
+                for _ in 0..repeat_count {
+                    self.move_visual_cursor_word_forward();
+                }
+            }
+            KeyCode::Char('b') => {
+                for _ in 0..repeat_count {
+                    self.move_visual_cursor_word_backward();
+                }
+            }
+            KeyCode::Char('e') => {
+                for _ in 0..repeat_count {
+                    self.move_visual_cursor_word_end();
                 }
             }
             _ => {}
@@ -930,8 +966,12 @@ impl Reader {
             KeyCode::Char('j') | KeyCode::Down => {
                 let mut state = self.state.borrow_mut();
                 if !state.ui_state.toc_entries.is_empty() {
-                    let next = state.ui_state.toc_selected_index.saturating_add(repeat_count as usize);
-                    state.ui_state.toc_selected_index = next.min(state.ui_state.toc_entries.len() - 1);
+                    let next = state
+                        .ui_state
+                        .toc_selected_index
+                        .saturating_add(repeat_count as usize);
+                    state.ui_state.toc_selected_index =
+                        next.min(state.ui_state.toc_entries.len() - 1);
                 }
             }
             KeyCode::Char('k') | KeyCode::Up => {
@@ -956,14 +996,19 @@ impl Reader {
             KeyCode::Char('j') | KeyCode::Down => {
                 let mut state = self.state.borrow_mut();
                 if !state.ui_state.bookmarks.is_empty() {
-                    let next = state.ui_state.bookmarks_selected_index.saturating_add(repeat_count as usize);
-                    state.ui_state.bookmarks_selected_index = next.min(state.ui_state.bookmarks.len() - 1);
+                    let next = state
+                        .ui_state
+                        .bookmarks_selected_index
+                        .saturating_add(repeat_count as usize);
+                    state.ui_state.bookmarks_selected_index =
+                        next.min(state.ui_state.bookmarks.len() - 1);
                 }
             }
             KeyCode::Char('k') | KeyCode::Up => {
                 let mut state = self.state.borrow_mut();
                 let current = state.ui_state.bookmarks_selected_index;
-                state.ui_state.bookmarks_selected_index = current.saturating_sub(repeat_count as usize);
+                state.ui_state.bookmarks_selected_index =
+                    current.saturating_sub(repeat_count as usize);
             }
             KeyCode::Char('a') => {
                 self.add_bookmark()?;
@@ -988,7 +1033,10 @@ impl Reader {
             KeyCode::Char('j') | KeyCode::Down => {
                 let mut state = self.state.borrow_mut();
                 if !state.ui_state.links.is_empty() {
-                    let next = state.ui_state.links_selected_index.saturating_add(repeat_count as usize);
+                    let next = state
+                        .ui_state
+                        .links_selected_index
+                        .saturating_add(repeat_count as usize);
                     state.ui_state.links_selected_index = next.min(state.ui_state.links.len() - 1);
                 }
             }
@@ -1017,14 +1065,19 @@ impl Reader {
             KeyCode::Char('j') | KeyCode::Down => {
                 let mut state = self.state.borrow_mut();
                 if !state.ui_state.images_list.is_empty() {
-                    let next = state.ui_state.images_selected_index.saturating_add(repeat_count as usize);
-                    state.ui_state.images_selected_index = next.min(state.ui_state.images_list.len() - 1);
+                    let next = state
+                        .ui_state
+                        .images_selected_index
+                        .saturating_add(repeat_count as usize);
+                    state.ui_state.images_selected_index =
+                        next.min(state.ui_state.images_list.len() - 1);
                 }
             }
             KeyCode::Char('k') | KeyCode::Up => {
                 let mut state = self.state.borrow_mut();
                 let current = state.ui_state.images_selected_index;
-                state.ui_state.images_selected_index = current.saturating_sub(repeat_count as usize);
+                state.ui_state.images_selected_index =
+                    current.saturating_sub(repeat_count as usize);
             }
             KeyCode::Enter => {
                 self.open_selected_image()?;
@@ -1033,7 +1086,6 @@ impl Reader {
         }
         Ok(())
     }
-
 
     fn handle_library_mode_keys(&mut self, key: KeyEvent, repeat_count: u32) -> eyre::Result<()> {
         match key.code {
@@ -1044,14 +1096,19 @@ impl Reader {
             KeyCode::Char('j') | KeyCode::Down => {
                 let mut state = self.state.borrow_mut();
                 if !state.ui_state.library_items.is_empty() {
-                    let next = state.ui_state.library_selected_index.saturating_add(repeat_count as usize);
-                    state.ui_state.library_selected_index = next.min(state.ui_state.library_items.len() - 1);
+                    let next = state
+                        .ui_state
+                        .library_selected_index
+                        .saturating_add(repeat_count as usize);
+                    state.ui_state.library_selected_index =
+                        next.min(state.ui_state.library_items.len() - 1);
                 }
             }
             KeyCode::Char('k') | KeyCode::Up => {
                 let mut state = self.state.borrow_mut();
                 let current = state.ui_state.library_selected_index;
-                state.ui_state.library_selected_index = current.saturating_sub(repeat_count as usize);
+                state.ui_state.library_selected_index =
+                    current.saturating_sub(repeat_count as usize);
             }
             KeyCode::Char('d') => {
                 self.delete_selected_library_item()?;
@@ -1073,13 +1130,18 @@ impl Reader {
             KeyCode::Char('j') | KeyCode::Down => {
                 let mut state = self.state.borrow_mut();
                 let max_index = SettingItem::all().len().saturating_sub(1);
-                let next = state.ui_state.settings_selected_index.saturating_add(repeat_count as usize);
+                let next = state
+                    .ui_state
+                    .settings_selected_index
+                    .saturating_add(repeat_count as usize);
                 state.ui_state.settings_selected_index = next.min(max_index);
             }
             KeyCode::Char('k') | KeyCode::Up => {
                 let mut state = self.state.borrow_mut();
-                state.ui_state.settings_selected_index =
-                    state.ui_state.settings_selected_index.saturating_sub(repeat_count as usize);
+                state.ui_state.settings_selected_index = state
+                    .ui_state
+                    .settings_selected_index
+                    .saturating_sub(repeat_count as usize);
             }
             KeyCode::Enter => {
                 self.toggle_selected_setting()?;
@@ -1112,8 +1174,10 @@ impl Reader {
             }
             KeyCode::Char('k') | KeyCode::Up => {
                 let mut state = self.state.borrow_mut();
-                state.ui_state.help_scroll_offset =
-                    state.ui_state.help_scroll_offset.saturating_sub(repeat_count as u16);
+                state.ui_state.help_scroll_offset = state
+                    .ui_state
+                    .help_scroll_offset
+                    .saturating_sub(repeat_count as u16);
             }
             _ => {}
         }
@@ -1157,9 +1221,7 @@ impl Reader {
                 .ui_state
                 .bookmarks
                 .iter()
-                .map(|(name, reading_state)| {
-                    format!("{} (line {})", name, reading_state.row + 1)
-                })
+                .map(|(name, reading_state)| format!("{} (line {})", name, reading_state.row + 1))
                 .collect();
             BookmarksWindow::render(
                 frame,
@@ -1251,13 +1313,14 @@ impl Reader {
             }
         };
 
-        let book_name = if let (Some(title), Some(author)) = (item.title.as_ref(), item.author.as_ref()) {
-            format!("{} - {} ({})", title, author, filename)
-        } else if item.title.is_none() && item.author.is_some() {
-            format!("{} - {}", filename, item.author.as_ref().unwrap())
-        } else {
-            filename
-        };
+        let book_name =
+            if let (Some(title), Some(author)) = (item.title.as_ref(), item.author.as_ref()) {
+                format!("{} - {} ({})", title, author, filename)
+            } else if item.title.is_none() && item.author.is_some() {
+                format!("{} - {}", filename, item.author.as_ref().unwrap())
+            } else {
+                filename
+            };
 
         let last_read_local = item.last_read.with_timezone(&Local);
         let last_read_str = last_read_local.format("%I:%M%p %b %d").to_string();
@@ -1270,24 +1333,32 @@ impl Reader {
         SettingItem::all()
             .iter()
             .map(|item| match item {
-                SettingItem::ShowLineNumbers => format!("Show line numbers: {}", settings.show_line_numbers),
+                SettingItem::ShowLineNumbers => {
+                    format!("Show line numbers: {}", settings.show_line_numbers)
+                }
                 SettingItem::MouseSupport => format!("Mouse support: {}", settings.mouse_support),
                 SettingItem::PageScrollAnimation => {
                     format!("Page scroll animation: {}", settings.page_scroll_animation)
                 }
                 SettingItem::ShowProgressIndicator => {
-                    format!("Show progress indicator: {}", settings.show_progress_indicator)
+                    format!(
+                        "Show progress indicator: {}",
+                        settings.show_progress_indicator
+                    )
                 }
                 SettingItem::StartWithDoubleSpread => {
-                    format!("Start with double spread: {}", settings.start_with_double_spread)
+                    format!(
+                        "Start with double spread: {}",
+                        settings.start_with_double_spread
+                    )
                 }
                 SettingItem::SeamlessBetweenChapters => {
-                    format!("Seamless between chapters: {}", settings.seamless_between_chapters)
+                    format!(
+                        "Seamless between chapters: {}",
+                        settings.seamless_between_chapters
+                    )
                 }
-                SettingItem::Width => format!(
-                    "Text width: {}",
-                    state.reading_state.textwidth
-                ),
+                SettingItem::Width => format!("Text width: {}", state.reading_state.textwidth),
                 SettingItem::ShowTopBar => format!("Show top bar: {}", settings.show_top_bar),
             })
             .collect()
@@ -1364,14 +1435,28 @@ impl Reader {
         } else {
             None
         };
-        let right_text = match (link_hint, percent_text) {
-            (Some(link_hint), Some(percent_text)) => Some(format!("{} {}", link_hint, percent_text)),
-            (Some(link_hint), None) => Some(link_hint),
-            (None, Some(percent_text)) => Some(percent_text),
-            (None, None) => None,
+        let mode_hint = if state.ui_state.active_window == WindowType::Visual {
+            Some("-- VISUAL --".to_string())
+        } else {
+            None
+        };
+        let right_text = match (mode_hint, link_hint, percent_text) {
+            (Some(mode), Some(link_hint), Some(percent_text)) => {
+                Some(format!("{} {} {}", mode, link_hint, percent_text))
+            }
+            (Some(mode), Some(link_hint), None) => Some(format!("{} {}", mode, link_hint)),
+            (Some(mode), None, Some(percent_text)) => Some(format!("{} {}", mode, percent_text)),
+            (Some(mode), None, None) => Some(mode),
+            (None, Some(link_hint), Some(percent_text)) => {
+                Some(format!("{} {}", link_hint, percent_text))
+            }
+            (None, Some(link_hint), None) => Some(link_hint),
+            (None, None, Some(percent_text)) => Some(percent_text),
+            (None, None, None) => None,
         };
         if show_top_bar {
-            let header_line = Self::build_header_line(title, right_text.as_deref(), chunks[0].width);
+            let header_line =
+                Self::build_header_line(title, right_text.as_deref(), chunks[0].width);
             let header = Paragraph::new(Line::from(header_line));
             frame.render_widget(header, chunks[0]);
         }
@@ -1456,19 +1541,22 @@ impl Reader {
             // Try to resolve row from section ID
             if let Some(section_id) = &entry.section
                 && let Some(section_rows) = self.board.section_rows()
-                && let Some(row) = section_rows.get(section_id) {
-                    target_row = Some(*row);
+                && let Some(row) = section_rows.get(section_id)
+            {
+                target_row = Some(*row);
             }
 
             // Fallback to content index
             if target_row.is_none()
-                && let Some(row) = self.content_start_rows.get(entry.content_index) {
-                    target_row = Some(*row);
+                && let Some(row) = self.content_start_rows.get(entry.content_index)
+            {
+                target_row = Some(*row);
             }
 
             if let Some(row) = target_row
-                && row <= current_row {
-                    selected_index = i;
+                && row <= current_row
+            {
+                selected_index = i;
             }
         }
 
@@ -1502,7 +1590,9 @@ impl Reader {
                 .content_index_for_row(link.row)
                 .and_then(|index| self.ebook.as_ref()?.resource_path_for_content_index(index));
 
-            if let Some(target_row) = self.resolve_internal_link_row(&link.url, base_content.as_deref()) {
+            if let Some(target_row) =
+                self.resolve_internal_link_row(&link.url, base_content.as_deref())
+            {
                 link.target_row = Some(target_row);
             }
         }
@@ -1522,14 +1612,14 @@ impl Reader {
 
     fn open_images_window(&mut self) -> eyre::Result<()> {
         let (start, end) = self.visible_line_range();
-        
+
         let mut images = Vec::new();
         if let Some(_lines) = self.board.lines() {
-             for i in start..end {
-                 if let Some(src) = self.board.image_src(i) {
-                     images.push((i, src));
-                 }
-             }
+            for i in start..end {
+                if let Some(src) = self.board.image_src(i) {
+                    images.push((i, src));
+                }
+            }
         }
 
         let mut state = self.state.borrow_mut();
@@ -1544,7 +1634,6 @@ impl Reader {
         state.ui_state.open_window(WindowType::Images);
         Ok(())
     }
-
 
     fn open_library_window(&mut self) -> eyre::Result<()> {
         let library_items = self.db_state.get_from_history()?;
@@ -1588,59 +1677,63 @@ impl Reader {
             AppDirection::PageUp => {
                 if !seamless
                     && let Some(index) = self.content_index_for_row(current_row)
-                    && let Some((chapter_start, _chapter_end)) = self.chapter_bounds_for_index(index) {
-                        let current_start = current_row.saturating_sub(1);
-                        if current_start <= chapter_start {
-                            if index > 0
-                                && let Some((prev_start, prev_end)) = self.chapter_bounds_for_index(index - 1) {
-                                    let last_start = prev_end
-                                        .saturating_sub(page.saturating_sub(1))
-                                        .max(prev_start);
-                                    state.reading_state.row = Self::row_from_start(last_start);
-                                    return;
-                            }
-                            state.reading_state.row = Self::row_from_start(chapter_start);
+                    && let Some((chapter_start, _chapter_end)) =
+                        self.chapter_bounds_for_index(index)
+                {
+                    let current_start = current_row.saturating_sub(1);
+                    if current_start <= chapter_start {
+                        if index > 0
+                            && let Some((prev_start, prev_end)) =
+                                self.chapter_bounds_for_index(index - 1)
+                        {
+                            let last_start = prev_end
+                                .saturating_sub(page.saturating_sub(1))
+                                .max(prev_start);
+                            state.reading_state.row = Self::row_from_start(last_start);
                             return;
                         }
-
-                        let new_start = current_start.saturating_sub(page);
-                        let clamped = if new_start < chapter_start {
-                            chapter_start
-                        } else {
-                            new_start
-                        };
-                        state.reading_state.row = Self::row_from_start(clamped);
+                        state.reading_state.row = Self::row_from_start(chapter_start);
                         return;
+                    }
+
+                    let new_start = current_start.saturating_sub(page);
+                    let clamped = if new_start < chapter_start {
+                        chapter_start
+                    } else {
+                        new_start
+                    };
+                    state.reading_state.row = Self::row_from_start(clamped);
+                    return;
                 }
                 state.reading_state.row = current_row.saturating_sub(page);
             }
             AppDirection::PageDown => {
                 if !seamless
                     && let Some(index) = self.content_index_for_row(current_row)
-                    && let Some((chapter_start, chapter_end)) = self.chapter_bounds_for_index(index) {
-                        let current_start = current_row.saturating_sub(1);
-                        let last_start = chapter_end
-                            .saturating_sub(page.saturating_sub(1))
-                            .max(chapter_start);
-                        if current_start >= last_start {
-                            if let Some(next_start) = self.content_start_rows.get(index + 1).copied() {
-                                state.reading_state.row = Self::row_from_start(
-                                    next_start.min(total_lines.saturating_sub(1)),
-                                );
-                                return;
-                            }
-                            state.reading_state.row = Self::row_from_start(last_start);
+                    && let Some((chapter_start, chapter_end)) = self.chapter_bounds_for_index(index)
+                {
+                    let current_start = current_row.saturating_sub(1);
+                    let last_start = chapter_end
+                        .saturating_sub(page.saturating_sub(1))
+                        .max(chapter_start);
+                    if current_start >= last_start {
+                        if let Some(next_start) = self.content_start_rows.get(index + 1).copied() {
+                            state.reading_state.row =
+                                Self::row_from_start(next_start.min(total_lines.saturating_sub(1)));
                             return;
                         }
-
-                        let new_start = current_start.saturating_add(page);
-                        let clamped = if new_start > last_start {
-                            last_start
-                        } else {
-                            new_start
-                        };
-                        state.reading_state.row = Self::row_from_start(clamped);
+                        state.reading_state.row = Self::row_from_start(last_start);
                         return;
+                    }
+
+                    let new_start = current_start.saturating_add(page);
+                    let clamped = if new_start > last_start {
+                        last_start
+                    } else {
+                        new_start
+                    };
+                    state.reading_state.row = Self::row_from_start(clamped);
+                    return;
                 }
                 let next = current_row.saturating_add(page);
                 state.reading_state.row = next.min(total_lines.saturating_sub(1));
@@ -1649,29 +1742,33 @@ impl Reader {
                 let half_page = (page / 2).max(1);
                 if !seamless
                     && let Some(index) = self.content_index_for_row(current_row)
-                    && let Some((chapter_start, _chapter_end)) = self.chapter_bounds_for_index(index) {
-                        let current_start = current_row.saturating_sub(1);
-                        if current_start <= chapter_start {
-                            if index > 0
-                                && let Some((prev_start, prev_end)) = self.chapter_bounds_for_index(index - 1) {
-                                    let last_start = prev_end
-                                        .saturating_sub(half_page.saturating_sub(1))
-                                        .max(prev_start);
-                                    state.reading_state.row = Self::row_from_start(last_start);
-                                    return;
-                            }
-                            state.reading_state.row = Self::row_from_start(chapter_start);
+                    && let Some((chapter_start, _chapter_end)) =
+                        self.chapter_bounds_for_index(index)
+                {
+                    let current_start = current_row.saturating_sub(1);
+                    if current_start <= chapter_start {
+                        if index > 0
+                            && let Some((prev_start, prev_end)) =
+                                self.chapter_bounds_for_index(index - 1)
+                        {
+                            let last_start = prev_end
+                                .saturating_sub(half_page.saturating_sub(1))
+                                .max(prev_start);
+                            state.reading_state.row = Self::row_from_start(last_start);
                             return;
                         }
-
-                        let new_start = current_start.saturating_sub(half_page);
-                        let clamped = if new_start < chapter_start {
-                            chapter_start
-                        } else {
-                            new_start
-                        };
-                        state.reading_state.row = Self::row_from_start(clamped);
+                        state.reading_state.row = Self::row_from_start(chapter_start);
                         return;
+                    }
+
+                    let new_start = current_start.saturating_sub(half_page);
+                    let clamped = if new_start < chapter_start {
+                        chapter_start
+                    } else {
+                        new_start
+                    };
+                    state.reading_state.row = Self::row_from_start(clamped);
+                    return;
                 }
                 state.reading_state.row = current_row.saturating_sub(half_page);
             }
@@ -1679,36 +1776,266 @@ impl Reader {
                 let half_page = (page / 2).max(1);
                 if !seamless
                     && let Some(index) = self.content_index_for_row(current_row)
-                    && let Some((chapter_start, chapter_end)) = self.chapter_bounds_for_index(index) {
-                        let current_start = current_row.saturating_sub(1);
-                        let last_start = chapter_end
-                            .saturating_sub(half_page.saturating_sub(1))
-                            .max(chapter_start);
-                        if current_start >= last_start {
-                            if let Some(next_start) = self.content_start_rows.get(index + 1).copied() {
-                                state.reading_state.row = Self::row_from_start(
-                                    next_start.min(total_lines.saturating_sub(1)),
-                                );
-                                return;
-                            }
-                            state.reading_state.row = Self::row_from_start(last_start);
+                    && let Some((chapter_start, chapter_end)) = self.chapter_bounds_for_index(index)
+                {
+                    let current_start = current_row.saturating_sub(1);
+                    let last_start = chapter_end
+                        .saturating_sub(half_page.saturating_sub(1))
+                        .max(chapter_start);
+                    if current_start >= last_start {
+                        if let Some(next_start) = self.content_start_rows.get(index + 1).copied() {
+                            state.reading_state.row =
+                                Self::row_from_start(next_start.min(total_lines.saturating_sub(1)));
                             return;
                         }
-
-                        let new_start = current_start.saturating_add(half_page);
-                        let clamped = if new_start > last_start {
-                            last_start
-                        } else {
-                            new_start
-                        };
-                        state.reading_state.row = Self::row_from_start(clamped);
+                        state.reading_state.row = Self::row_from_start(last_start);
                         return;
+                    }
+
+                    let new_start = current_start.saturating_add(half_page);
+                    let clamped = if new_start > last_start {
+                        last_start
+                    } else {
+                        new_start
+                    };
+                    state.reading_state.row = Self::row_from_start(clamped);
+                    return;
                 }
                 let next = current_row.saturating_add(half_page);
                 state.reading_state.row = next.min(total_lines.saturating_sub(1));
             }
             _ => {}
         }
+    }
+
+    fn move_visual_cursor(&mut self, direction: AppDirection) {
+        let total_lines = self.board.total_lines();
+        if total_lines == 0 {
+            return;
+        }
+
+        let (row, col) = {
+            let state = self.state.borrow();
+            match state.ui_state.visual_cursor {
+                Some(pos) => pos,
+                None => return,
+            }
+        };
+
+        let current_line_len = self.board.line_char_count(row);
+        let (new_row, mut new_col) = match direction {
+            AppDirection::Left => {
+                if col > 0 {
+                    (row, col - 1)
+                } else if row > 0 {
+                    let prev_row = row - 1;
+                    let prev_len = self.board.line_char_count(prev_row);
+                    (prev_row, prev_len.saturating_sub(1))
+                } else {
+                    (row, col)
+                }
+            }
+            AppDirection::Right => {
+                if current_line_len > 0 && col + 1 < current_line_len {
+                    (row, col + 1)
+                } else if row + 1 < total_lines {
+                    (row + 1, 0)
+                } else {
+                    (row, col)
+                }
+            }
+            AppDirection::Up => {
+                if row > 0 {
+                    let prev_row = row - 1;
+                    let prev_len = self.board.line_char_count(prev_row);
+                    (prev_row, col.min(prev_len.saturating_sub(1)))
+                } else {
+                    (row, col)
+                }
+            }
+            AppDirection::Down => {
+                if row + 1 < total_lines {
+                    let next_row = row + 1;
+                    let next_len = self.board.line_char_count(next_row);
+                    (next_row, col.min(next_len.saturating_sub(1)))
+                } else {
+                    (row, col)
+                }
+            }
+            _ => (row, col),
+        };
+
+        if self.board.line_char_count(new_row) == 0 {
+            new_col = 0;
+        }
+
+        self.set_visual_cursor_and_scroll((new_row, new_col));
+    }
+
+    fn move_visual_cursor_word_forward(&mut self) {
+        let Some(mut pos) = self.current_visual_cursor() else {
+            return;
+        };
+        let Some(next) = self.next_visual_pos(pos) else {
+            return;
+        };
+        pos = next;
+
+        while let Some(ch) = self.char_at_visual_pos(pos) {
+            if !Self::is_word_char(ch) {
+                break;
+            }
+            let Some(next) = self.next_visual_pos(pos) else {
+                self.set_visual_cursor_and_scroll(pos);
+                return;
+            };
+            pos = next;
+        }
+
+        while let Some(ch) = self.char_at_visual_pos(pos) {
+            if Self::is_word_char(ch) {
+                self.set_visual_cursor_and_scroll(pos);
+                return;
+            }
+            let Some(next) = self.next_visual_pos(pos) else {
+                return;
+            };
+            pos = next;
+        }
+    }
+
+    fn move_visual_cursor_word_backward(&mut self) {
+        let Some(mut pos) = self.current_visual_cursor() else {
+            return;
+        };
+        let Some(prev) = self.prev_visual_pos(pos) else {
+            return;
+        };
+        pos = prev;
+
+        while let Some(ch) = self.char_at_visual_pos(pos) {
+            if Self::is_word_char(ch) {
+                break;
+            }
+            let Some(prev) = self.prev_visual_pos(pos) else {
+                return;
+            };
+            pos = prev;
+        }
+
+        while let Some(prev) = self.prev_visual_pos(pos) {
+            let Some(ch) = self.char_at_visual_pos(prev) else {
+                break;
+            };
+            if !Self::is_word_char(ch) {
+                break;
+            }
+            pos = prev;
+        }
+
+        if self.char_at_visual_pos(pos).is_some_and(Self::is_word_char) {
+            self.set_visual_cursor_and_scroll(pos);
+        }
+    }
+
+    fn move_visual_cursor_word_end(&mut self) {
+        let Some(mut pos) = self.current_visual_cursor() else {
+            return;
+        };
+
+        while let Some(ch) = self.char_at_visual_pos(pos) {
+            if Self::is_word_char(ch) {
+                break;
+            }
+            let Some(next) = self.next_visual_pos(pos) else {
+                return;
+            };
+            pos = next;
+        }
+
+        if !self.char_at_visual_pos(pos).is_some_and(Self::is_word_char) {
+            return;
+        }
+
+        while let Some(next) = self.next_visual_pos(pos) {
+            let Some(ch) = self.char_at_visual_pos(next) else {
+                break;
+            };
+            if !Self::is_word_char(ch) {
+                break;
+            }
+            pos = next;
+        }
+
+        self.set_visual_cursor_and_scroll(pos);
+    }
+
+    fn current_visual_cursor(&self) -> Option<(usize, usize)> {
+        let state = self.state.borrow();
+        state.ui_state.visual_cursor
+    }
+
+    fn set_visual_cursor_and_scroll(&mut self, pos: (usize, usize)) {
+        let (row, col) = pos;
+        let page_size = self.page_size();
+        let mut state = self.state.borrow_mut();
+        state.ui_state.visual_cursor = Some((row, col));
+
+        let viewport_start = state.reading_state.row.saturating_sub(1);
+        let viewport_end = viewport_start.saturating_add(page_size);
+        if row < viewport_start {
+            state.reading_state.row = Self::row_from_start(row);
+        } else if row >= viewport_end {
+            let new_start = row.saturating_sub(page_size.saturating_sub(1));
+            state.reading_state.row = Self::row_from_start(new_start);
+        }
+    }
+
+    fn next_visual_pos(&self, pos: (usize, usize)) -> Option<(usize, usize)> {
+        let (row, col) = pos;
+        let total_lines = self.board.total_lines();
+        if row >= total_lines {
+            return None;
+        }
+
+        let line_len = self.board.line_char_count(row);
+        if line_len > 0 && col + 1 < line_len {
+            return Some((row, col + 1));
+        }
+        if row + 1 < total_lines {
+            return Some((row + 1, 0));
+        }
+        None
+    }
+
+    fn prev_visual_pos(&self, pos: (usize, usize)) -> Option<(usize, usize)> {
+        let (row, col) = pos;
+        let total_lines = self.board.total_lines();
+        if row >= total_lines || (row == 0 && col == 0) {
+            return None;
+        }
+
+        let line_len = self.board.line_char_count(row);
+        if line_len > 0 && col > 0 {
+            return Some((row, col - 1));
+        }
+
+        let prev_row = row.saturating_sub(1);
+        let prev_len = self.board.line_char_count(prev_row);
+        if prev_len == 0 {
+            Some((prev_row, 0))
+        } else {
+            Some((prev_row, prev_len - 1))
+        }
+    }
+
+    fn char_at_visual_pos(&self, pos: (usize, usize)) -> Option<char> {
+        let (row, col) = pos;
+        self.board.get_line(row)?.chars().nth(col)
+    }
+
+    fn is_word_char(ch: char) -> bool {
+        ch.is_alphanumeric() || ch == '_'
     }
 
     fn next_chapter(&mut self) {
@@ -1777,12 +2104,12 @@ impl Reader {
         };
 
         let chapter_end = self.find_chapter_end(rows[index], next_chapter_start);
-        
+
         // Position like page-down: show last content line at bottom of screen
         let last_start = chapter_end
             .saturating_sub(page.saturating_sub(1))
             .max(rows[index]);
-        
+
         self.record_jump_position();
         let mut state = self.state.borrow_mut();
         state.reading_state.row = Self::row_from_start(last_start);
@@ -1850,12 +2177,9 @@ impl Reader {
     fn visible_line_range(&self) -> (usize, usize) {
         let height = self.page_size();
         let start = self.state.borrow().reading_state.row.saturating_sub(1);
-        let end = start
-            .saturating_add(height)
-            .min(self.board.total_lines());
+        let end = start.saturating_add(height).min(self.board.total_lines());
         (start, end)
     }
-
 
     fn content_index_for_row(&self, row: usize) -> Option<usize> {
         if self.content_start_rows.is_empty() {
@@ -1883,11 +2207,7 @@ impl Reader {
     }
 
     fn row_from_start(start_line: usize) -> usize {
-        if start_line == 0 {
-            0
-        } else {
-            start_line + 1
-        }
+        if start_line == 0 { 0 } else { start_line + 1 }
     }
 
     fn chapter_rows(&self) -> Vec<usize> {
@@ -1898,8 +2218,9 @@ impl Reader {
             // First try to use section ID if available
             if let Some(section) = entry.section.as_ref() {
                 if let Some(section_rows) = section_rows
-                    && let Some(row) = section_rows.get(section) {
-                        rows.push(*row);
+                    && let Some(row) = section_rows.get(section)
+                {
+                    rows.push(*row);
                 }
             } else if entry.content_index < self.content_start_rows.len() {
                 // Fall back to using content file index
@@ -1931,7 +2252,9 @@ impl Reader {
 
         if query.is_empty() {
             let mut state = self.state.borrow_mut();
-            state.ui_state.set_message("Search query is empty".to_string(), MessageType::Warning);
+            state
+                .ui_state
+                .set_message("Search query is empty".to_string(), MessageType::Warning);
             return;
         }
 
@@ -1939,7 +2262,9 @@ impl Reader {
             Ok(regex) => regex,
             Err(err) => {
                 let mut state = self.state.borrow_mut();
-                state.ui_state.set_message(format!("Invalid regex: {}", err), MessageType::Error);
+                state
+                    .ui_state
+                    .set_message(format!("Invalid regex: {}", err), MessageType::Error);
                 return;
             }
         };
@@ -1973,17 +2298,22 @@ impl Reader {
         if let Some(first) = state.ui_state.search_results.first() {
             state.reading_state.row = first.line;
         } else {
-            state.ui_state.set_message("No matches found".to_string(), MessageType::Info);
+            state
+                .ui_state
+                .set_message("No matches found".to_string(), MessageType::Info);
         }
     }
 
     fn search_next(&mut self) {
         let mut state = self.state.borrow_mut();
         if state.ui_state.search_results.is_empty() {
-            state.ui_state.set_message("No search results".to_string(), MessageType::Info);
+            state
+                .ui_state
+                .set_message("No search results".to_string(), MessageType::Info);
             return;
         }
-        let next = (state.ui_state.selected_search_result + 1) % state.ui_state.search_results.len();
+        let next =
+            (state.ui_state.selected_search_result + 1) % state.ui_state.search_results.len();
         state.ui_state.selected_search_result = next;
         if let Some(result) = state.ui_state.search_results.get(next) {
             state.reading_state.row = result.line;
@@ -1993,7 +2323,9 @@ impl Reader {
     fn search_previous(&mut self) {
         let mut state = self.state.borrow_mut();
         if state.ui_state.search_results.is_empty() {
-            state.ui_state.set_message("No search results".to_string(), MessageType::Info);
+            state
+                .ui_state
+                .set_message("No search results".to_string(), MessageType::Info);
             return;
         }
         let len = state.ui_state.search_results.len();
@@ -2028,7 +2360,11 @@ impl Reader {
     fn jump_to_toc_entry(&mut self) -> eyre::Result<()> {
         let (section, content_index) = {
             let state = self.state.borrow();
-            if let Some(entry) = state.ui_state.toc_entries.get(state.ui_state.toc_selected_index) {
+            if let Some(entry) = state
+                .ui_state
+                .toc_entries
+                .get(state.ui_state.toc_selected_index)
+            {
                 (entry.section.clone(), entry.content_index)
             } else {
                 return Ok(());
@@ -2038,13 +2374,15 @@ impl Reader {
         let mut target_row = None;
         if let Some(section_id) = section.as_ref()
             && let Some(section_rows) = self.board.section_rows()
-            && let Some(row) = section_rows.get(section_id) {
-                target_row = Some(*row);
+            && let Some(row) = section_rows.get(section_id)
+        {
+            target_row = Some(*row);
         }
 
         if target_row.is_none()
-            && let Some(row) = self.content_start_rows.get(content_index) {
-                target_row = Some(*row);
+            && let Some(row) = self.content_start_rows.get(content_index)
+        {
+            target_row = Some(*row);
         }
 
         if let Some(row) = target_row {
@@ -2057,7 +2395,10 @@ impl Reader {
             state.ui_state.open_window(WindowType::Reader);
         } else {
             let mut state = self.state.borrow_mut();
-            state.ui_state.set_message("TOC entry not mapped to text".to_string(), MessageType::Warning);
+            state.ui_state.set_message(
+                "TOC entry not mapped to text".to_string(),
+                MessageType::Warning,
+            );
         }
         Ok(())
     }
@@ -2065,7 +2406,9 @@ impl Reader {
     fn add_bookmark(&mut self) -> eyre::Result<()> {
         let Some(epub) = self.ebook.as_ref() else {
             let mut state = self.state.borrow_mut();
-            state.ui_state.set_message("No book loaded".to_string(), MessageType::Warning);
+            state
+                .ui_state
+                .set_message("No book loaded".to_string(), MessageType::Warning);
             return Ok(());
         };
         let bookmark_name = {
@@ -2073,7 +2416,8 @@ impl Reader {
             format!("Bookmark {}", state.ui_state.bookmarks.len() + 1)
         };
         let reading_state = { self.state.borrow().reading_state.clone() };
-        self.db_state.insert_bookmark(epub, &bookmark_name, &reading_state)?;
+        self.db_state
+            .insert_bookmark(epub, &bookmark_name, &reading_state)?;
         self.refresh_bookmarks()?;
         Ok(())
     }
@@ -2166,9 +2510,10 @@ impl Reader {
                 state.ui_state.open_window(WindowType::Reader);
             } else {
                 let mut state = self.state.borrow_mut();
-                state
-                    .ui_state
-                    .set_message("Selected file no longer exists".to_string(), MessageType::Warning);
+                state.ui_state.set_message(
+                    "Selected file no longer exists".to_string(),
+                    MessageType::Warning,
+                );
             }
         }
         Ok(())
@@ -2185,48 +2530,54 @@ impl Reader {
         };
 
         if let Some(src) = image_src
-            && let Some(epub) = self.ebook.as_mut() {
-                // Resolve relative path
-                let current_index = self.state.borrow().reading_state.content_index;
-                let base_path = epub.resource_path_for_content_index(current_index);
-                let resolved_path = if let Some(base) = base_path {
-                     Self::resolve_relative_href(&src, Some(&base)).unwrap_or(src.clone())
-                } else {
-                    src.clone()
-                };
+            && let Some(epub) = self.ebook.as_mut()
+        {
+            // Resolve relative path
+            let current_index = self.state.borrow().reading_state.content_index;
+            let base_path = epub.resource_path_for_content_index(current_index);
+            let resolved_path = if let Some(base) = base_path {
+                Self::resolve_relative_href(&src, Some(&base)).unwrap_or(src.clone())
+            } else {
+                src.clone()
+            };
 
-                match epub.get_img_bytestr(&resolved_path) {
-                    Ok((mime, bytes)) => {
-                        // Create a temporary file with the correct extension
-                        let extension = match mime.as_str() {
-                            "image/jpeg" => "jpg",
-                            "image/png" => "png",
-                            "image/gif" => "gif",
-                            "image/svg+xml" => "svg",
-                             _ => "jpg", // Fallback
-                        };
-                        
-                        let temp_dir = std::env::temp_dir();
-                        let filename = std::path::Path::new(&src)
-                            .file_name()
-                            .and_then(|n| n.to_str())
-                            .unwrap_or("image");
-                        let temp_path = temp_dir.join(format!("{}_{}.{}", "repy_img", filename, extension));
-                        
-                        std::fs::write(&temp_path, bytes)?;
-                        
-                        self.open_image_viewer(&temp_path.to_string_lossy())?;
-                        
-                        let mut state = self.state.borrow_mut();
-                        state.ui_state.set_message("Opened image".to_string(), MessageType::Info);
-                        state.ui_state.open_window(WindowType::Reader);
-                    }
-                    Err(e) => {
-                        let mut state = self.state.borrow_mut();
-                        state.ui_state.set_message(format!("Failed to load image: {}", e), MessageType::Error);
-                    }
+            match epub.get_img_bytestr(&resolved_path) {
+                Ok((mime, bytes)) => {
+                    // Create a temporary file with the correct extension
+                    let extension = match mime.as_str() {
+                        "image/jpeg" => "jpg",
+                        "image/png" => "png",
+                        "image/gif" => "gif",
+                        "image/svg+xml" => "svg",
+                        _ => "jpg", // Fallback
+                    };
+
+                    let temp_dir = std::env::temp_dir();
+                    let filename = std::path::Path::new(&src)
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("image");
+                    let temp_path =
+                        temp_dir.join(format!("{}_{}.{}", "repy_img", filename, extension));
+
+                    std::fs::write(&temp_path, bytes)?;
+
+                    self.open_image_viewer(&temp_path.to_string_lossy())?;
+
+                    let mut state = self.state.borrow_mut();
+                    state
+                        .ui_state
+                        .set_message("Opened image".to_string(), MessageType::Info);
+                    state.ui_state.open_window(WindowType::Reader);
+                }
+                Err(e) => {
+                    let mut state = self.state.borrow_mut();
+                    state
+                        .ui_state
+                        .set_message(format!("Failed to load image: {}", e), MessageType::Error);
                 }
             }
+        }
         Ok(())
     }
 
@@ -2244,17 +2595,18 @@ impl Reader {
         };
 
         for viewer in viewers_to_try {
-            let status = std::process::Command::new(viewer)
-                .arg(path)
-                .status();
-            
+            let status = std::process::Command::new(viewer).arg(path).status();
+
             if let Ok(status) = status
-                && status.success() {
-                    return Ok(true);
+                && status.success()
+            {
+                return Ok(true);
             }
         }
 
-        Err(eyre::eyre!("Failed to open image with any available viewer"))
+        Err(eyre::eyre!(
+            "Failed to open image with any available viewer"
+        ))
     }
 
     fn toggle_selected_setting(&mut self) -> eyre::Result<()> {
@@ -2279,16 +2631,20 @@ impl Reader {
                 state.config.settings.mouse_support = !state.config.settings.mouse_support;
             }
             SettingItem::PageScrollAnimation => {
-                state.config.settings.page_scroll_animation = !state.config.settings.page_scroll_animation;
+                state.config.settings.page_scroll_animation =
+                    !state.config.settings.page_scroll_animation;
             }
             SettingItem::ShowProgressIndicator => {
-                state.config.settings.show_progress_indicator = !state.config.settings.show_progress_indicator;
+                state.config.settings.show_progress_indicator =
+                    !state.config.settings.show_progress_indicator;
             }
             SettingItem::StartWithDoubleSpread => {
-                state.config.settings.start_with_double_spread = !state.config.settings.start_with_double_spread;
+                state.config.settings.start_with_double_spread =
+                    !state.config.settings.start_with_double_spread;
             }
             SettingItem::SeamlessBetweenChapters => {
-                state.config.settings.seamless_between_chapters = !state.config.settings.seamless_between_chapters;
+                state.config.settings.seamless_between_chapters =
+                    !state.config.settings.seamless_between_chapters;
                 rebuild_chapter_breaks = true;
             }
             SettingItem::Width => {
@@ -2318,7 +2674,7 @@ impl Reader {
 
     fn change_textwidth(&mut self, delta: i32) -> eyre::Result<()> {
         let current_textwidth = self.state.borrow().reading_state.textwidth as i32;
-        let new_textwidth = (current_textwidth + delta).max(20);  // Minimum 20 columns
+        let new_textwidth = (current_textwidth + delta).max(20); // Minimum 20 columns
         self.rebuild_text_structure_with_textwidth(new_textwidth as usize)?;
         self.persist_state()
     }
@@ -2381,7 +2737,10 @@ impl Reader {
         };
 
         // Calculate actual text width for rendering
-        let text_width = term_width.saturating_sub(padding * 2).max(20).min(term_width);
+        let text_width = term_width
+            .saturating_sub(padding * 2)
+            .max(20)
+            .min(term_width);
 
         // Collect page_height before any mutable borrows
         let page_height = self.chapter_break_page_height();
@@ -2399,7 +2758,9 @@ impl Reader {
             let contents = epub.contents();
             let total_chapters = contents.len();
 
-            if current_chapter_idx < self.chapter_text_structures.len() && current_chapter_idx < total_chapters {
+            if current_chapter_idx < self.chapter_text_structures.len()
+                && current_chapter_idx < total_chapters
+            {
                 // Clone content_id to avoid holding immutable borrow across mutable call
                 let content_id = contents[current_chapter_idx].clone();
                 let starting_line = if current_chapter_idx > 0 {
@@ -2409,14 +2770,16 @@ impl Reader {
                 };
 
                 // Parse only the current chapter with new width
-                let mut parsed_chapter = epub.get_parsed_content(&content_id, text_width, starting_line)?;
+                let mut parsed_chapter =
+                    epub.get_parsed_content(&content_id, text_width, starting_line)?;
 
                 // Add chapter break if needed
                 if let Some(ph) = page_height
-                    && current_chapter_idx + 1 < total_chapters {
-                        let total_lines = starting_line + parsed_chapter.text_lines.len();
-                        let break_lines = build_chapter_break(ph, total_lines);
-                        parsed_chapter.text_lines.extend(break_lines);
+                    && current_chapter_idx + 1 < total_chapters
+                {
+                    let total_lines = starting_line + parsed_chapter.text_lines.len();
+                    let break_lines = build_chapter_break(ph, total_lines);
+                    parsed_chapter.text_lines.extend(break_lines);
                 }
 
                 // Update the cached structure for this chapter
@@ -2432,10 +2795,18 @@ impl Reader {
         for ts in &self.chapter_text_structures {
             content_start_rows.push(row_offset);
             row_offset += ts.text_lines.len();
-            combined_text_structure.text_lines.extend(ts.text_lines.clone());
-            combined_text_structure.image_maps.extend(ts.image_maps.clone());
-            combined_text_structure.section_rows.extend(ts.section_rows.clone());
-            combined_text_structure.formatting.extend(ts.formatting.clone());
+            combined_text_structure
+                .text_lines
+                .extend(ts.text_lines.clone());
+            combined_text_structure
+                .image_maps
+                .extend(ts.image_maps.clone());
+            combined_text_structure
+                .section_rows
+                .extend(ts.section_rows.clone());
+            combined_text_structure
+                .formatting
+                .extend(ts.formatting.clone());
             combined_text_structure.links.extend(ts.links.clone());
         }
         self.board.update_text_structure(combined_text_structure);
@@ -2453,7 +2824,7 @@ impl Reader {
             let chapter_len = if idx + 1 < self.content_start_rows.len() {
                 self.content_start_rows[idx + 1] - start_row
             } else {
-                 self.board.total_lines() - start_row
+                self.board.total_lines() - start_row
             };
 
             let new_offset = current_chapter_offset.min(chapter_len.saturating_sub(1));
@@ -2468,14 +2839,79 @@ impl Reader {
     }
 
     fn yank_selection(&mut self) -> eyre::Result<()> {
-        let state = self.state.borrow();
-        if let Some(selection_start) = state.ui_state.selection_start {
-            let selection_end = state.reading_state.row;
-            let selected_text = self.board.get_selected_text(selection_start, selection_end);
+        let (anchor, cursor) = {
+            let state = self.state.borrow();
+            match (state.ui_state.visual_anchor, state.ui_state.visual_cursor) {
+                (Some(anchor), Some(cursor)) => (anchor, cursor),
+                _ => return Ok(()),
+            }
+        };
+
+        let selected_text = self.board.get_selected_text_range(anchor, cursor);
+        if !selected_text.is_empty() {
             self.clipboard.set_text(selected_text)?;
             let ui_state = &mut self.state.borrow_mut().ui_state;
             ui_state.set_message("Text copied to clipboard".to_string(), MessageType::Info);
-            ui_state.open_window(WindowType::Reader);
+        }
+        self.state
+            .borrow_mut()
+            .ui_state
+            .open_window(WindowType::Reader);
+        Ok(())
+    }
+
+    fn dictionary_lookup(&mut self) -> eyre::Result<()> {
+        use std::process::Command;
+
+        let (anchor, cursor) = {
+            let state = self.state.borrow();
+            match (state.ui_state.visual_anchor, state.ui_state.visual_cursor) {
+                (Some(anchor), Some(cursor)) => (anchor, cursor),
+                _ => return Ok(()),
+            }
+        };
+
+        let selected_text = self.board.get_selected_text_range(anchor, cursor);
+        let word = selected_text.trim().to_string();
+        if word.is_empty() {
+            self.state
+                .borrow_mut()
+                .ui_state
+                .open_window(WindowType::Reader);
+            return Ok(());
+        }
+
+        self.state
+            .borrow_mut()
+            .ui_state
+            .open_window(WindowType::Reader);
+
+        let output = Command::new("sdcv")
+            .arg("-n")
+            .arg(&word)
+            .output()
+            .or_else(|_| Command::new("dict").arg(&word).output());
+
+        let ui_state = &mut self.state.borrow_mut().ui_state;
+        match output {
+            Ok(out) => {
+                let text = String::from_utf8_lossy(&out.stdout);
+                if text.trim().is_empty() {
+                    ui_state.set_message(
+                        format!("No definition found for '{word}'"),
+                        MessageType::Info,
+                    );
+                } else {
+                    let preview: String = text.chars().take(200).collect();
+                    ui_state.set_message(preview, MessageType::Info);
+                }
+            }
+            Err(_) => {
+                ui_state.set_message(
+                    "No dictionary program found (install sdcv or dict)".to_string(),
+                    MessageType::Info,
+                );
+            }
         }
         Ok(())
     }
@@ -2520,7 +2956,8 @@ impl Reader {
             .content_index_for_row(link.row)
             .and_then(|index| self.ebook.as_ref()?.resource_path_for_content_index(index));
 
-        if let Some(target_row) = self.resolve_internal_link_row(&link.url, base_content.as_deref()) {
+        if let Some(target_row) = self.resolve_internal_link_row(&link.url, base_content.as_deref())
+        {
             self.record_jump_position();
             let mut state = self.state.borrow_mut();
             state.reading_state.row = target_row;
@@ -2542,7 +2979,10 @@ impl Reader {
                 Ok(false) | Err(_) => {
                     self.clipboard.set_text(link.url)?;
                     let ui_state = &mut self.state.borrow_mut().ui_state;
-                    ui_state.set_message("Failed to open; link copied".to_string(), MessageType::Warning);
+                    ui_state.set_message(
+                        "Failed to open; link copied".to_string(),
+                        MessageType::Warning,
+                    );
                     ui_state.open_window(WindowType::Reader);
                     return Ok(());
                 }
@@ -2576,11 +3016,12 @@ impl Reader {
 
         let mut has_fragment = false;
         if let Some(fragment) = fragment
-            && !fragment.is_empty() {
-                has_fragment = true;
-                if let Some(row) = self.resolve_anchor_row(fragment) {
-                    return Some(row);
-                }
+            && !fragment.is_empty()
+        {
+            has_fragment = true;
+            if let Some(row) = self.resolve_anchor_row(fragment) {
+                return Some(row);
+            }
         }
 
         if let Some(epub) = self.ebook.as_ref() {
@@ -2595,14 +3036,15 @@ impl Reader {
             }
 
             if let Some(resolved_path) = Self::resolve_relative_href(path, base_content)
-                && let Some(content_index) = epub.content_index_for_href(&resolved_path) {
-                    if has_fragment {
-                        let current_index = self.state.borrow().reading_state.content_index;
-                        if content_index == current_index {
-                            return None;
-                        }
+                && let Some(content_index) = epub.content_index_for_href(&resolved_path)
+            {
+                if has_fragment {
+                    let current_index = self.state.borrow().reading_state.content_index;
+                    if content_index == current_index {
+                        return None;
                     }
-                    return self.content_start_rows.get(content_index).copied();
+                }
+                return self.content_start_rows.get(content_index).copied();
             }
         }
 
@@ -2621,7 +3063,9 @@ impl Reader {
 
         let base_content = base_content?;
         let base_path = std::path::Path::new(base_content);
-        let base_dir = base_path.parent().unwrap_or_else(|| std::path::Path::new(""));
+        let base_dir = base_path
+            .parent()
+            .unwrap_or_else(|| std::path::Path::new(""));
         let joined = base_dir.join(href);
         let mut normalized = std::path::PathBuf::new();
         for component in joined.components() {
@@ -2687,9 +3131,7 @@ impl Reader {
 
     fn open_external_link(&self, url: &str) -> eyre::Result<bool> {
         // Use a system opener to keep link handling out of the TUI.
-        let status = std::process::Command::new("xdg-open")
-            .arg(url)
-            .status();
+        let status = std::process::Command::new("xdg-open").arg(url).status();
         match status {
             Ok(status) => Ok(status.success()),
             Err(err) => Err(err.into()),
@@ -2703,10 +3145,8 @@ mod tests {
 
     #[test]
     fn resolve_relative_href_joins_base_dir() {
-        let resolved = Reader::resolve_relative_href(
-            "chapter007.xhtml",
-            Some("OEBPS/Text/chapter001.xhtml"),
-        );
+        let resolved =
+            Reader::resolve_relative_href("chapter007.xhtml", Some("OEBPS/Text/chapter001.xhtml"));
         assert_eq!(resolved, Some("OEBPS/Text/chapter007.xhtml".to_string()));
     }
 
