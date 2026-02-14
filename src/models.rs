@@ -23,6 +23,7 @@ pub enum WindowType {
     #[default]
     Reader,
     Help,
+    Dictionary,
     Toc,
     Bookmarks,
     Library,

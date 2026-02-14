@@ -24,12 +24,13 @@ use crate::models::{
     BookMetadata, Direction as AppDirection, LibraryItem, LinkEntry, ReadingState, SearchData,
     TextStructure, TocEntry, WindowType,
 };
+use crate::settings::DICT_PRESET_LIST;
 use crate::state::State;
 use crate::ui::board::Board;
 use crate::ui::windows::{
-    bookmarks::BookmarksWindow, help::HelpWindow, images::ImagesWindow, library::LibraryWindow,
-    links::LinksWindow, metadata::MetadataWindow, search::SearchWindow, settings::SettingsWindow,
-    toc::TocWindow,
+    bookmarks::BookmarksWindow, dictionary::DictionaryWindow, help::HelpWindow,
+    images::ImagesWindow, library::LibraryWindow, links::LinksWindow, metadata::MetadataWindow,
+    search::SearchWindow, settings::SettingsWindow, toc::TocWindow,
 };
 
 /// Application state that encompasses all UI and reading state
@@ -125,6 +126,7 @@ pub struct UiState {
     pub show_links: bool,
     pub show_images: bool,
     pub show_metadata: bool,
+    pub show_dictionary: bool,
     pub show_settings: bool,
     pub search_query: String,
     pub search_results: Vec<SearchResult>,
@@ -141,6 +143,9 @@ pub struct UiState {
     pub library_items: Vec<LibraryItem>,
     pub library_selected_index: usize,
     pub metadata: Option<BookMetadata>,
+    pub dictionary_word: String,
+    pub dictionary_definition: String,
+    pub dictionary_scroll_offset: u16,
     pub settings_selected_index: usize,
     pub message: Option<String>,
     pub message_type: MessageType,
@@ -168,6 +173,7 @@ impl UiState {
             show_links: false,
             show_images: false,
             show_metadata: false,
+            show_dictionary: false,
             show_settings: false,
             search_query: String::new(),
             search_results: Vec::new(),
@@ -184,6 +190,9 @@ impl UiState {
             library_items: Vec::new(),
             library_selected_index: 0,
             metadata: None,
+            dictionary_word: String::new(),
+            dictionary_definition: String::new(),
+            dictionary_scroll_offset: 0,
             settings_selected_index: 0,
             message: None,
             message_type: MessageType::Info,
@@ -223,6 +232,7 @@ impl UiState {
                 self.show_links = false;
                 self.show_images = false;
                 self.show_metadata = false;
+                self.show_dictionary = false;
                 self.show_settings = false;
                 self.visual_anchor = None;
                 self.visual_cursor = None;
@@ -238,6 +248,10 @@ impl UiState {
             WindowType::Links => self.show_links = true,
             WindowType::Images => self.show_images = true,
             WindowType::Metadata => self.show_metadata = true,
+            WindowType::Dictionary => {
+                self.show_dictionary = true;
+                self.dictionary_scroll_offset = 0;
+            }
             WindowType::Settings => self.show_settings = true,
             WindowType::Visual => {}
         }
@@ -266,6 +280,7 @@ enum SettingItem {
     ShowProgressIndicator,
     StartWithDoubleSpread,
     SeamlessBetweenChapters,
+    DictionaryClient,
     Width,
     ShowTopBar,
 }
@@ -279,6 +294,7 @@ impl SettingItem {
             SettingItem::ShowProgressIndicator,
             SettingItem::StartWithDoubleSpread,
             SettingItem::SeamlessBetweenChapters,
+            SettingItem::DictionaryClient,
             SettingItem::Width,
             SettingItem::ShowTopBar,
         ]
@@ -301,6 +317,91 @@ pub struct Reader {
 }
 
 impl Reader {
+    fn split_dictionary_command_template(template: &str) -> eyre::Result<Vec<String>> {
+        let mut args = Vec::new();
+        let mut current = String::new();
+        let mut chars = template.chars().peekable();
+        let mut in_single = false;
+        let mut in_double = false;
+
+        while let Some(ch) = chars.next() {
+            match ch {
+                '\\' if !in_single => {
+                    if let Some(next) = chars.next() {
+                        current.push(next);
+                    } else {
+                        return Err(eyre::eyre!(
+                            "Invalid dictionary command template: trailing escape"
+                        ));
+                    }
+                }
+                '\'' if !in_double => {
+                    in_single = !in_single;
+                }
+                '"' if !in_single => {
+                    in_double = !in_double;
+                }
+                c if c.is_whitespace() && !in_single && !in_double => {
+                    if !current.is_empty() {
+                        args.push(std::mem::take(&mut current));
+                    }
+                }
+                _ => current.push(ch),
+            }
+        }
+
+        if in_single || in_double {
+            return Err(eyre::eyre!(
+                "Invalid dictionary command template: unmatched quote"
+            ));
+        }
+        if !current.is_empty() {
+            args.push(current);
+        }
+        Ok(args)
+    }
+
+    fn build_dictionary_command(
+        template: &str,
+        query: &str,
+    ) -> eyre::Result<(String, Vec<String>)> {
+        let mut parts = Self::split_dictionary_command_template(template)?;
+        if parts.is_empty() {
+            return Err(eyre::eyre!("Dictionary command template is empty"));
+        }
+
+        let mut has_placeholder = false;
+        for part in &mut parts {
+            if part.contains("%q") {
+                *part = part.replace("%q", query);
+                has_placeholder = true;
+            }
+        }
+
+        if !has_placeholder {
+            parts.push(query.to_string());
+        }
+
+        let program = parts.remove(0);
+        Ok((program, parts))
+    }
+
+    fn run_dictionary_client(client: &str, query: &str) -> eyre::Result<std::process::Output> {
+        let output = match client {
+            "sdcv" => std::process::Command::new("sdcv")
+                .arg("-n")
+                .arg(query)
+                .output()?,
+            "dict" => std::process::Command::new("dict").arg(query).output()?,
+            "wkdict" => std::process::Command::new("wkdict").arg(query).output()?,
+            template => {
+                let (program, args) = Self::build_dictionary_command(template, query)?;
+                std::process::Command::new(program).args(args).output()?
+            }
+        };
+        Ok(output)
+    }
+
     fn normalize_ebook_path(path: &str) -> String {
         if path.is_empty() {
             return path.to_string();
@@ -627,6 +728,7 @@ impl Reader {
             WindowType::Images => self.handle_images_mode_keys(key, repeat_count)?,
             WindowType::Help => self.handle_help_mode_keys(key, repeat_count)?,
             WindowType::Metadata => self.handle_modal_close_keys(key)?,
+            WindowType::Dictionary => self.handle_dictionary_mode_keys(key, repeat_count)?,
             _ => self.handle_normal_mode_keys(key, repeat_count)?,
         }
 
@@ -1185,6 +1287,9 @@ impl Reader {
             KeyCode::Char('-') | KeyCode::Left => {
                 self.adjust_textwidth(-5)?;
             }
+            KeyCode::Char('r') => {
+                self.reset_selected_setting();
+            }
             _ => {}
         }
         Ok(())
@@ -1222,6 +1327,53 @@ impl Reader {
             KeyCode::Esc | KeyCode::Char('q') | KeyCode::Enter => {
                 let mut state = self.state.borrow_mut();
                 state.ui_state.open_window(WindowType::Reader);
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn handle_dictionary_mode_keys(
+        &mut self,
+        key: KeyEvent,
+        repeat_count: u32,
+    ) -> eyre::Result<()> {
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('q') | KeyCode::Enter => {
+                let mut state = self.state.borrow_mut();
+                state.ui_state.open_window(WindowType::Reader);
+            }
+            KeyCode::Char('j') | KeyCode::Down => {
+                let mut state = self.state.borrow_mut();
+                state.ui_state.dictionary_scroll_offset = state
+                    .ui_state
+                    .dictionary_scroll_offset
+                    .saturating_add(repeat_count as u16);
+            }
+            KeyCode::Char('k') | KeyCode::Up => {
+                let mut state = self.state.borrow_mut();
+                state.ui_state.dictionary_scroll_offset = state
+                    .ui_state
+                    .dictionary_scroll_offset
+                    .saturating_sub(repeat_count as u16);
+            }
+            KeyCode::PageDown => {
+                let mut state = self.state.borrow_mut();
+                state.ui_state.dictionary_scroll_offset = state
+                    .ui_state
+                    .dictionary_scroll_offset
+                    .saturating_add((repeat_count as u16).saturating_mul(10));
+            }
+            KeyCode::PageUp => {
+                let mut state = self.state.borrow_mut();
+                state.ui_state.dictionary_scroll_offset = state
+                    .ui_state
+                    .dictionary_scroll_offset
+                    .saturating_sub((repeat_count as u16).saturating_mul(10));
+            }
+            KeyCode::Home => {
+                let mut state = self.state.borrow_mut();
+                state.ui_state.dictionary_scroll_offset = 0;
             }
             _ => {}
         }
@@ -1304,6 +1456,14 @@ impl Reader {
                 frame.area(),
                 &state.ui_state.images_list,
                 state.ui_state.images_selected_index,
+            );
+        } else if state.ui_state.show_dictionary {
+            DictionaryWindow::render(
+                frame,
+                frame.area(),
+                &state.ui_state.dictionary_word,
+                &state.ui_state.dictionary_definition,
+                state.ui_state.dictionary_scroll_offset,
             );
         } else if state.ui_state.show_metadata {
             MetadataWindow::render(frame, frame.area(), state.ui_state.metadata.as_ref());
@@ -1390,6 +1550,18 @@ impl Reader {
                         "Seamless between chapters: {}",
                         settings.seamless_between_chapters
                     )
+                }
+                SettingItem::DictionaryClient => {
+                    let client = if settings.dictionary_client.trim().is_empty() {
+                        "auto"
+                    } else {
+                        settings.dictionary_client.trim()
+                    };
+                    if client == "auto" {
+                        "Dictionary client: auto (default)".to_string()
+                    } else {
+                        format!("Dictionary client: {client}")
+                    }
                 }
                 SettingItem::Width => format!("Text width: {}", state.reading_state.textwidth),
                 SettingItem::ShowTopBar => format!("Show top bar: {}", settings.show_top_bar),
@@ -2687,6 +2859,19 @@ impl Reader {
                     !state.config.settings.seamless_between_chapters;
                 rebuild_chapter_breaks = true;
             }
+            SettingItem::DictionaryClient => {
+                let current = if state.config.settings.dictionary_client.trim().is_empty() {
+                    "auto"
+                } else {
+                    state.config.settings.dictionary_client.trim()
+                };
+                let options: Vec<&str> = std::iter::once("auto")
+                    .chain(DICT_PRESET_LIST.iter().copied())
+                    .collect();
+                let current_index = options.iter().position(|v| *v == current).unwrap_or(0);
+                let next_index = (current_index + 1) % options.len();
+                state.config.settings.dictionary_client = options[next_index].to_string();
+            }
             SettingItem::Width => {
                 state.config.settings.width = if state.config.settings.width.is_some() {
                     None
@@ -2695,6 +2880,7 @@ impl Reader {
                 };
                 // Set textwidth to the configured value
                 let textwidth = state.config.settings.width.unwrap_or(70);
+                let _ = state.config.save();
                 drop(state);
                 self.rebuild_text_structure_with_textwidth(textwidth)?;
                 return Ok(());
@@ -2703,6 +2889,7 @@ impl Reader {
                 state.config.settings.show_top_bar = !state.config.settings.show_top_bar;
             }
         }
+        let _ = state.config.save();
         if rebuild_chapter_breaks {
             // Use current textwidth
             let textwidth = state.reading_state.textwidth;
@@ -2736,6 +2923,27 @@ impl Reader {
             return Ok(());
         }
         self.change_textwidth(delta)
+    }
+
+    fn reset_selected_setting(&mut self) {
+        let selected = {
+            let state = self.state.borrow();
+            SettingItem::all()
+                .get(state.ui_state.settings_selected_index)
+                .copied()
+        };
+
+        if selected != Some(SettingItem::DictionaryClient) {
+            return;
+        }
+
+        let mut state = self.state.borrow_mut();
+        state.config.settings.dictionary_client = "auto".to_string();
+        let _ = state.config.save();
+        state.ui_state.set_message(
+            "Dictionary client reset to auto".to_string(),
+            MessageType::Info,
+        );
     }
 
     fn rebuild_text_structure(&mut self, padding: usize) -> eyre::Result<()> {
@@ -2901,8 +3109,6 @@ impl Reader {
     }
 
     fn dictionary_lookup(&mut self) -> eyre::Result<()> {
-        use std::process::Command;
-
         let (anchor, cursor) = {
             let state = self.state.borrow();
             match (state.ui_state.visual_anchor, state.ui_state.visual_cursor) {
@@ -2921,38 +3127,56 @@ impl Reader {
             return Ok(());
         }
 
-        self.state
-            .borrow_mut()
-            .ui_state
-            .open_window(WindowType::Reader);
+        let dictionary_client = {
+            let state = self.state.borrow();
+            state.config.settings.dictionary_client.trim().to_string()
+        };
+        let clients_to_try: Vec<String> =
+            if dictionary_client.is_empty() || dictionary_client == "auto" {
+                DICT_PRESET_LIST.iter().map(|c| (*c).to_string()).collect()
+            } else {
+                vec![dictionary_client]
+            };
 
-        let output = Command::new("sdcv")
-            .arg("-n")
-            .arg(&word)
-            .output()
-            .or_else(|_| Command::new("dict").arg(&word).output());
+        let mut any_command_ran = false;
+        let mut last_stderr: Option<String> = None;
+        let mut definition: Option<String> = None;
 
-        let ui_state = &mut self.state.borrow_mut().ui_state;
-        match output {
-            Ok(out) => {
-                let text = String::from_utf8_lossy(&out.stdout);
-                if text.trim().is_empty() {
-                    ui_state.set_message(
-                        format!("No definition found for '{word}'"),
-                        MessageType::Info,
-                    );
-                } else {
-                    let preview: String = text.chars().take(200).collect();
-                    ui_state.set_message(preview, MessageType::Info);
+        for client in clients_to_try {
+            match Self::run_dictionary_client(&client, &word) {
+                Ok(out) => {
+                    any_command_ran = true;
+                    let stdout_text = String::from_utf8_lossy(&out.stdout).trim().to_string();
+                    let stderr_text = String::from_utf8_lossy(&out.stderr).trim().to_string();
+                    if !stdout_text.is_empty() {
+                        definition = Some(stdout_text);
+                        break;
+                    }
+                    if !stderr_text.is_empty() {
+                        last_stderr = Some(stderr_text);
+                    }
+                }
+                Err(err) => {
+                    last_stderr = Some(err.to_string());
                 }
             }
-            Err(_) => {
-                ui_state.set_message(
-                    "No dictionary program found (install sdcv or dict)".to_string(),
-                    MessageType::Info,
-                );
-            }
         }
+
+        let definition = if let Some(text) = definition {
+            text
+        } else if any_command_ran {
+            last_stderr.unwrap_or_else(|| format!("No definition found for '{word}'"))
+        } else {
+            "No dictionary program found (install sdcv, dict, or wkdict)".to_string()
+        };
+
+        let ui_state = &mut self.state.borrow_mut().ui_state;
+        ui_state.dictionary_word = word;
+        ui_state.dictionary_definition = definition;
+        ui_state.dictionary_scroll_offset = 0;
+        ui_state.visual_anchor = None;
+        ui_state.visual_cursor = None;
+        ui_state.open_window(WindowType::Dictionary);
         Ok(())
     }
 
@@ -3203,5 +3427,19 @@ mod tests {
     fn resolve_relative_href_strips_leading_slash() {
         let resolved = Reader::resolve_relative_href("/Text/chapter007.xhtml", None);
         assert_eq!(resolved, Some("Text/chapter007.xhtml".to_string()));
+    }
+
+    #[test]
+    fn build_dictionary_command_replaces_placeholder() {
+        let (program, args) = Reader::build_dictionary_command("dict -wn \"%q\"", "apple").unwrap();
+        assert_eq!(program, "dict");
+        assert_eq!(args, vec!["-wn".to_string(), "apple".to_string()]);
+    }
+
+    #[test]
+    fn build_dictionary_command_appends_query_without_placeholder() {
+        let (program, args) = Reader::build_dictionary_command("dict -wn", "apple").unwrap();
+        assert_eq!(program, "dict");
+        assert_eq!(args, vec!["-wn".to_string(), "apple".to_string()]);
     }
 }

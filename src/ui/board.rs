@@ -164,9 +164,7 @@ impl Board {
                             let chars: Vec<char> = line.chars().collect();
                             let col = cursor_col.min(chars.len().saturating_sub(1));
                             if col > 0 {
-                                spans.push(Span::raw(
-                                    chars[..col].iter().collect::<String>(),
-                                ));
+                                spans.push(Span::raw(chars[..col].iter().collect::<String>()));
                             }
                             // Blinking block cursor character
                             let cursor_style = Style::default()
@@ -179,15 +177,10 @@ impl Board {
                                 ));
                             } else {
                                 // Use non-breaking space so Wrap{trim:true} doesn't strip it
-                                spans.push(Span::styled(
-                                    "\u{00A0}".to_string(),
-                                    cursor_style,
-                                ));
+                                spans.push(Span::styled("\u{00A0}".to_string(), cursor_style));
                             }
                             if col + 1 < chars.len() {
-                                spans.push(Span::raw(
-                                    chars[col + 1..].iter().collect::<String>(),
-                                ));
+                                spans.push(Span::raw(chars[col + 1..].iter().collect::<String>()));
                             }
                             return Line::from(spans);
                         }

@@ -1,4 +1,5 @@
 pub mod bookmarks;
+pub mod dictionary;
 pub mod help;
 pub mod images;
 pub mod library;

@@ -37,7 +37,7 @@ const HELP_TEXT: &[&str] = &[
     "   T                 Toggle Top Bar",
     "",
     " Windows & Tools:",
-    "   v                 Visual Mode (Select & Yank)",
+    "   v                 Visual Mode (Select/Yank/Define)",
     "   t                 Table Of Contents",
     "   m                 Bookmarks",
     "   u                 Links on Page",
@@ -45,6 +45,9 @@ const HELP_TEXT: &[&str] = &[
     "   i                 Metadata",
     "   r                 Library (History)",
     "   s                 Settings",
+    "   r (in Settings)   Reset selected setting",
+    "   Dict command      Use %q as query placeholder",
+    "   d (in Visual)     Dictionary Lookup",
     "   q                 Quit / Close Window",
     "   ?                 Help",
 ];

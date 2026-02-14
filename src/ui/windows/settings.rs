@@ -22,7 +22,11 @@ impl SettingsWindow {
         if entries.is_empty() {
             let paragraph = Paragraph::new("No settings available")
                 .style(Style::default().fg(Color::DarkGray))
-                .block(Block::default().title("Settings").borders(Borders::ALL));
+                .block(
+                    Block::default()
+                        .title("Settings (Enter toggle, r reset, %q template)")
+                        .borders(Borders::ALL),
+                );
             frame.render_widget(paragraph, popup_area);
             return;
         }
@@ -40,7 +44,11 @@ impl SettingsWindow {
             })
             .collect();
 
-        let list = List::new(items).block(Block::default().title("Settings").borders(Borders::ALL));
+        let list = List::new(items).block(
+            Block::default()
+                .title("Settings (Enter toggle, r reset, %q template)")
+                .borders(Borders::ALL),
+        );
 
         frame.render_widget(list, popup_area);
     }
