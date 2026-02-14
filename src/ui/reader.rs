@@ -148,6 +148,7 @@ pub struct UiState {
     pub dictionary_scroll_offset: u16,
     pub dictionary_command_query: String,
     pub settings_selected_index: usize,
+    pub dictionary_loading: bool,
     pub message: Option<String>,
     pub message_type: MessageType,
     pub message_time: Option<Instant>,
@@ -196,6 +197,7 @@ impl UiState {
             dictionary_scroll_offset: 0,
             dictionary_command_query: String::new(),
             settings_selected_index: 0,
+            dictionary_loading: false,
             message: None,
             message_type: MessageType::Info,
             message_time: None,
@@ -277,6 +279,11 @@ pub struct SearchResult {
     pub preview: String,
 }
 
+pub struct DictionaryResult {
+    pub word: String,
+    pub definition: Result<String, String>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum SettingItem {
     ShowLineNumbers,
@@ -319,6 +326,7 @@ pub struct Reader {
     chapter_text_structures: Vec<TextStructure>,
     /// Text width used for the current chapter structures
     current_text_width: Option<usize>,
+    dictionary_res_rx: Option<std::sync::mpsc::Receiver<DictionaryResult>>,
 }
 
 impl Reader {
@@ -404,20 +412,51 @@ impl Reader {
         Ok((program, processed_parts))
     }
 
-    fn run_dictionary_client(client: &str, query: &str) -> eyre::Result<std::process::Output> {
-        let output = match client {
+    fn run_dictionary_client(
+        client: &str,
+        query: &str,
+        timeout: Duration,
+    ) -> eyre::Result<std::process::Output> {
+        let mut child = match client {
             "sdcv" => std::process::Command::new("sdcv")
                 .arg("-n")
                 .arg(query)
-                .output()?,
-            "dict" => std::process::Command::new("dict").arg(query).output()?,
-            "wkdict" => std::process::Command::new("wkdict").arg(query).output()?,
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .spawn()?,
+            "dict" => std::process::Command::new("dict")
+                .arg(query)
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .spawn()?,
+            "wkdict" => std::process::Command::new("wkdict")
+                .arg(query)
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .spawn()?,
             template => {
                 let (program, args) = Self::build_dictionary_command(template, query)?;
-                std::process::Command::new(program).args(args).output()?
+                std::process::Command::new(program)
+                    .args(args)
+                    .stdout(std::process::Stdio::piped())
+                    .stderr(std::process::Stdio::piped())
+                    .spawn()?
             }
         };
-        Ok(output)
+
+        let start = Instant::now();
+        loop {
+            match child.try_wait()? {
+                Some(_) => return Ok(child.wait_with_output()?),
+                None => {
+                    if start.elapsed() >= timeout {
+                        child.kill()?;
+                        return Err(eyre::eyre!("Dictionary query timed out after {}s", timeout.as_secs()));
+                    }
+                    std::thread::sleep(Duration::from_millis(100));
+                }
+            }
+        }
     }
 
     fn normalize_ebook_path(path: &str) -> String {
@@ -457,6 +496,7 @@ impl Reader {
             content_start_rows: Vec::new(),
             chapter_text_structures: Vec::new(),
             current_text_width: None,
+            dictionary_res_rx: None,
         })
     }
 
@@ -615,6 +655,20 @@ impl Reader {
                 }
             }
 
+            // Check for dictionary results
+            if let Some(rx) = &self.dictionary_res_rx {
+                if let Ok(res) = rx.try_recv() {
+                    let mut state = self.state.borrow_mut();
+                    state.ui_state.dictionary_word = res.word;
+                    state.ui_state.dictionary_definition = match res.definition {
+                        Ok(def) => def,
+                        Err(err) => err,
+                    };
+                    state.ui_state.dictionary_loading = false;
+                    self.dictionary_res_rx = None;
+                }
+            }
+
             // Render UI
             {
                 let state = self.state.clone();
@@ -624,20 +678,24 @@ impl Reader {
                 })?;
             }
 
-            // Poll with timeout so we can re-render when messages expire
+            // Poll with timeout so we can re-render when messages expire or for animation
             let poll_timeout = {
                 let state = self.state.borrow();
-                match state.ui_state.message_time {
-                    Some(t) => {
-                        let elapsed = t.elapsed();
-                        let expiry = Duration::from_secs(3);
-                        if elapsed < expiry {
-                            expiry - elapsed
-                        } else {
-                            Duration::from_millis(100)
+                if state.ui_state.dictionary_loading && state.ui_state.show_dictionary {
+                    Duration::from_millis(100)
+                } else {
+                    match state.ui_state.message_time {
+                        Some(t) => {
+                            let elapsed = t.elapsed();
+                            let expiry = Duration::from_secs(3);
+                            if elapsed < expiry {
+                                expiry - elapsed
+                            } else {
+                                Duration::from_millis(100)
+                            }
                         }
+                        None => Duration::from_secs(60),
                     }
-                    None => Duration::from_secs(60),
                 }
             };
 
@@ -709,7 +767,10 @@ impl Reader {
         }
 
         // Handle count prefix (number repetition)
-        if let KeyCode::Char(c) = key.code
+        // Only capture digits if we are in a mode that supports it (Reader or Visual)
+        let active_window = self.state.borrow().ui_state.active_window.clone();
+        if matches!(active_window, WindowType::Reader | WindowType::Visual)
+            && let KeyCode::Char(c) = key.code
             && c.is_ascii_digit()
         {
             let mut state = self.state.borrow_mut();
@@ -1527,6 +1588,7 @@ impl Reader {
                 &state.ui_state.dictionary_word,
                 &state.ui_state.dictionary_definition,
                 state.ui_state.dictionary_scroll_offset,
+                state.ui_state.dictionary_loading,
             );
         } else if state.ui_state.show_metadata {
             MetadataWindow::render(frame, frame.area(), state.ui_state.metadata.as_ref());
@@ -1813,6 +1875,12 @@ impl Reader {
 
         frame.render_widget(Clear, area);
         frame.render_widget(input, area);
+
+        // Set cursor position
+        frame.set_cursor_position((
+            area.x + state.ui_state.dictionary_command_query.len() as u16 + 1,
+            area.y + 1,
+        ));
     }
 
     fn open_toc_window(&mut self) -> eyre::Result<()> {
@@ -3216,52 +3284,78 @@ impl Reader {
             let state = self.state.borrow();
             state.config.settings.dictionary_client.trim().to_string()
         };
-        let clients_to_try: Vec<String> =
-            if dictionary_client.is_empty() || dictionary_client == "auto" {
-                DICT_PRESET_LIST.iter().map(|c| (*c).to_string()).collect()
-            } else {
-                vec![dictionary_client]
-            };
 
-        let mut any_command_ran = false;
-        let mut last_stderr: Option<String> = None;
-        let mut definition: Option<String> = None;
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.dictionary_res_rx = Some(rx);
 
-        for client in clients_to_try {
-            match Self::run_dictionary_client(&client, &word) {
-                Ok(out) => {
-                    any_command_ran = true;
-                    let stdout_text = String::from_utf8_lossy(&out.stdout).trim().to_string();
-                    let stderr_text = String::from_utf8_lossy(&out.stderr).trim().to_string();
-                    if !stdout_text.is_empty() {
-                        definition = Some(stdout_text);
-                        break;
-                    }
-                    if !stderr_text.is_empty() {
-                        last_stderr = Some(stderr_text);
-                    }
-                }
-                Err(err) => {
-                    last_stderr = Some(err.to_string());
-                }
-            }
+        {
+            let mut state = self.state.borrow_mut();
+            state.ui_state.dictionary_word = word.clone();
+            state.ui_state.dictionary_definition = String::new();
+            state.ui_state.dictionary_loading = true;
+            state.ui_state.dictionary_scroll_offset = 0;
+            state.ui_state.visual_anchor = None;
+            state.ui_state.visual_cursor = None;
+            state.ui_state.open_window(WindowType::Dictionary);
         }
 
-        let definition = if let Some(text) = definition {
-            text
-        } else if any_command_ran {
-            last_stderr.unwrap_or_else(|| format!("No definition found for '{word}'"))
-        } else {
-            "No dictionary program found (install sdcv, dict, or wkdict)".to_string()
-        };
+        let word_clone = word.clone();
+        std::thread::spawn(move || {
+            let start_total = Instant::now();
+            let total_timeout = Duration::from_secs(10);
 
-        let ui_state = &mut self.state.borrow_mut().ui_state;
-        ui_state.dictionary_word = word;
-        ui_state.dictionary_definition = definition;
-        ui_state.dictionary_scroll_offset = 0;
-        ui_state.visual_anchor = None;
-        ui_state.visual_cursor = None;
-        ui_state.open_window(WindowType::Dictionary);
+            let clients_to_try: Vec<String> =
+                if dictionary_client.is_empty() || dictionary_client == "auto" {
+                    DICT_PRESET_LIST.iter().map(|c| (*c).to_string()).collect()
+                } else {
+                    vec![dictionary_client]
+                };
+
+            let mut any_command_ran = false;
+            let mut last_stderr: Option<String> = None;
+            let mut definition: Option<String> = None;
+
+            for client in clients_to_try {
+                let remaining = total_timeout.saturating_sub(start_total.elapsed());
+                if remaining.is_zero() {
+                    break;
+                }
+
+                match Self::run_dictionary_client(&client, &word_clone, remaining) {
+                    Ok(out) => {
+                        any_command_ran = true;
+                        let stdout_text = String::from_utf8_lossy(&out.stdout).trim().to_string();
+                        let stderr_text = String::from_utf8_lossy(&out.stderr).trim().to_string();
+                        if !stdout_text.is_empty() {
+                            definition = Some(stdout_text);
+                            break;
+                        }
+                        if !stderr_text.is_empty() {
+                            last_stderr = Some(stderr_text);
+                        }
+                    }
+                    Err(err) => {
+                        last_stderr = Some(err.to_string());
+                    }
+                }
+            }
+
+            let result_definition = if let Some(text) = definition {
+                Ok(text)
+            } else if start_total.elapsed() >= total_timeout {
+                Err(format!("Dictionary query timed out after {}s", total_timeout.as_secs()))
+            } else if any_command_ran {
+                Err(last_stderr.unwrap_or_else(|| format!("No definition found for '{}'", word_clone)))
+            } else {
+                Err("No dictionary program found (install sdcv, dict, or wkdict)".to_string())
+            };
+
+            let _ = tx.send(DictionaryResult {
+                word: word_clone,
+                definition: result_definition,
+            });
+        });
+
         Ok(())
     }
 

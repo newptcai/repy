@@ -27,6 +27,12 @@ impl SearchWindow {
         let header_area = Rect::new(popup_area.x, popup_area.y, popup_area.width, 3);
         frame.render_widget(header, header_area);
 
+        // Set cursor position after / and query text
+        frame.set_cursor_position((
+            header_area.x + query.len() as u16 + 2,
+            header_area.y + 1,
+        ));
+
         let list_area = Rect::new(
             popup_area.x,
             popup_area.y + 3,

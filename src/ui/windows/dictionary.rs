@@ -14,7 +14,14 @@ struct LogicalParagraph {
 }
 
 impl DictionaryWindow {
-    pub fn render(frame: &mut Frame, area: Rect, word: &str, definition: &str, scroll_offset: u16) {
+    pub fn render(
+        frame: &mut Frame,
+        area: Rect,
+        word: &str,
+        definition: &str,
+        scroll_offset: u16,
+        loading: bool,
+    ) {
         let popup_area = Self::centered_popup_area(area, 70, 80);
         frame.render_widget(Clear, popup_area);
 
@@ -24,12 +31,30 @@ impl DictionaryWindow {
             format!("Dictionary: {word}")
         };
 
+        let block = Block::default().title(title).borders(Borders::ALL);
+
+        if loading {
+            let loading_text = vec![
+                "⠋ Loading...", "⠙ Loading...", "⠹ Loading...", "⠸ Loading...", "⠼ Loading...",
+                "⠴ Loading...", "⠦ Loading...", "⠧ Loading...", "⠇ Loading...", "⠏ Loading...",
+            ];
+            // Use time to select the spinner frame
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis();
+            let frame_idx = (now / 100) as usize % loading_text.len();
+            let paragraph = Paragraph::new(loading_text[frame_idx]).block(block);
+            frame.render_widget(paragraph, popup_area);
+            return;
+        }
+
         // Inner width = popup width minus 2 for borders
         let inner_width = popup_area.width.saturating_sub(2) as usize;
         let reflowed = Self::reflow(definition, inner_width);
 
         let paragraph = Paragraph::new(reflowed)
-            .block(Block::default().title(title).borders(Borders::ALL))
+            .block(block)
             .wrap(Wrap { trim: false })
             .scroll((scroll_offset, 0));
 
