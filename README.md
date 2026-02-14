@@ -2,7 +2,11 @@
 
 ## ⚠️ MASSIVE WARNING ⚠️
 
-**This is complete AI-generated slop.** There is absolutely no guarantee it works besides "I use it myself." You're on your own if it eats your epub, deletes your database, or crashes your terminal. PRs welcome.
+**This is 100% AI-generated code.** Every single line was written by
+[Codex CLI](https://github.com/openai/codex), [Gemini CLI](https://github.com/google-gemini/gemini-cli),
+and [Claude Code](https://claude.ai/claude-code) — the human has not written a single line of Rust.
+That said, it works well for daily use. No guarantee it won't eat your epub, delete your database,
+or crash your terminal. You're on your own. PRs welcome.
 
 ---
 
@@ -15,11 +19,12 @@ SQLite implementation.
 ## Status
 
 **Functional for daily use!** Core reading features are complete: TUI navigation, search, bookmarks,
-library management, two-phase visual mode, image viewing, and link/footnote handling all work. Text is
-intelligently wrapped and hyphenated. Reading state and preferences are persisted per-book.
+library management, two-phase visual mode, image viewing, link/footnote handling, dictionary lookup,
+and Wikipedia lookup all work. Text is intelligently wrapped and hyphenated. Reading state and
+preferences are persisted per-book.
 
-**Not yet implemented:** TTS (text-to-speech), full dictionary integration UI/config (basic visual-mode lookup exists), export functionality,
-advanced search features (history, fuzzy, incremental), and additional ebook formats beyond EPUB.
+**Not yet implemented:** TTS (text-to-speech), export functionality,
+advanced search features (history, fuzzy, incremental), mouse support, and additional ebook formats beyond EPUB.
 
 See [to-do.md](to-do.md) for detailed feature status and roadmap.
 
