@@ -14,9 +14,14 @@ SQLite implementation.
 
 ## Status
 
-Work-in-progress. Core TUI reading, configuration loading, and basic library state
-are implemented. Text is intelligently wrapped and hyphenated for a better reading experience.
-Some `epy` features (TTS, external tools, etc.) are not yet available.
+**Functional for daily use!** Core reading features are complete: TUI navigation, search, bookmarks,
+library management, visual mode, image viewing, and link/footnote handling all work. Text is
+intelligently wrapped and hyphenated. Reading state and preferences are persisted per-book.
+
+**Not yet implemented:** TTS (text-to-speech), dictionary integration, export functionality,
+advanced search features (history, fuzzy, incremental), and additional ebook formats beyond EPUB.
+
+See [to-do.md](to-do.md) for detailed feature status and roadmap.
 
 ## Installation
 
@@ -92,8 +97,7 @@ Press `?` in the TUI to see the help window at any time.
 - `j` / `Down` — Line Down
 - `h` / `Left` — Page Up
 - `l` / `Right` — Page Down
-- `Space` / `f` — Page Down
-- `b` — Page Up
+- `Space` — Page Down
 - `Ctrl+u` — Half Page Up
 - `Ctrl+d` — Half Page Down
 - `L` — Next Chapter

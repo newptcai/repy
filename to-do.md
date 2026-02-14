@@ -2,25 +2,81 @@
 
 Concise roadmap for the Rust port of `epy`.
 
-## Current Progress (Dec 2025)
+## Current Progress (January 2026)
 
-- Core configuration and app data prefix handling are implemented (`src/config.rs`).
-- SQLite-backed reading state, library/history, and bookmarks are implemented (`src/state.rs`).
-- In-TUI library/history window with selection and deletion is wired into the reader (`src/ui/reader.rs`, `src/ui/windows/library.rs`).
-- On quit, the current book position and progress are persisted; on startup with no arguments, the last-read book is reopened if available (`src/ui/reader.rs`, `src/main.rs`).
-- Jump history navigation (Ctrl+o / Ctrl+i) is implemented.
-- Footnote handling is robust (correct jumping, backlink filtering, and contextual preview in the links window).
-- SQLite is fully managed from Rust with `rusqlite`'s `bundled` feature, so no system `libsqlite3` is required (`Cargo.toml`).
-- A user-facing `README.md` documents configuration, database paths, and basic usage.
-- **Performance optimization**: Padding/width adjustments now only re-parse the current chapter instead of the entire book, making +/- key presses nearly instant even for large books.
+### Completed Features ✅
 
-What is *not* done yet (high level):
+**Core Infrastructure:**
+- Complete config system with XDG support (`src/config.rs`)
+- SQLite-backed state management with bundled SQLite (`src/state.rs`)
+- EPUB parsing with HTML-to-text conversion (`src/ebook.rs`, `src/parser.rs`)
+- Hyphenation and smart text wrapping with textwrap
+- Per-chapter text structure caching for fast rendering
 
-- Layout parity polish (header/footer chrome, line numbers toggle, help window parity).
-- Advanced search features (multi-chapter regex, search history, fuzzy search, incremental search).
-- Text-to-speech trait system and engines.
-- External tool integration (dictionary, export).
-- Additional performance work and packaging/CI.
+**Reading Experience:**
+- Full terminal UI with ratatui (`src/ui/reader.rs`, `src/ui/board.rs`)
+- All navigation modes: line, page, half-page, chapter, book-level
+- Jump history navigation (Ctrl+o / Ctrl+i / Tab)
+- Visual mode for text selection and yanking to clipboard
+- Regex search with highlighting (/, n, p/N)
+- Width adjustment (+/- keys, = to reset) with per-book persistence
+- Line numbers toggle (in settings window)
+- Top bar toggle (T key)
+
+**Windows & Features:**
+- Help window with full keybinding reference (`src/ui/windows/help.rs`)
+- Table of Contents (`src/ui/windows/toc.rs`)
+- Bookmarks with add/delete/jump (`src/ui/windows/bookmarks.rs`)
+- Library/History with deletion (`src/ui/windows/library.rs`)
+- Search window (`src/ui/windows/search.rs`)
+- Links window with contextual preview (`src/ui/windows/links.rs`)
+- Images window with extraction and viewing (`src/ui/windows/images.rs`)
+- Metadata viewer (`src/ui/windows/metadata.rs`)
+- Settings window (`src/ui/windows/settings.rs`)
+
+**State Persistence:**
+- Reading position saved per-book (chapter, row, percentage)
+- Width preferences saved per-book
+- Auto-resume last book on startup without arguments
+- Library metadata with reading progress tracking
+- Named bookmarks stored in database
+
+**Testing:**
+- Comprehensive test suite covering parser, footnotes, images, jump history, hyphenation
+
+### Not Yet Implemented ❌
+
+**Layout & UI:**
+- Bottom status bar for command echo and transient messages
+- 'b' and 'f' keybindings (documented in README but not implemented)
+
+**Advanced Search:**
+- Search history and saved searches
+- Fuzzy search and typo tolerance
+- Incremental search with real-time results
+
+**External Integrations:**
+- Dictionary integration (sdcv, dict, etc.)
+- Export functionality (text, highlights)
+
+**Text-to-Speech:**
+- TTS trait system
+- GTTS + MPV engine
+- Mimic/Pico engines
+- Voice selection, speed control, pronunciation dictionaries
+
+**Advanced Features:**
+- Additional format support (MOBI, AZW, FB2)
+- Reading statistics and analytics
+- Annotation system beyond bookmarks
+- Custom themes and color schemes
+
+**Distribution & Polish:**
+- CI/CD pipeline
+- Platform packages (deb, wix, etc.)
+- Property-based testing
+- Cross-platform compatibility testing
+- Migration guide from epy
 
 The detailed roadmap below remains the source of truth for planned work.
 
