@@ -178,8 +178,13 @@ impl State {
                     )?;
                 }
                 tx.execute(
-                    "INSERT OR REPLACE INTO reading_states (filepath, content_index, textwidth, row, rel_pctg)
-                     SELECT ?, content_index, textwidth, row, rel_pctg FROM reading_states WHERE filepath=?",
+                    "INSERT INTO reading_states (filepath, content_index, textwidth, row, rel_pctg)
+                     SELECT ?, content_index, textwidth, row, rel_pctg FROM reading_states WHERE filepath=?
+                     ON CONFLICT(filepath) DO UPDATE SET
+                        content_index=excluded.content_index,
+                        textwidth=excluded.textwidth,
+                        row=excluded.row,
+                        rel_pctg=excluded.rel_pctg",
                     params![new_path, old_path],
                 )?;
             }
