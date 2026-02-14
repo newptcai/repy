@@ -51,8 +51,16 @@ impl DictionaryWindow {
 
         if loading {
             let loading_text = vec![
-                "⠋ Loading...", "⠙ Loading...", "⠹ Loading...", "⠸ Loading...", "⠼ Loading...",
-                "⠴ Loading...", "⠦ Loading...", "⠧ Loading...", "⠇ Loading...", "⠏ Loading...",
+                "⠋ Loading...",
+                "⠙ Loading...",
+                "⠹ Loading...",
+                "⠸ Loading...",
+                "⠼ Loading...",
+                "⠴ Loading...",
+                "⠦ Loading...",
+                "⠧ Loading...",
+                "⠇ Loading...",
+                "⠏ Loading...",
             ];
             // Use time to select the spinner frame
             let now = std::time::SystemTime::now()
@@ -189,8 +197,7 @@ impl DictionaryWindow {
                 // Fits on one line or too narrow to wrap — emit as-is
                 result.push(format!("{indent}{}", para.text));
             } else {
-                let options =
-                    Options::new(available).word_splitter(WordSplitter::NoHyphenation);
+                let options = Options::new(available).word_splitter(WordSplitter::NoHyphenation);
                 let wrapped = textwrap::wrap(&para.text, &options);
                 for w in wrapped {
                     result.push(format!("{indent}{}", w.trim_end()));
@@ -240,7 +247,12 @@ mod tests {
         let input = "    this is a long indented line that needs to be wrapped to a narrower width for display";
         let result = DictionaryWindow::reflow(input, 40);
         for line in result.lines() {
-            assert!(line.len() <= 40, "line too long: {:?} ({})", line, line.len());
+            assert!(
+                line.len() <= 40,
+                "line too long: {:?} ({})",
+                line,
+                line.len()
+            );
             assert!(line.starts_with("    "), "indent lost: {:?}", line);
         }
     }
@@ -355,21 +367,34 @@ mod tests {
             .iter()
             .filter(|l| {
                 let t = l.trim();
-                t.starts_with("n 1:") || t.starts_with("2:") || t.starts_with("3:") || t.starts_with("4:")
+                t.starts_with("n 1:")
+                    || t.starts_with("2:")
+                    || t.starts_with("3:")
+                    || t.starts_with("4:")
             })
             .copied()
             .collect();
-        assert_eq!(def_starts.len(), 4, "expected 4 definition starts, got: {def_starts:?}");
+        assert_eq!(
+            def_starts.len(),
+            4,
+            "expected 4 definition starts, got: {def_starts:?}"
+        );
         // Definition 3 continuation should be merged (not a separate line starting with "transparent")
         let has_transparent_start = lines.iter().any(|l| l.trim().starts_with("transparent"));
-        assert!(!has_transparent_start, "continuation should be merged into definition 3");
+        assert!(
+            !has_transparent_start,
+            "continuation should be merged into definition 3"
+        );
     }
 
     #[test]
     fn max_scroll_offset_zero_when_content_fits() {
         let area = Rect::new(0, 0, 120, 40);
         let definition = "short line";
-        assert_eq!(DictionaryWindow::max_scroll_offset(area, definition, false), 0);
+        assert_eq!(
+            DictionaryWindow::max_scroll_offset(area, definition, false),
+            0
+        );
     }
 
     #[test]

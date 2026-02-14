@@ -1,5 +1,7 @@
 use arboard::Clipboard;
 use regex::Regex;
+use serde::Deserialize;
+use serde_json::Value;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::io;
@@ -284,6 +286,37 @@ pub struct DictionaryResult {
     pub definition: Result<String, String>,
 }
 
+#[derive(Debug, Clone)]
+struct WikipediaLookupResult {
+    url: String,
+    summary: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct WikipediaSummaryResponse {
+    query: Option<WikipediaQueryData>,
+}
+
+#[derive(Debug, Deserialize)]
+struct WikipediaQueryData {
+    pages: Value,
+}
+
+#[derive(Debug, Deserialize)]
+struct WikipediaSearchResponse {
+    query: Option<WikipediaSearchQuery>,
+}
+
+#[derive(Debug, Deserialize)]
+struct WikipediaSearchQuery {
+    search: Vec<WikipediaSearchHit>,
+}
+
+#[derive(Debug, Deserialize)]
+struct WikipediaSearchHit {
+    title: String,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum SettingItem {
     ShowLineNumbers,
@@ -451,12 +484,174 @@ impl Reader {
                 None => {
                     if start.elapsed() >= timeout {
                         child.kill()?;
-                        return Err(eyre::eyre!("Dictionary query timed out after {}s", timeout.as_secs()));
+                        return Err(eyre::eyre!(
+                            "Dictionary query timed out after {}s",
+                            timeout.as_secs()
+                        ));
                     }
                     std::thread::sleep(Duration::from_millis(100));
                 }
             }
         }
+    }
+
+    fn build_wikipedia_page_url(language: &str, title: &str) -> eyre::Result<String> {
+        let base = if language.starts_with("http://") || language.starts_with("https://") {
+            language.trim_end_matches('/').to_string()
+        } else {
+            format!("https://{language}.wikipedia.org")
+        };
+
+        let mut page_url = reqwest::Url::parse(&format!("{base}/wiki/"))?;
+        page_url
+            .path_segments_mut()
+            .map_err(|_| eyre::eyre!("Could not build Wikipedia page URL"))?
+            .push(title);
+        Ok(page_url.to_string())
+    }
+
+    fn wikipedia_api_url(language: &str) -> String {
+        if language.starts_with("http://") || language.starts_with("https://") {
+            format!("{}/w/api.php", language.trim_end_matches('/'))
+        } else {
+            format!("https://{language}.wikipedia.org/w/api.php")
+        }
+    }
+
+    fn fetch_wikipedia_summary(
+        client: &reqwest::blocking::Client,
+        language: &str,
+        title: &str,
+    ) -> eyre::Result<Option<WikipediaLookupResult>> {
+        let summary_url = Self::wikipedia_api_url(language);
+        let response = client
+            .get(summary_url)
+            .query(&[
+                ("action", "query"),
+                ("format", "json"),
+                ("redirects", "1"),
+                ("prop", "extracts|info|pageprops"),
+                ("inprop", "url"),
+                ("explaintext", "1"),
+                ("exintro", "1"),
+                ("titles", title),
+            ])
+            .send()?
+            .error_for_status()?;
+        let parsed: WikipediaSummaryResponse = response.json()?;
+        Ok(Self::parse_wikipedia_summary_response(
+            &parsed, language, title,
+        )?)
+    }
+
+    fn parse_wikipedia_summary_response(
+        parsed: &WikipediaSummaryResponse,
+        language: &str,
+        title: &str,
+    ) -> eyre::Result<Option<WikipediaLookupResult>> {
+        let Some(query) = parsed.query.as_ref() else {
+            return Ok(None);
+        };
+        let Some(pages_obj) = query.pages.as_object() else {
+            return Ok(None);
+        };
+
+        for page in pages_obj.values() {
+            let Some(page_obj) = page.as_object() else {
+                continue;
+            };
+
+            if page_obj.contains_key("missing") {
+                continue;
+            }
+
+            let is_disambiguation = page_obj
+                .get("pageprops")
+                .and_then(Value::as_object)
+                .is_some_and(|pp| pp.contains_key("disambiguation"));
+            if is_disambiguation {
+                continue;
+            }
+
+            let summary = page_obj
+                .get("extract")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            if summary.is_empty() {
+                continue;
+            }
+
+            let title_for_url = page_obj
+                .get("title")
+                .and_then(Value::as_str)
+                .unwrap_or(title);
+            let url = page_obj
+                .get("fullurl")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+                .filter(|u| !u.trim().is_empty())
+                .unwrap_or(Self::build_wikipedia_page_url(language, title_for_url)?);
+
+            return Ok(Some(WikipediaLookupResult { url, summary }));
+        }
+
+        Ok(None)
+    }
+
+    fn search_wikipedia_titles(
+        client: &reqwest::blocking::Client,
+        language: &str,
+        query: &str,
+        limit: usize,
+    ) -> eyre::Result<Vec<String>> {
+        let search_url = Self::wikipedia_api_url(language);
+        let response = client
+            .get(search_url)
+            .query(&[
+                ("action", "query"),
+                ("list", "search"),
+                ("format", "json"),
+                ("srsearch", query),
+                ("srlimit", &limit.to_string()),
+            ])
+            .send()?
+            .error_for_status()?;
+
+        let parsed: WikipediaSearchResponse = response.json()?;
+        Ok(Self::extract_search_titles(parsed))
+    }
+
+    fn extract_search_titles(parsed: WikipediaSearchResponse) -> Vec<String> {
+        parsed
+            .query
+            .map(|q| q.search.into_iter().map(|h| h.title).collect())
+            .unwrap_or_default()
+    }
+
+    fn wikipedia_lookup_summary(
+        query: &str,
+        language: &str,
+        timeout: Duration,
+    ) -> eyre::Result<WikipediaLookupResult> {
+        let client = reqwest::blocking::Client::builder()
+            .timeout(timeout)
+            .user_agent("repy")
+            .build()?;
+
+        if let Some(result) = Self::fetch_wikipedia_summary(&client, language, query)? {
+            return Ok(result);
+        }
+
+        let candidates = Self::search_wikipedia_titles(&client, language, query, 3)?;
+        for candidate in candidates {
+            if let Some(result) = Self::fetch_wikipedia_summary(&client, language, &candidate)? {
+                return Ok(result);
+            }
+        }
+
+        Err(eyre::eyre!("No Wikipedia summary found for '{}'", query))
     }
 
     fn normalize_ebook_path(path: &str) -> String {
@@ -1100,7 +1295,7 @@ impl Reader {
     /// Phase 1 (cursor mode): visual_cursor is Some, visual_anchor is None.
     ///   - hjkl/wbe move the cursor. Press v to anchor and start selecting.
     /// Phase 2 (selection mode): both visual_cursor and visual_anchor are Some.
-    ///   - hjkl/wbe extend the selection. Press y to yank, d for dictionary.
+    ///   - hjkl/be extend the selection. Press y to yank, d for dictionary, w for Wikipedia.
     fn handle_visual_mode_keys(&mut self, key: KeyEvent, repeat_count: u32) -> eyre::Result<()> {
         let has_anchor = self.state.borrow().ui_state.visual_anchor.is_some();
 
@@ -1130,6 +1325,9 @@ impl Reader {
             }
             KeyCode::Char('d') if has_anchor => {
                 self.dictionary_lookup()?;
+            }
+            KeyCode::Char('w') if has_anchor => {
+                self.wikipedia_lookup()?;
             }
             // Navigation — works in both cursor and selection mode
             KeyCode::Char('j') | KeyCode::Down => {
@@ -1369,7 +1567,9 @@ impl Reader {
                     let mut state = self.state.borrow_mut();
                     state.ui_state.dictionary_command_query =
                         state.config.settings.dictionary_client.clone();
-                    state.ui_state.open_window(WindowType::DictionaryCommandInput);
+                    state
+                        .ui_state
+                        .open_window(WindowType::DictionaryCommandInput);
                 } else {
                     self.toggle_selected_setting()?;
                 }
@@ -3357,15 +3557,80 @@ impl Reader {
             let result_definition = if let Some(text) = definition {
                 Ok(text)
             } else if start_total.elapsed() >= total_timeout {
-                Err(format!("Dictionary query timed out after {}s", total_timeout.as_secs()))
+                Err(format!(
+                    "Dictionary query timed out after {}s",
+                    total_timeout.as_secs()
+                ))
             } else if any_command_ran {
-                Err(last_stderr.unwrap_or_else(|| format!("No definition found for '{}'", word_clone)))
+                Err(last_stderr
+                    .unwrap_or_else(|| format!("No definition found for '{}'", word_clone)))
             } else {
                 Err("No dictionary program found (install sdcv, dict, or wkdict)".to_string())
             };
 
             let _ = tx.send(DictionaryResult {
                 word: word_clone,
+                definition: result_definition,
+            });
+        });
+
+        Ok(())
+    }
+
+    fn wikipedia_lookup(&mut self) -> eyre::Result<()> {
+        let (anchor, cursor) = {
+            let state = self.state.borrow();
+            match (state.ui_state.visual_anchor, state.ui_state.visual_cursor) {
+                (Some(anchor), Some(cursor)) => (anchor, cursor),
+                _ => return Ok(()),
+            }
+        };
+
+        let selected_text = self.board.get_selected_text_range(anchor, cursor);
+        let query = selected_text.trim().to_string();
+        if query.is_empty() {
+            self.state
+                .borrow_mut()
+                .ui_state
+                .open_window(WindowType::Reader);
+            return Ok(());
+        }
+
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.dictionary_res_rx = Some(rx);
+
+        {
+            let mut state = self.state.borrow_mut();
+            state.ui_state.dictionary_word = query.clone();
+            state.ui_state.dictionary_definition = String::new();
+            state.ui_state.dictionary_loading = true;
+            state.ui_state.dictionary_scroll_offset = 0;
+            state.ui_state.visual_anchor = None;
+            state.ui_state.visual_cursor = None;
+            state.ui_state.open_window(WindowType::Dictionary);
+        }
+
+        std::thread::spawn(move || {
+            let total_timeout = Duration::from_secs(10);
+            let language = "simple";
+            let result_definition =
+                match Self::wikipedia_lookup_summary(&query, language, total_timeout) {
+                    Ok(result) => Ok(format!("Wikipedia: {}\n\n{}", result.url, result.summary)),
+                    Err(err) => {
+                        let message = err.to_string();
+                        if message.contains("timed out") {
+                            Err(format!(
+                                "Wikipedia query timed out after {}s",
+                                total_timeout.as_secs()
+                            ))
+                        } else {
+                            Err(format!("Wikipedia lookup failed.\n\n{}", message))
+                        }
+                    }
+                };
+
+            let _ = tx.send(DictionaryResult {
+                word: query,
                 definition: result_definition,
             });
         });
@@ -3598,7 +3863,28 @@ impl Reader {
 
 #[cfg(test)]
 mod tests {
-    use super::Reader;
+    use super::{Reader, WikipediaSearchResponse, WikipediaSummaryResponse};
+    use std::io::{BufRead, BufReader, Write};
+    use std::net::{TcpListener, TcpStream};
+    use std::thread;
+    use std::time::Duration;
+
+    fn read_request_line(stream: TcpStream) -> (TcpStream, String) {
+        let mut reader = BufReader::new(stream);
+        let mut request_line = String::new();
+        reader.read_line(&mut request_line).unwrap();
+        (reader.into_inner(), request_line)
+    }
+
+    fn write_json_response(stream: &mut TcpStream, status: &str, body: &str) {
+        let response = format!(
+            "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            body.len(),
+            body
+        );
+        stream.write_all(response.as_bytes()).unwrap();
+        stream.flush().unwrap();
+    }
 
     #[test]
     fn resolve_relative_href_joins_base_dir() {
@@ -3648,8 +3934,176 @@ mod tests {
 
     #[test]
     fn build_dictionary_command_escapes_quotes_if_wrapped_in_template() {
-        let (program, args) = Reader::build_dictionary_command("sh -c \"dict %q\"", "a\"b").unwrap();
+        let (program, args) =
+            Reader::build_dictionary_command("sh -c \"dict %q\"", "a\"b").unwrap();
         assert_eq!(program, "sh");
         assert_eq!(args, vec!["-c".to_string(), "dict a\\\"b".to_string()]);
+    }
+
+    #[test]
+    fn parse_wikipedia_summary_response_extracts_result() {
+        let body = r#"{
+          "query": {
+            "pages": {
+              "123": {
+                "title": "Rust",
+                "extract": "Rust is a systems programming language.",
+                "fullurl": "https://simple.wikipedia.org/wiki/Rust"
+              }
+            }
+          }
+        }"#;
+        let parsed: WikipediaSummaryResponse = serde_json::from_str(body).unwrap();
+        let result = Reader::parse_wikipedia_summary_response(&parsed, "simple", "Rust")
+            .unwrap()
+            .unwrap();
+        assert_eq!(result.url, "https://simple.wikipedia.org/wiki/Rust");
+        assert!(result.summary.contains("systems programming language"));
+    }
+
+    #[test]
+    fn parse_wikipedia_summary_response_skips_missing_and_disambiguation() {
+        let body = r#"{
+          "query": {
+            "pages": {
+              "-1": {
+                "title": "NoSuchTerm",
+                "missing": ""
+              },
+              "99": {
+                "title": "Mercury",
+                "extract": "Mercury may refer to ...",
+                "pageprops": {
+                  "disambiguation": ""
+                }
+              }
+            }
+          }
+        }"#;
+        let parsed: WikipediaSummaryResponse = serde_json::from_str(body).unwrap();
+        let result =
+            Reader::parse_wikipedia_summary_response(&parsed, "simple", "NoSuchTerm").unwrap();
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn extract_search_titles_reads_candidates() {
+        let body = r#"{
+          "query": {
+            "search": [
+              { "title": "Rust_(programming_language)" },
+              { "title": "Rust_(fungus)" }
+            ]
+          }
+        }"#;
+        let parsed: WikipediaSearchResponse = serde_json::from_str(body).unwrap();
+        let titles = Reader::extract_search_titles(parsed);
+        assert_eq!(
+            titles,
+            vec![
+                "Rust_(programming_language)".to_string(),
+                "Rust_(fungus)".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn wikipedia_lookup_summary_mock_http_direct_hit() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+
+        let server = thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let (mut stream, request_line) = read_request_line(stream);
+            assert!(request_line.contains("/w/api.php?"));
+            assert!(request_line.contains("prop=extracts%7Cinfo%7Cpageprops"));
+            assert!(request_line.contains("titles=Rust"));
+
+            let body = r#"{
+              "query": {
+                "pages": {
+                  "123": {
+                    "title": "Rust",
+                    "extract": "Rust is a systems programming language.",
+                    "fullurl": "https://simple.wikipedia.org/wiki/Rust"
+                  }
+                }
+              }
+            }"#;
+            write_json_response(&mut stream, "200 OK", body);
+        });
+
+        let result = Reader::wikipedia_lookup_summary("Rust", &base, Duration::from_secs(2))
+            .expect("direct lookup should succeed");
+        server.join().unwrap();
+
+        assert_eq!(result.url, "https://simple.wikipedia.org/wiki/Rust");
+        assert!(result.summary.contains("systems programming language"));
+    }
+
+    #[test]
+    fn wikipedia_lookup_summary_mock_http_search_fallback() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+
+        let server = thread::spawn(move || {
+            // 1) initial summary request (miss)
+            let (stream1, _) = listener.accept().unwrap();
+            let (mut stream1, request_line1) = read_request_line(stream1);
+            assert!(request_line1.contains("/w/api.php?"));
+            assert!(request_line1.contains("titles=NoSuchTerm"));
+            let miss = r#"{
+              "query": {
+                "pages": {
+                  "-1": {
+                    "title": "NoSuchTerm",
+                    "missing": ""
+                  }
+                }
+              }
+            }"#;
+            write_json_response(&mut stream1, "200 OK", miss);
+
+            // 2) search request
+            let (stream2, _) = listener.accept().unwrap();
+            let (mut stream2, request_line2) = read_request_line(stream2);
+            assert!(request_line2.contains("list=search"));
+            assert!(request_line2.contains("srsearch=NoSuchTerm"));
+            let search = r#"{
+              "query": {
+                "search": [
+                  { "title": "Rust_(programming_language)" }
+                ]
+              }
+            }"#;
+            write_json_response(&mut stream2, "200 OK", search);
+
+            // 3) candidate summary request (hit)
+            let (stream3, _) = listener.accept().unwrap();
+            let (mut stream3, request_line3) = read_request_line(stream3);
+            assert!(request_line3.contains("titles=Rust_%28programming_language%29"));
+            let hit = r#"{
+              "query": {
+                "pages": {
+                  "456": {
+                    "title": "Rust (programming language)",
+                    "extract": "Rust is a multi-paradigm language focused on safety.",
+                    "fullurl": "https://simple.wikipedia.org/wiki/Rust_(programming_language)"
+                  }
+                }
+              }
+            }"#;
+            write_json_response(&mut stream3, "200 OK", hit);
+        });
+
+        let result = Reader::wikipedia_lookup_summary("NoSuchTerm", &base, Duration::from_secs(2))
+            .expect("fallback lookup should succeed");
+        server.join().unwrap();
+
+        assert_eq!(
+            result.url,
+            "https://simple.wikipedia.org/wiki/Rust_(programming_language)"
+        );
+        assert!(result.summary.contains("focused on safety"));
     }
 }

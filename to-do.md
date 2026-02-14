@@ -20,6 +20,7 @@ Concise roadmap for the Rust port of `epy`.
 - Two-phase visual mode with character-level cross-page selection and yanking
 - Visual-mode motions: `hjkl`, `w`/`b`/`e`, `0`, `$`
 - Basic dictionary lookup from visual selection (`d`, using `sdcv`/`dict`)
+- Wikipedia summary lookup from visual selection (`w`, 10s timeout)
 - Regex search with highlighting (/, n, p/N)
 - Width adjustment (+/- keys, = to reset) with per-book persistence
 - Line numbers toggle (in settings window)

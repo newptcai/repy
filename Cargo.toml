@@ -21,6 +21,7 @@ arboard = "3.6.1"
 regex = "1.10.6"
 hyphenation = { version = "0.8.4", features = ["embed_en-us"] }
 textwrap = { version = "0.16.1", features = ["hyphenation"] }
+reqwest = { version = "0.12.24", default-features = false, features = ["blocking", "json", "rustls-tls"] }
 
 [dev-dependencies]
 assert_cmd = "2.1.1"
