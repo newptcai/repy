@@ -4,6 +4,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::io;
 use std::rc::Rc;
+use std::time::{Duration, Instant};
 
 use chrono::Local;
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
@@ -143,6 +144,7 @@ pub struct UiState {
     pub settings_selected_index: usize,
     pub message: Option<String>,
     pub message_type: MessageType,
+    pub message_time: Option<Instant>,
     pub selection_start: Option<usize>,
     pub help_scroll_offset: u16,
 }
@@ -184,6 +186,7 @@ impl UiState {
             settings_selected_index: 0,
             message: None,
             message_type: MessageType::Info,
+            message_time: None,
             selection_start: None,
             help_scroll_offset: 0,
         }
@@ -192,10 +195,18 @@ impl UiState {
     pub fn set_message(&mut self, message: String, message_type: MessageType) {
         self.message = Some(message);
         self.message_type = message_type;
+        self.message_time = Some(Instant::now());
     }
 
     pub fn clear_message(&mut self) {
         self.message = None;
+        self.message_time = None;
+    }
+
+    /// Returns true if the current message has expired (older than 3 seconds).
+    pub fn message_expired(&self) -> bool {
+        self.message_time
+            .is_some_and(|t| t.elapsed() >= Duration::from_secs(3))
     }
 
     pub fn open_window(&mut self, window_type: WindowType) {
@@ -465,6 +476,14 @@ impl Reader {
             }
             drop(state);
 
+            // Auto-clear expired messages before rendering
+            {
+                let mut state = self.state.borrow_mut();
+                if state.ui_state.message_expired() {
+                    state.ui_state.clear_message();
+                }
+            }
+
             // Render UI
             {
                 let state = self.state.clone();
@@ -472,6 +491,27 @@ impl Reader {
                     let state_ref = state.borrow();
                     Self::render_static(f, &state_ref, &self.board, &self.content_start_rows);
                 })?;
+            }
+
+            // Poll with timeout so we can re-render when messages expire
+            let poll_timeout = {
+                let state = self.state.borrow();
+                match state.ui_state.message_time {
+                    Some(t) => {
+                        let elapsed = t.elapsed();
+                        let expiry = Duration::from_secs(3);
+                        if elapsed < expiry {
+                            expiry - elapsed
+                        } else {
+                            Duration::from_millis(100)
+                        }
+                    }
+                    None => Duration::from_secs(60),
+                }
+            };
+
+            if !crossterm::event::poll(poll_timeout)? {
+                continue;
             }
 
             // Handle events
