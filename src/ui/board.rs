@@ -156,6 +156,44 @@ impl Board {
                     }
                 }
 
+                // Cursor-only mode: show block cursor on single character
+                // (visual_cursor is Some but visual_anchor is None)
+                if selection_range.is_none() {
+                    if let Some((cursor_row, cursor_col)) = cursor_pos {
+                        if state.ui_state.visual_anchor.is_none() && line_num == cursor_row {
+                            let chars: Vec<char> = line.chars().collect();
+                            let col = cursor_col.min(chars.len().saturating_sub(1));
+                            if col > 0 {
+                                spans.push(Span::raw(
+                                    chars[..col].iter().collect::<String>(),
+                                ));
+                            }
+                            // Blinking block cursor character
+                            let cursor_style = Style::default()
+                                .add_modifier(Modifier::REVERSED)
+                                .add_modifier(Modifier::SLOW_BLINK);
+                            if !chars.is_empty() {
+                                spans.push(Span::styled(
+                                    chars[col..=col].iter().collect::<String>(),
+                                    cursor_style,
+                                ));
+                            } else {
+                                // Use non-breaking space so Wrap{trim:true} doesn't strip it
+                                spans.push(Span::styled(
+                                    "\u{00A0}".to_string(),
+                                    cursor_style,
+                                ));
+                            }
+                            if col + 1 < chars.len() {
+                                spans.push(Span::raw(
+                                    chars[col + 1..].iter().collect::<String>(),
+                                ));
+                            }
+                            return Line::from(spans);
+                        }
+                    }
+                }
+
                 let line_spans = self.build_line_spans(
                     line,
                     line_num,

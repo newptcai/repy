@@ -746,12 +746,23 @@ impl Reader {
                 state.ui_state.open_window(WindowType::Search);
             }
 
-            // Visual Mode
+            // Visual Mode: first v enters cursor mode, second v starts selection
             KeyCode::Char('v') => {
                 let mut state = self.state.borrow_mut();
-                let current_row = state.reading_state.row;
-                state.ui_state.visual_anchor = Some((current_row, 0));
-                state.ui_state.visual_cursor = Some((current_row, 0));
+                // Place cursor at the first non-empty line on the current page
+                let viewport_start = state.reading_state.row.saturating_sub(1);
+                let total_lines = self.board.total_lines();
+                let page = self.page_size();
+                let viewport_end = (viewport_start + page).min(total_lines);
+                let mut start_row = viewport_start.min(total_lines.saturating_sub(1));
+                for row in viewport_start..viewport_end {
+                    if self.board.line_char_count(row) > 0 {
+                        start_row = row;
+                        break;
+                    }
+                }
+                state.ui_state.visual_anchor = None;
+                state.ui_state.visual_cursor = Some((start_row, 0));
                 state.ui_state.open_window(WindowType::Visual);
             }
 
@@ -871,8 +882,9 @@ impl Reader {
                     let next = (state.ui_state.selected_search_result + 1)
                         .min(state.ui_state.search_results.len() - 1);
                     state.ui_state.selected_search_result = next;
-                    if let Some(result) = state.ui_state.search_results.get(next) {
-                        state.reading_state.row = result.line;
+                    let line = state.ui_state.search_results.get(next).map(|r| r.line);
+                    if let Some(line) = line {
+                        state.reading_state.row = line;
                     }
                 }
             }
@@ -881,12 +893,10 @@ impl Reader {
                 if !state.ui_state.search_results.is_empty() {
                     let current = state.ui_state.selected_search_result;
                     state.ui_state.selected_search_result = current.saturating_sub(1);
-                    if let Some(result) = state
-                        .ui_state
-                        .search_results
-                        .get(state.ui_state.selected_search_result)
-                    {
-                        state.reading_state.row = result.line;
+                    let idx = state.ui_state.selected_search_result;
+                    let line = state.ui_state.search_results.get(idx).map(|r| r.line);
+                    if let Some(line) = line {
+                        state.reading_state.row = line;
                     }
                 }
             }
@@ -903,20 +913,43 @@ impl Reader {
         Ok(())
     }
 
-    /// Handle keys in visual mode
+    /// Handle keys in visual mode (two-phase: cursor mode → selection mode)
+    ///
+    /// Phase 1 (cursor mode): visual_cursor is Some, visual_anchor is None.
+    ///   - hjkl/wbe move the cursor. Press v to anchor and start selecting.
+    /// Phase 2 (selection mode): both visual_cursor and visual_anchor are Some.
+    ///   - hjkl/wbe extend the selection. Press y to yank, d for dictionary.
     fn handle_visual_mode_keys(&mut self, key: KeyEvent, repeat_count: u32) -> eyre::Result<()> {
+        let has_anchor = self.state.borrow().ui_state.visual_anchor.is_some();
+
         match key.code {
             KeyCode::Esc => {
                 let mut state = self.state.borrow_mut();
-                state.ui_state.open_window(WindowType::Reader);
+                if has_anchor {
+                    // In selection mode: go back to cursor mode
+                    state.ui_state.visual_anchor = None;
+                } else {
+                    // In cursor mode: exit to reader
+                    state.ui_state.open_window(WindowType::Reader);
+                }
             }
-            KeyCode::Char('y') => {
+            KeyCode::Char('v') => {
+                let mut state = self.state.borrow_mut();
+                if has_anchor {
+                    // Already in selection mode: exit to reader
+                    state.ui_state.open_window(WindowType::Reader);
+                } else {
+                    // In cursor mode: anchor here and start selection
+                    state.ui_state.visual_anchor = state.ui_state.visual_cursor;
+                }
+            }
+            KeyCode::Char('y') if has_anchor => {
                 self.yank_selection()?;
             }
-            KeyCode::Char('d') => {
+            KeyCode::Char('d') if has_anchor => {
                 self.dictionary_lookup()?;
             }
-            // Navigation
+            // Navigation — works in both cursor and selection mode
             KeyCode::Char('j') | KeyCode::Down => {
                 for _ in 0..repeat_count {
                     self.move_visual_cursor(AppDirection::Down);
@@ -1652,7 +1685,7 @@ impl Reader {
         Ok(())
     }
 
-    // Navigation methods (placeholders)
+    // Navigation methods
     fn move_cursor(&mut self, direction: AppDirection) {
         let seamless = {
             let state = self.state.borrow();
@@ -1943,6 +1976,13 @@ impl Reader {
             return;
         };
 
+        // Step 1: advance at least one position
+        let Some(next) = self.next_visual_pos(pos) else {
+            return;
+        };
+        pos = next;
+
+        // Step 2: skip non-word characters (whitespace, punctuation)
         while let Some(ch) = self.char_at_visual_pos(pos) {
             if Self::is_word_char(ch) {
                 break;
@@ -1953,10 +1993,7 @@ impl Reader {
             pos = next;
         }
 
-        if !self.char_at_visual_pos(pos).is_some_and(Self::is_word_char) {
-            return;
-        }
-
+        // Step 3: advance through word characters to the end
         while let Some(next) = self.next_visual_pos(pos) {
             let Some(ch) = self.char_at_visual_pos(next) else {
                 break;
@@ -2295,8 +2332,9 @@ impl Reader {
         state.ui_state.search_matches = matches_map;
         state.ui_state.selected_search_result = 0;
 
-        if let Some(first) = state.ui_state.search_results.first() {
-            state.reading_state.row = first.line;
+        let first_line = state.ui_state.search_results.first().map(|r| r.line);
+        if let Some(line) = first_line {
+            state.reading_state.row = line;
         } else {
             state
                 .ui_state
@@ -2315,8 +2353,9 @@ impl Reader {
         let next =
             (state.ui_state.selected_search_result + 1) % state.ui_state.search_results.len();
         state.ui_state.selected_search_result = next;
-        if let Some(result) = state.ui_state.search_results.get(next) {
-            state.reading_state.row = result.line;
+        let line = state.ui_state.search_results.get(next).map(|r| r.line);
+        if let Some(line) = line {
+            state.reading_state.row = line;
         }
     }
 
@@ -2335,8 +2374,9 @@ impl Reader {
             state.ui_state.selected_search_result - 1
         };
         state.ui_state.selected_search_result = prev;
-        if let Some(result) = state.ui_state.search_results.get(prev) {
-            state.reading_state.row = result.line;
+        let line = state.ui_state.search_results.get(prev).map(|r| r.line);
+        if let Some(line) = line {
+            state.reading_state.row = line;
         }
     }
 
