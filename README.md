@@ -90,7 +90,7 @@ Search functionality supports regular expressions.
 
 ## Keybindings
 
-Press `?` in the TUI to see the help window at any time.
+Press `?` in the TUI to see the help window at any time (`Help (?)`).
 
 ### Navigation
 - `k` / `Up` — Line Up
@@ -131,20 +131,20 @@ Press `?` in the TUI to see the help window at any time.
 - `s` — Settings
   - `Enter`: Activate (toggle boolean, input for dictionary client)
   - `r`: Reset to default
+  - Dictionary command templates use `%q` as the query placeholder
 - `q` — Quit / Close Window
-- `?` — Help
 
 ### Visual Mode
 
 Visual mode is two-phase:
 
-1. Press `v` in the reader to enter **cursor mode** (`-- VISUAL --` appears in the header).
+1. Press `v` in the reader to enter **Cursor Mode** (`-- VISUAL --` appears in the header).
 2. In cursor mode, move with `h` `j` `k` `l` or word motions `w` `b` `e`.
-3. Press `v` again to set an anchor and enter **selection mode**.
-4. In selection mode, move with `h` `j` `k` `l` and `b` `e` to expand/shrink the character-level selection (selection can cross page boundaries).
+3. Press `v` again to set an anchor and enter **Selection Mode**.
+4. In selection mode, move with `h` `j` `k` `l` and word motions `w` `b` `e` to expand/shrink the character-level selection (selection can cross page boundaries).
 5. Press `y` to copy the selected text to clipboard.
 6. Press `d` to run dictionary lookup on the selection. By default it tries `sdcv`, `dict`, and `wkdict`. You can configure a custom command template in Settings (`s`).
-7. Press `w` to run Wikipedia lookup on the selection; the popup shows a link to the page plus the summary (10s timeout).
+7. Press `p` to run Wikipedia lookup on the selection; the popup shows a link to the page plus the summary (10s timeout).
 8. Press `Esc` to leave selection mode back to cursor mode; press `Esc` again to exit visual mode.
 
 ## Configuration

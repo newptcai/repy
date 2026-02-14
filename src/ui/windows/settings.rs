@@ -1,6 +1,6 @@
 use ratatui::{
     Frame,
-    layout::Rect,
+    layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Style},
     text::Line,
     widgets::{Block, Borders, Clear, List, ListItem, Paragraph},
@@ -18,16 +18,20 @@ impl SettingsWindow {
         );
 
         frame.render_widget(Clear, popup_area);
+        let block = Block::default().title("Settings").borders(Borders::ALL);
+        let inner = block.inner(popup_area);
+        frame.render_widget(block, popup_area);
+        let rows = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Min(1), Constraint::Length(1)])
+            .split(inner);
+        let footer = Paragraph::new("Tips: Enter activate | r reset | Dict cmd uses %q");
 
         if entries.is_empty() {
-            let paragraph = Paragraph::new("No settings available")
-                .style(Style::default().fg(Color::DarkGray))
-                .block(
-                    Block::default()
-                        .title("Settings (Enter activate, r reset)")
-                        .borders(Borders::ALL),
-                );
-            frame.render_widget(paragraph, popup_area);
+            let paragraph =
+                Paragraph::new("No settings available").style(Style::default().fg(Color::DarkGray));
+            frame.render_widget(paragraph, rows[0]);
+            frame.render_widget(footer, rows[1]);
             return;
         }
 
@@ -44,12 +48,9 @@ impl SettingsWindow {
             })
             .collect();
 
-        let list = List::new(items).block(
-            Block::default()
-                .title("Settings (Enter activate, r reset)")
-                .borders(Borders::ALL),
-        );
+        let list = List::new(items);
 
-        frame.render_widget(list, popup_area);
+        frame.render_widget(list, rows[0]);
+        frame.render_widget(footer, rows[1]);
     }
 }

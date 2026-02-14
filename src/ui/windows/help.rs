@@ -8,7 +8,7 @@ use ratatui::{
 pub struct HelpWindow;
 
 const HELP_TEXT: &[&str] = &[
-    " Key Bindings:",
+    " Navigation:",
     "   k / Up            Line Up",
     "   j / Down          Line Down",
     "   h / Left          Page Up",
@@ -21,23 +21,18 @@ const HELP_TEXT: &[&str] = &[
     "   G                 Chapter End",
     "   Home              Book Start",
     "   End               Book End",
-    "",
     " Jump History:",
     "   Ctrl+o            Jump Back",
     "   Ctrl+i/Tab        Jump Forward",
-    "",
     " Search:",
     "   /                 Start Search",
     "   n                 Next Hit",
     "   p / N             Previous Hit",
-    "",
     " Display:",
     "   + / -             Increase/Decrease Width",
     "   =                 Reset Width",
     "   T                 Toggle Top Bar",
-    "",
     " Windows & Tools:",
-    "   v                 Visual Mode",
     "   t                 Table Of Contents",
     "   m                 Bookmarks",
     "   u                 Links on Page",
@@ -45,19 +40,14 @@ const HELP_TEXT: &[&str] = &[
     "   i                 Metadata",
     "   r                 Library (History)",
     "   s                 Settings",
-    "   r (in Settings)   Reset selected setting",
-    "   Dict command      Use %q as query placeholder",
-    " Visual Cursor Mode (v):",
+    " Cursor Mode:",
     "   hjkl, w/b/e       Move cursor",
-    "   v                 Start selection",
-    "",
-    " Visual Selection Mode (v then v):",
-    "   hjkl, b/e         Extend selection",
+    " Selection Mode:",
+    "   hjkl, w/b/e       Extend selection",
     "   y                 Yank selection",
     "   d                 Dictionary Lookup",
-    "   w                 Wikipedia Summary",
+    "   p                 Wikipedia Summary",
     "   q                 Quit / Close Window",
-    "   ?                 Help",
 ];
 
 impl HelpWindow {
@@ -88,7 +78,7 @@ impl HelpWindow {
         frame.render_widget(Clear, popup_area);
 
         let help_paragraph = Paragraph::new(help_content)
-            .block(Block::default().title("Help").borders(Borders::ALL))
+            .block(Block::default().title("Help (?)").borders(Borders::ALL))
             .scroll((scroll_offset, 0));
 
         frame.render_widget(help_paragraph, popup_area);

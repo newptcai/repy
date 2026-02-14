@@ -1295,7 +1295,7 @@ impl Reader {
     /// Phase 1 (cursor mode): visual_cursor is Some, visual_anchor is None.
     ///   - hjkl/wbe move the cursor. Press v to anchor and start selecting.
     /// Phase 2 (selection mode): both visual_cursor and visual_anchor are Some.
-    ///   - hjkl/be extend the selection. Press y to yank, d for dictionary, w for Wikipedia.
+    ///   - hjkl/wbe extend the selection. Press y to yank, d for dictionary, p for Wikipedia.
     fn handle_visual_mode_keys(&mut self, key: KeyEvent, repeat_count: u32) -> eyre::Result<()> {
         let has_anchor = self.state.borrow().ui_state.visual_anchor.is_some();
 
@@ -1326,7 +1326,7 @@ impl Reader {
             KeyCode::Char('d') if has_anchor => {
                 self.dictionary_lookup()?;
             }
-            KeyCode::Char('w') if has_anchor => {
+            KeyCode::Char('p') if has_anchor => {
                 self.wikipedia_lookup()?;
             }
             // Navigation — works in both cursor and selection mode
