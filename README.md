@@ -129,6 +129,8 @@ Press `?` in the TUI to see the help window at any time.
   - `Enter` to open the selected book
   - `d` to delete the selected history entry
 - `s` — Settings
+  - `Enter`: Activate (toggle boolean, input for dictionary client)
+  - `r`: Reset to default
 - `q` — Quit / Close Window
 - `?` — Help
 
@@ -141,7 +143,7 @@ Visual mode is two-phase:
 3. Press `v` again to set an anchor and enter **selection mode**.
 4. Move again to expand/shrink the character-level selection (selection can cross page boundaries).
 5. Press `y` to copy the selected text to clipboard.
-6. Press `d` to run dictionary lookup on the selection (`sdcv` fallback to `dict`).
+6. Press `d` to run dictionary lookup on the selection. By default it tries `sdcv`, `dict`, and `wkdict`. You can configure a custom command template in Settings (`s`).
 7. Press `Esc` to leave selection mode back to cursor mode; press `Esc` again to exit visual mode.
 
 ## Configuration

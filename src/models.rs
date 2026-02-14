@@ -33,6 +33,7 @@ pub enum WindowType {
     Settings,
     Images,
     Visual,
+    DictionaryCommandInput,
 }
 
 #[derive(Debug, Clone, PartialEq)]

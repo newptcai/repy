@@ -24,7 +24,7 @@ impl SettingsWindow {
                 .style(Style::default().fg(Color::DarkGray))
                 .block(
                     Block::default()
-                        .title("Settings (Enter toggle, r reset, %q template)")
+                        .title("Settings (Enter activate, r reset)")
                         .borders(Borders::ALL),
                 );
             frame.render_widget(paragraph, popup_area);
@@ -46,7 +46,7 @@ impl SettingsWindow {
 
         let list = List::new(items).block(
             Block::default()
-                .title("Settings (Enter toggle, r reset, %q template)")
+                .title("Settings (Enter activate, r reset)")
                 .borders(Borders::ALL),
         );
 

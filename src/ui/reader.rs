@@ -146,6 +146,7 @@ pub struct UiState {
     pub dictionary_word: String,
     pub dictionary_definition: String,
     pub dictionary_scroll_offset: u16,
+    pub dictionary_command_query: String,
     pub settings_selected_index: usize,
     pub message: Option<String>,
     pub message_type: MessageType,
@@ -193,6 +194,7 @@ impl UiState {
             dictionary_word: String::new(),
             dictionary_definition: String::new(),
             dictionary_scroll_offset: 0,
+            dictionary_command_query: String::new(),
             settings_selected_index: 0,
             message: None,
             message_type: MessageType::Info,
@@ -254,6 +256,9 @@ impl UiState {
             }
             WindowType::Settings => self.show_settings = true,
             WindowType::Visual => {}
+            WindowType::DictionaryCommandInput => {
+                self.show_settings = false;
+            }
         }
     }
 }
@@ -317,12 +322,13 @@ pub struct Reader {
 }
 
 impl Reader {
-    fn split_dictionary_command_template(template: &str) -> eyre::Result<Vec<String>> {
+    fn split_dictionary_command_template(template: &str) -> eyre::Result<Vec<(String, bool)>> {
         let mut args = Vec::new();
         let mut current = String::new();
         let mut chars = template.chars().peekable();
         let mut in_single = false;
         let mut in_double = false;
+        let mut was_quoted = false;
 
         while let Some(ch) = chars.next() {
             match ch {
@@ -337,13 +343,16 @@ impl Reader {
                 }
                 '\'' if !in_double => {
                     in_single = !in_single;
+                    was_quoted = true;
                 }
                 '"' if !in_single => {
                     in_double = !in_double;
+                    was_quoted = true;
                 }
                 c if c.is_whitespace() && !in_single && !in_double => {
                     if !current.is_empty() {
-                        args.push(std::mem::take(&mut current));
+                        args.push((std::mem::take(&mut current), was_quoted));
+                        was_quoted = false;
                     }
                 }
                 _ => current.push(ch),
@@ -356,7 +365,7 @@ impl Reader {
             ));
         }
         if !current.is_empty() {
-            args.push(current);
+            args.push((current, was_quoted));
         }
         Ok(args)
     }
@@ -365,25 +374,34 @@ impl Reader {
         template: &str,
         query: &str,
     ) -> eyre::Result<(String, Vec<String>)> {
-        let mut parts = Self::split_dictionary_command_template(template)?;
+        let parts = Self::split_dictionary_command_template(template)?;
         if parts.is_empty() {
             return Err(eyre::eyre!("Dictionary command template is empty"));
         }
 
         let mut has_placeholder = false;
-        for part in &mut parts {
+        let mut processed_parts = Vec::new();
+
+        for (mut part, quoted) in parts {
             if part.contains("%q") {
-                *part = part.replace("%q", query);
+                let substituted = if quoted {
+                    // If it was quoted, we should escape internal quotes to be safe
+                    query.replace('"', "\\\"")
+                } else {
+                    query.to_string()
+                };
+                part = part.replace("%q", &substituted);
                 has_placeholder = true;
             }
+            processed_parts.push(part);
         }
 
         if !has_placeholder {
-            parts.push(query.to_string());
+            processed_parts.push(query.to_string());
         }
 
-        let program = parts.remove(0);
-        Ok((program, parts))
+        let program = processed_parts.remove(0);
+        Ok((program, processed_parts))
     }
 
     fn run_dictionary_client(client: &str, query: &str) -> eyre::Result<std::process::Output> {
@@ -729,6 +747,7 @@ impl Reader {
             WindowType::Help => self.handle_help_mode_keys(key, repeat_count)?,
             WindowType::Metadata => self.handle_modal_close_keys(key)?,
             WindowType::Dictionary => self.handle_dictionary_mode_keys(key, repeat_count)?,
+            WindowType::DictionaryCommandInput => self.handle_dictionary_command_input_keys(key)?,
             _ => self.handle_normal_mode_keys(key, repeat_count)?,
         }
 
@@ -1278,8 +1297,21 @@ impl Reader {
                     .settings_selected_index
                     .saturating_sub(repeat_count as usize);
             }
-            KeyCode::Enter => {
-                self.toggle_selected_setting()?;
+            KeyCode::Enter | KeyCode::Char('l') => {
+                let selected = {
+                    let state = self.state.borrow();
+                    SettingItem::all()
+                        .get(state.ui_state.settings_selected_index)
+                        .copied()
+                };
+                if selected == Some(SettingItem::DictionaryClient) {
+                    let mut state = self.state.borrow_mut();
+                    state.ui_state.dictionary_command_query =
+                        state.config.settings.dictionary_client.clone();
+                    state.ui_state.open_window(WindowType::DictionaryCommandInput);
+                } else {
+                    self.toggle_selected_setting()?;
+                }
             }
             KeyCode::Char('+') | KeyCode::Char('=') | KeyCode::Right => {
                 self.adjust_textwidth(5)?;
@@ -1380,6 +1412,37 @@ impl Reader {
         Ok(())
     }
 
+    fn handle_dictionary_command_input_keys(&mut self, key: KeyEvent) -> eyre::Result<()> {
+        match key.code {
+            KeyCode::Enter => {
+                let query = {
+                    let state = self.state.borrow();
+                    state.ui_state.dictionary_command_query.trim().to_string()
+                };
+                {
+                    let mut state = self.state.borrow_mut();
+                    state.config.settings.dictionary_client = query;
+                    let _ = state.config.save();
+                    state.ui_state.open_window(WindowType::Settings);
+                }
+            }
+            KeyCode::Esc => {
+                let mut state = self.state.borrow_mut();
+                state.ui_state.open_window(WindowType::Settings);
+            }
+            KeyCode::Backspace => {
+                let mut state = self.state.borrow_mut();
+                state.ui_state.dictionary_command_query.pop();
+            }
+            KeyCode::Char(c) => {
+                let mut state = self.state.borrow_mut();
+                state.ui_state.dictionary_command_query.push(c);
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
     /// Static render method that can be called from a closure
     fn render_static(
         frame: &mut Frame,
@@ -1467,6 +1530,8 @@ impl Reader {
             );
         } else if state.ui_state.show_metadata {
             MetadataWindow::render(frame, frame.area(), state.ui_state.metadata.as_ref());
+        } else if state.ui_state.active_window == WindowType::DictionaryCommandInput {
+            Self::render_dictionary_command_input_static(frame, state);
         } else if state.ui_state.show_settings {
             let entries = Self::settings_entries(state);
             SettingsWindow::render(
@@ -1728,6 +1793,26 @@ impl Reader {
 
         frame.render_widget(Clear, area);
         frame.render_widget(message_paragraph, area);
+    }
+
+    fn render_dictionary_command_input_static(frame: &mut Frame, state: &ApplicationState) {
+        let area = Rect::new(
+            frame.area().x + frame.area().width / 4,
+            frame.area().y + frame.area().height / 2 - 2,
+            frame.area().width / 2,
+            3,
+        );
+
+        let input = Paragraph::new(Line::from(state.ui_state.dictionary_command_query.as_str()))
+            .block(
+                Block::default()
+                    .title("Dictionary Command Template (%q for query)")
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(Color::Blue)),
+            );
+
+        frame.render_widget(Clear, area);
+        frame.render_widget(input, area);
     }
 
     fn open_toc_window(&mut self) -> eyre::Result<()> {
@@ -3441,5 +3526,22 @@ mod tests {
         let (program, args) = Reader::build_dictionary_command("dict -wn", "apple").unwrap();
         assert_eq!(program, "dict");
         assert_eq!(args, vec!["-wn".to_string(), "apple".to_string()]);
+    }
+
+    #[test]
+    fn build_dictionary_command_handles_internal_quotes_in_query() {
+        // Current behavior: if query contains quotes, they are passed as part of the argument.
+        // This is safe because we don't use shell=True.
+        let (program, args) =
+            Reader::build_dictionary_command("tool --arg=%q", "word \"with\" quotes").unwrap();
+        assert_eq!(program, "tool");
+        assert_eq!(args, vec!["--arg=word \"with\" quotes".to_string()]);
+    }
+
+    #[test]
+    fn build_dictionary_command_escapes_quotes_if_wrapped_in_template() {
+        let (program, args) = Reader::build_dictionary_command("sh -c \"dict %q\"", "a\"b").unwrap();
+        assert_eq!(program, "sh");
+        assert_eq!(args, vec!["-c".to_string(), "dict a\\\"b".to_string()]);
     }
 }
