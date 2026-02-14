@@ -14,6 +14,22 @@ struct LogicalParagraph {
 }
 
 impl DictionaryWindow {
+    pub fn max_scroll_offset(area: Rect, definition: &str, loading: bool) -> u16 {
+        if loading {
+            return 0;
+        }
+
+        let popup_area = Self::centered_popup_area(area, 70, 80);
+        let inner_width = popup_area.width.saturating_sub(2) as usize;
+        let inner_height = popup_area.height.saturating_sub(2) as usize;
+        let reflowed = Self::reflow(definition, inner_width);
+        let total_lines = reflowed.lines().count();
+
+        total_lines
+            .saturating_sub(inner_height)
+            .min(u16::MAX as usize) as u16
+    }
+
     pub fn render(
         frame: &mut Frame,
         area: Rect,
@@ -347,5 +363,20 @@ mod tests {
         // Definition 3 continuation should be merged (not a separate line starting with "transparent")
         let has_transparent_start = lines.iter().any(|l| l.trim().starts_with("transparent"));
         assert!(!has_transparent_start, "continuation should be merged into definition 3");
+    }
+
+    #[test]
+    fn max_scroll_offset_zero_when_content_fits() {
+        let area = Rect::new(0, 0, 120, 40);
+        let definition = "short line";
+        assert_eq!(DictionaryWindow::max_scroll_offset(area, definition, false), 0);
+    }
+
+    #[test]
+    fn max_scroll_offset_positive_when_content_overflows() {
+        let area = Rect::new(0, 0, 120, 40);
+        let definition = (0..80).map(|_| "line").collect::<Vec<_>>().join("\n");
+        let max = DictionaryWindow::max_scroll_offset(area, &definition, false);
+        assert!(max > 0);
     }
 }

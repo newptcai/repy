@@ -1431,6 +1431,16 @@ impl Reader {
         key: KeyEvent,
         repeat_count: u32,
     ) -> eyre::Result<()> {
+        let (term_width, term_height) = crossterm::terminal::size().unwrap_or((80, 24));
+        let max_offset = {
+            let state = self.state.borrow();
+            DictionaryWindow::max_scroll_offset(
+                Rect::new(0, 0, term_width, term_height),
+                &state.ui_state.dictionary_definition,
+                state.ui_state.dictionary_loading,
+            )
+        };
+
         match key.code {
             KeyCode::Esc | KeyCode::Char('q') | KeyCode::Enter => {
                 let mut state = self.state.borrow_mut();
@@ -1441,7 +1451,8 @@ impl Reader {
                 state.ui_state.dictionary_scroll_offset = state
                     .ui_state
                     .dictionary_scroll_offset
-                    .saturating_add(repeat_count as u16);
+                    .saturating_add(repeat_count as u16)
+                    .min(max_offset);
             }
             KeyCode::Char('k') | KeyCode::Up => {
                 let mut state = self.state.borrow_mut();
@@ -1455,7 +1466,8 @@ impl Reader {
                 state.ui_state.dictionary_scroll_offset = state
                     .ui_state
                     .dictionary_scroll_offset
-                    .saturating_add((repeat_count as u16).saturating_mul(10));
+                    .saturating_add((repeat_count as u16).saturating_mul(10))
+                    .min(max_offset);
             }
             KeyCode::PageUp => {
                 let mut state = self.state.borrow_mut();
