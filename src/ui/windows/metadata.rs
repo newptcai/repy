@@ -1,5 +1,11 @@
-use ratatui::{layout::Rect, style::{Color, Modifier, Style}, text::{Line, Span}, widgets::{Block, Borders, Clear, Paragraph}, Frame};
 use crate::models::BookMetadata;
+use ratatui::{
+    Frame,
+    layout::Rect,
+    style::{Color, Modifier, Style},
+    text::{Line, Span},
+    widgets::{Block, Borders, Clear, Paragraph},
+};
 
 pub struct MetadataWindow;
 
@@ -11,19 +17,48 @@ impl MetadataWindow {
 
         if let Some(metadata) = metadata {
             let content = vec![
-                Line::from(Span::styled("Book Information", Style::default().add_modifier(Modifier::BOLD))),
+                Line::from(Span::styled(
+                    "Book Information",
+                    Style::default().add_modifier(Modifier::BOLD),
+                )),
                 Line::from(""),
-                Line::from(format!("Title: {}", metadata.title.as_deref().unwrap_or("Unknown"))),
-                Line::from(format!("Author: {}", metadata.creator.as_deref().unwrap_or("Unknown"))),
-                Line::from(format!("Publisher: {}", metadata.publisher.as_deref().unwrap_or("Unknown"))),
-                Line::from(format!("Date: {}", metadata.date.as_deref().unwrap_or("Unknown"))),
-                Line::from(format!("Language: {}", metadata.language.as_deref().unwrap_or("Unknown"))),
-                Line::from(format!("Format: {}", metadata.format.as_deref().unwrap_or("Unknown"))),
+                Line::from(format!(
+                    "Title: {}",
+                    metadata.title.as_deref().unwrap_or("Unknown")
+                )),
+                Line::from(format!(
+                    "Author: {}",
+                    metadata.creator.as_deref().unwrap_or("Unknown")
+                )),
+                Line::from(format!(
+                    "Publisher: {}",
+                    metadata.publisher.as_deref().unwrap_or("Unknown")
+                )),
+                Line::from(format!(
+                    "Date: {}",
+                    metadata.date.as_deref().unwrap_or("Unknown")
+                )),
+                Line::from(format!(
+                    "Language: {}",
+                    metadata.language.as_deref().unwrap_or("Unknown")
+                )),
+                Line::from(format!(
+                    "Format: {}",
+                    metadata.format.as_deref().unwrap_or("Unknown")
+                )),
                 Line::from(""),
                 Line::from("Description:"),
-                Line::from(metadata.description.as_deref().unwrap_or("No description available")),
+                Line::from(
+                    metadata
+                        .description
+                        .as_deref()
+                        .unwrap_or("No description available"),
+                ),
                 Line::from(""),
-                Line::from(Span::styled("Press any key to close", Style::default().add_modifier(Modifier::ITALIC))),
+                Line::from(Span::styled(
+                    "Press any key to close",
+                    Style::default().add_modifier(Modifier::ITALIC),
+                )),
             ];
 
             let paragraph = Paragraph::new(content)
@@ -34,7 +69,10 @@ impl MetadataWindow {
             let content = vec![
                 Line::from("No metadata available"),
                 Line::from(""),
-                Line::from(Span::styled("Press any key to close", Style::default().add_modifier(Modifier::ITALIC))),
+                Line::from(Span::styled(
+                    "Press any key to close",
+                    Style::default().add_modifier(Modifier::ITALIC),
+                )),
             ];
 
             let paragraph = Paragraph::new(content)

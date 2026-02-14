@@ -1,9 +1,9 @@
 use ratatui::{
+    Frame,
     layout::Rect,
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Paragraph},
-    Frame,
 };
 
 use crate::models::{BookMetadata, TocEntry};
@@ -26,12 +26,19 @@ impl TocWindow {
             let empty_text = vec![
                 Line::from("No table of contents available"),
                 Line::from(""),
-                Line::from(Span::styled("Press any key to close", Style::default().add_modifier(Modifier::ITALIC))),
+                Line::from(Span::styled(
+                    "Press any key to close",
+                    Style::default().add_modifier(Modifier::ITALIC),
+                )),
             ];
 
             let paragraph = Paragraph::new(empty_text)
                 .style(Style::default().fg(Color::DarkGray))
-                .block(Block::default().title("Table of Contents").borders(Borders::ALL));
+                .block(
+                    Block::default()
+                        .title("Table of Contents")
+                        .borders(Borders::ALL),
+                );
 
             frame.render_widget(paragraph, popup_area);
             return;
@@ -77,7 +84,11 @@ impl TocWindow {
         };
 
         let paragraph = Paragraph::new(lines)
-            .block(Block::default().title("Table of Contents").borders(Borders::ALL))
+            .block(
+                Block::default()
+                    .title("Table of Contents")
+                    .borders(Borders::ALL),
+            )
             .scroll((scroll_offset as u16, 0));
 
         frame.render_widget(paragraph, popup_area);

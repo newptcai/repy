@@ -25,7 +25,10 @@ fn test_epub_loading() -> Result<(), Box<dyn std::error::Error>> {
     let toc = epub.toc_entries();
     println!("Found {} chapters:", toc.len());
     for (i, entry) in toc.iter().enumerate() {
-        println!("{:2}: {} (content_index: {})", i, entry.label, entry.content_index);
+        println!(
+            "{:2}: {} (content_index: {})",
+            i, entry.label, entry.content_index
+        );
     }
 
     // Print content list
@@ -110,8 +113,12 @@ fn test_epub_loading() -> Result<(), Box<dyn std::error::Error>> {
         let mut total_lines = 0;
         for (i, content) in all_content.iter().enumerate() {
             total_lines += content.text_lines.len();
-            println!("  Chapter {}: {} lines, {} images",
-                i + 1, content.text_lines.len(), content.image_maps.len());
+            println!(
+                "  Chapter {}: {} lines, {} images",
+                i + 1,
+                content.text_lines.len(),
+                content.image_maps.len()
+            );
         }
         println!("Total lines across all chapters: {}", total_lines);
     }

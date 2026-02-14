@@ -1,9 +1,9 @@
-pub mod toc;
-pub mod help;
 pub mod bookmarks;
-pub mod library;
-pub mod search;
-pub mod links;
-pub mod settings;
-pub mod metadata;
+pub mod help;
 pub mod images;
+pub mod library;
+pub mod links;
+pub mod metadata;
+pub mod search;
+pub mod settings;
+pub mod toc;

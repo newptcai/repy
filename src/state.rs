@@ -68,8 +68,14 @@ impl State {
 
         // Migration: Attempt to add textwidth column if it doesn't exist
         // We ignore errors here which would happen if the column already exists
-        let _ = conn.execute("ALTER TABLE reading_states ADD COLUMN textwidth INTEGER DEFAULT 80", []);
-        let _ = conn.execute("ALTER TABLE bookmarks ADD COLUMN textwidth INTEGER DEFAULT 80", []);
+        let _ = conn.execute(
+            "ALTER TABLE reading_states ADD COLUMN textwidth INTEGER DEFAULT 80",
+            [],
+        );
+        let _ = conn.execute(
+            "ALTER TABLE bookmarks ADD COLUMN textwidth INTEGER DEFAULT 80",
+            [],
+        );
 
         Ok(())
     }
@@ -101,7 +107,10 @@ impl State {
 
     pub fn delete_from_library(&self, filepath: &str) -> Result<()> {
         self.conn.execute("PRAGMA foreign_keys = ON", [])?;
-        self.conn.execute("DELETE FROM reading_states WHERE filepath=?", params![filepath])?;
+        self.conn.execute(
+            "DELETE FROM reading_states WHERE filepath=?",
+            params![filepath],
+        )?;
         Ok(())
     }
 
@@ -196,7 +205,10 @@ impl State {
         )?;
 
         tx.execute("DELETE FROM library WHERE filepath=?", params![old_path])?;
-        tx.execute("DELETE FROM reading_states WHERE filepath=?", params![old_path])?;
+        tx.execute(
+            "DELETE FROM reading_states WHERE filepath=?",
+            params![old_path],
+        )?;
         tx.execute("DELETE FROM bookmarks WHERE filepath=?", params![old_path])?;
 
         tx.commit()?;
@@ -209,7 +221,9 @@ impl State {
     }
 
     pub fn get_last_reading_state(&self, ebook: &dyn crate::ebook::Ebook) -> Result<ReadingState> {
-        let mut stmt = self.conn.prepare("SELECT content_index, textwidth, row, rel_pctg FROM reading_states WHERE filepath=?")?;
+        let mut stmt = self.conn.prepare(
+            "SELECT content_index, textwidth, row, rel_pctg FROM reading_states WHERE filepath=?",
+        )?;
         let result = stmt.query_row(params![ebook.path()], |row| {
             Ok(ReadingState {
                 content_index: row.get(0)?,
@@ -233,7 +247,11 @@ impl State {
         }
     }
 
-    pub fn set_last_reading_state(&self, ebook: &dyn crate::ebook::Ebook, reading_state: &ReadingState) -> Result<()> {
+    pub fn set_last_reading_state(
+        &self,
+        ebook: &dyn crate::ebook::Ebook,
+        reading_state: &ReadingState,
+    ) -> Result<()> {
         self.conn.execute(
             "INSERT OR REPLACE INTO reading_states (filepath, content_index, textwidth, row, rel_pctg) VALUES (?, ?, ?, ?, ?)",
             params![
@@ -247,8 +265,13 @@ impl State {
         Ok(())
     }
 
-    pub fn insert_bookmark(&self, ebook: &dyn crate::ebook::Ebook, name: &str, reading_state: &ReadingState) -> Result<()> {
-        use sha1::{Sha1, Digest};
+    pub fn insert_bookmark(
+        &self,
+        ebook: &dyn crate::ebook::Ebook,
+        name: &str,
+        reading_state: &ReadingState,
+    ) -> Result<()> {
+        use sha1::{Digest, Sha1};
         let mut hasher = Sha1::new();
         hasher.update(format!("{}{}", ebook.path(), name).as_bytes());
         let hash = hasher.finalize();
@@ -277,8 +300,13 @@ impl State {
         Ok(())
     }
 
-    pub fn get_bookmarks(&self, ebook: &dyn crate::ebook::Ebook) -> Result<Vec<(String, ReadingState)>> {
-        let mut stmt = self.conn.prepare("SELECT name, content_index, textwidth, row, rel_pctg FROM bookmarks WHERE filepath=?")?;
+    pub fn get_bookmarks(
+        &self,
+        ebook: &dyn crate::ebook::Ebook,
+    ) -> Result<Vec<(String, ReadingState)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT name, content_index, textwidth, row, rel_pctg FROM bookmarks WHERE filepath=?",
+        )?;
         let bookmarks_iter = stmt.query_map(params![ebook.path()], |row| {
             Ok((
                 row.get(0)?,
@@ -300,7 +328,11 @@ impl State {
         Ok(bookmarks)
     }
 
-    pub fn update_library(&self, ebook: &dyn crate::ebook::Ebook, reading_progress: Option<f32>) -> Result<()> {
+    pub fn update_library(
+        &self,
+        ebook: &dyn crate::ebook::Ebook,
+        reading_progress: Option<f32>,
+    ) -> Result<()> {
         let metadata = &ebook.get_meta();
         self.conn.execute(
             "INSERT OR REPLACE INTO library (filepath, title, author, reading_progress) VALUES (?, ?, ?, ?)",
@@ -314,7 +346,7 @@ impl State {
 mod tests {
     use super::*;
     use crate::ebook::Ebook;
-    use crate::models::{BookMetadata, TocEntry, TextStructure};
+    use crate::models::{BookMetadata, TextStructure, TocEntry};
     use tempfile::TempDir;
 
     // Mock Ebook implementation for testing
@@ -390,11 +422,20 @@ mod tests {
             Ok(())
         }
 
-        fn get_parsed_content(&mut self, _content_id: &str, _text_width: usize, _starting_line: usize) -> Result<TextStructure> {
+        fn get_parsed_content(
+            &mut self,
+            _content_id: &str,
+            _text_width: usize,
+            _starting_line: usize,
+        ) -> Result<TextStructure> {
             Ok(TextStructure::default())
         }
 
-        fn get_all_parsed_content(&mut self, _text_width: usize, _page_height: Option<usize>) -> Result<Vec<TextStructure>> {
+        fn get_all_parsed_content(
+            &mut self,
+            _text_width: usize,
+            _page_height: Option<usize>,
+        ) -> Result<Vec<TextStructure>> {
             Ok(vec![TextStructure::default()])
         }
     }
@@ -441,11 +482,10 @@ mod tests {
                 ON DELETE CASCADE
             );
             ",
-        ).unwrap();
+        )
+        .unwrap();
 
-        let state = State {
-            conn,
-        };
+        let state = State { conn };
 
         (state, temp_dir)
     }
@@ -458,10 +498,12 @@ mod tests {
         let conn = Connection::open(&db_path).unwrap();
         State::init_db(&conn).unwrap();
         assert!(db_path.exists());
-        
+
         // Verify textwidth column exists
         let mut stmt = conn.prepare("PRAGMA table_info(reading_states)").unwrap();
-        let columns: Vec<String> = stmt.query_map([], |row| row.get(1)).unwrap()
+        let columns: Vec<String> = stmt
+            .query_map([], |row| row.get(1))
+            .unwrap()
             .map(|r| r.unwrap())
             .collect();
         assert!(columns.contains(&"textwidth".to_string()));
@@ -488,8 +530,12 @@ mod tests {
             rel_pctg: None,
             section: None,
         };
-        state.set_last_reading_state(&ebook1, &default_state).unwrap();
-        state.set_last_reading_state(&ebook2, &default_state).unwrap();
+        state
+            .set_last_reading_state(&ebook1, &default_state)
+            .unwrap();
+        state
+            .set_last_reading_state(&ebook2, &default_state)
+            .unwrap();
         state.update_library(&ebook1, Some(0.25)).unwrap();
 
         std::thread::sleep(std::time::Duration::from_millis(10));
@@ -499,30 +545,36 @@ mod tests {
         let history = state.get_from_history().unwrap();
         assert_eq!(history.len(), 2);
 
-        let book2_found = history.iter().any(|item|
-            item.filepath == "/path/to/book2.epub" &&
-            item.title == Some("Book Two".to_string()) &&
-            item.author == Some("Author Two".to_string()) &&
-            item.reading_progress == Some(0.75)
-        );
-        let book1_found = history.iter().any(|item|
-            item.filepath == "/path/to/book1.epub" &&
-            item.title == Some("Book One".to_string()) &&
-            item.author == Some("Author One".to_string()) &&
-            item.reading_progress == Some(0.25)
-        );
+        let book2_found = history.iter().any(|item| {
+            item.filepath == "/path/to/book2.epub"
+                && item.title == Some("Book Two".to_string())
+                && item.author == Some("Author Two".to_string())
+                && item.reading_progress == Some(0.75)
+        });
+        let book1_found = history.iter().any(|item| {
+            item.filepath == "/path/to/book1.epub"
+                && item.title == Some("Book One".to_string())
+                && item.author == Some("Author One".to_string())
+                && item.reading_progress == Some(0.25)
+        });
 
         assert!(book2_found, "Book 2 should be found in history");
         assert!(book1_found, "Book 1 should be found in history");
 
         let last_read = state.get_last_read().unwrap();
         assert!(last_read.is_some(), "Should have a last read book");
-        assert!(last_read.unwrap().contains("book"), "Should be one of our test books");
+        assert!(
+            last_read.unwrap().contains("book"),
+            "Should be one of our test books"
+        );
 
         state.delete_from_library("/path/to/book1.epub").unwrap();
         let history = state.get_from_history().unwrap();
         assert_eq!(history.len(), 1);
-        assert!(history[0].filepath.contains("book2"), "Should be book 2 remaining");
+        assert!(
+            history[0].filepath.contains("book2"),
+            "Should be book 2 remaining"
+        );
     }
 
     #[test]
@@ -559,7 +611,9 @@ mod tests {
             rel_pctg: Some(0.890),
             section: None,
         };
-        state.set_last_reading_state(&ebook, &updated_state).unwrap();
+        state
+            .set_last_reading_state(&ebook, &updated_state)
+            .unwrap();
 
         let final_state = state.get_last_reading_state(&ebook).unwrap();
         assert_eq!(final_state.content_index, 10);
@@ -583,7 +637,9 @@ mod tests {
             rel_pctg: None,
             section: None,
         };
-        state.set_last_reading_state(&ebook, &initial_state).unwrap();
+        state
+            .set_last_reading_state(&ebook, &initial_state)
+            .unwrap();
 
         let state1 = ReadingState {
             content_index: 2,
@@ -651,10 +707,18 @@ mod tests {
             rel_pctg: None,
             section: None,
         };
-        state.set_last_reading_state(&ebook1, &default_state).unwrap();
-        state.set_last_reading_state(&ebook2, &default_state).unwrap();
-        state.insert_bookmark(&ebook1, "Important", &reading_state).unwrap();
-        state.insert_bookmark(&ebook2, "Important", &reading_state).unwrap();
+        state
+            .set_last_reading_state(&ebook1, &default_state)
+            .unwrap();
+        state
+            .set_last_reading_state(&ebook2, &default_state)
+            .unwrap();
+        state
+            .insert_bookmark(&ebook1, "Important", &reading_state)
+            .unwrap();
+        state
+            .insert_bookmark(&ebook2, "Important", &reading_state)
+            .unwrap();
 
         let bookmarks1 = state.get_bookmarks(&ebook1).unwrap();
         let bookmarks2 = state.get_bookmarks(&ebook2).unwrap();
@@ -682,11 +746,15 @@ mod tests {
             rel_pctg: Some(0.1),
             section: None,
         };
-        state.set_last_reading_state(&ebook, &reading_state).unwrap();
+        state
+            .set_last_reading_state(&ebook, &reading_state)
+            .unwrap();
 
         state.update_library(&ebook, Some(0.1)).unwrap();
 
-        state.insert_bookmark(&ebook, "Test Bookmark", &reading_state).unwrap();
+        state
+            .insert_bookmark(&ebook, "Test Bookmark", &reading_state)
+            .unwrap();
 
         let history = state.get_from_history().unwrap();
         assert_eq!(history.len(), 1);
@@ -694,7 +762,13 @@ mod tests {
         let bookmarks = state.get_bookmarks(&ebook).unwrap();
         assert_eq!(bookmarks.len(), 1);
 
-        state.conn.execute("DELETE FROM reading_states WHERE filepath=?", params![ebook.path()]).unwrap();
+        state
+            .conn
+            .execute(
+                "DELETE FROM reading_states WHERE filepath=?",
+                params![ebook.path()],
+            )
+            .unwrap();
 
         let history = state.get_from_history().unwrap();
         assert_eq!(history.len(), 0);
@@ -730,7 +804,9 @@ mod tests {
             rel_pctg: None,
             section: None,
         };
-        state.set_last_reading_state(&ebook, &default_state).unwrap();
+        state
+            .set_last_reading_state(&ebook, &default_state)
+            .unwrap();
 
         state.update_library(&ebook, Some(0.25)).unwrap();
         state.update_library(&ebook, Some(0.75)).unwrap();
@@ -758,11 +834,17 @@ mod tests {
             rel_pctg: Some(0.2),
             section: None,
         };
-        state.set_last_reading_state(&old_ebook, &reading_state).unwrap();
+        state
+            .set_last_reading_state(&old_ebook, &reading_state)
+            .unwrap();
         state.update_library(&old_ebook, Some(0.2)).unwrap();
-        state.insert_bookmark(&old_ebook, "Bookmark", &reading_state).unwrap();
+        state
+            .insert_bookmark(&old_ebook, "Bookmark", &reading_state)
+            .unwrap();
 
-        state.reconcile_filepath(old_ebook.path(), new_ebook.path()).unwrap();
+        state
+            .reconcile_filepath(old_ebook.path(), new_ebook.path())
+            .unwrap();
 
         let history = state.get_from_history().unwrap();
         assert_eq!(history.len(), 1);
@@ -814,9 +896,27 @@ mod tests {
         let ebook2 = MockEbook::new("/path/to/book2.epub", "Book 2", "Author 2");
         let ebook3 = MockEbook::new("/path/to/book3.epub", "Book 3", "Author 3");
 
-        let state1 = ReadingState { content_index: 1, textwidth: 80, row: 10, rel_pctg: Some(0.1), section: None };
-        let state2 = ReadingState { content_index: 2, textwidth: 80, row: 20, rel_pctg: Some(0.2), section: None };
-        let state3 = ReadingState { content_index: 3, textwidth: 80, row: 30, rel_pctg: Some(0.3), section: None };
+        let state1 = ReadingState {
+            content_index: 1,
+            textwidth: 80,
+            row: 10,
+            rel_pctg: Some(0.1),
+            section: None,
+        };
+        let state2 = ReadingState {
+            content_index: 2,
+            textwidth: 80,
+            row: 20,
+            rel_pctg: Some(0.2),
+            section: None,
+        };
+        let state3 = ReadingState {
+            content_index: 3,
+            textwidth: 80,
+            row: 30,
+            rel_pctg: Some(0.3),
+            section: None,
+        };
 
         state.set_last_reading_state(&ebook1, &state1).unwrap();
         state.set_last_reading_state(&ebook2, &state2).unwrap();
@@ -830,9 +930,15 @@ mod tests {
         assert_eq!(retrieved2.content_index, 2);
         assert_eq!(retrieved3.content_index, 3);
 
-        state.insert_bookmark(&ebook1, "Bookmark 1", &state1).unwrap();
-        state.insert_bookmark(&ebook2, "Bookmark 2", &state2).unwrap();
-        state.insert_bookmark(&ebook3, "Bookmark 3", &state3).unwrap();
+        state
+            .insert_bookmark(&ebook1, "Bookmark 1", &state1)
+            .unwrap();
+        state
+            .insert_bookmark(&ebook2, "Bookmark 2", &state2)
+            .unwrap();
+        state
+            .insert_bookmark(&ebook3, "Bookmark 3", &state3)
+            .unwrap();
 
         let bookmarks1 = state.get_bookmarks(&ebook1).unwrap();
         let bookmarks2 = state.get_bookmarks(&ebook2).unwrap();

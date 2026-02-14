@@ -28,11 +28,7 @@ pub const VIEWER_PRESET_LIST: &[&str] = &[
     "firefox",
 ];
 
-pub const DICT_PRESET_LIST: &[&str] = &[
-    "wkdict",
-    "sdcv",
-    "dict",
-];
+pub const DICT_PRESET_LIST: &[&str] = &["wkdict", "sdcv", "dict"];
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -83,7 +79,6 @@ impl Settings {
         self.show_top_bar = other.show_top_bar;
     }
 }
-
 
 impl Default for Settings {
     fn default() -> Self {
@@ -228,15 +223,15 @@ pub struct CfgBuiltinKeymaps {
 impl Default for CfgBuiltinKeymaps {
     fn default() -> Self {
         Self {
-            scroll_up: vec![259], // curses.KEY_UP
-            scroll_down: vec![258], // curses.KEY_DOWN
-            page_up: vec![262, 260], // curses.KEY_PPAGE, curses.KEY_LEFT
-            page_down: vec![263, ' ' as u16, 261], // curses.KEY_NPAGE, ord(" "), curses.KEY_RIGHT
-            beginning_of_ch: vec![268], // curses.KEY_HOME
-            end_of_ch: vec![360], // curses.KEY_END
+            scroll_up: vec![259],                    // curses.KEY_UP
+            scroll_down: vec![258],                  // curses.KEY_DOWN
+            page_up: vec![262, 260],                 // curses.KEY_PPAGE, curses.KEY_LEFT
+            page_down: vec![263, ' ' as u16, 261],   // curses.KEY_NPAGE, ord(" "), curses.KEY_RIGHT
+            beginning_of_ch: vec![268],              // curses.KEY_HOME
+            end_of_ch: vec![360],                    // curses.KEY_END
             table_of_contents: vec![9, '\t' as u16], // 9, ord("\t")
-            follow: vec![10], // 10
-            quit: vec![3, 27, 304], // 3, 27, 304
+            follow: vec![10],                        // 10
+            quit: vec![3, 27, 304],                  // 3, 27, 304
         }
     }
 }
@@ -339,13 +334,31 @@ mod tests {
         base_settings.merge(override_settings.clone());
 
         assert_eq!(base_settings.mouse_support, override_settings.mouse_support);
-        assert_eq!(base_settings.default_viewer, override_settings.default_viewer);
-        assert_eq!(base_settings.page_scroll_animation, override_settings.page_scroll_animation);
+        assert_eq!(
+            base_settings.default_viewer,
+            override_settings.default_viewer
+        );
+        assert_eq!(
+            base_settings.page_scroll_animation,
+            override_settings.page_scroll_animation
+        );
         assert_eq!(base_settings.dark_color_fg, override_settings.dark_color_fg);
-        assert_eq!(base_settings.light_color_bg, override_settings.light_color_bg);
-        assert_eq!(base_settings.seamless_between_chapters, override_settings.seamless_between_chapters);
-        assert_eq!(base_settings.preferred_tts_engine, override_settings.preferred_tts_engine);
-        assert_eq!(base_settings.tts_engine_args, override_settings.tts_engine_args);
+        assert_eq!(
+            base_settings.light_color_bg,
+            override_settings.light_color_bg
+        );
+        assert_eq!(
+            base_settings.seamless_between_chapters,
+            override_settings.seamless_between_chapters
+        );
+        assert_eq!(
+            base_settings.preferred_tts_engine,
+            override_settings.preferred_tts_engine
+        );
+        assert_eq!(
+            base_settings.tts_engine_args,
+            override_settings.tts_engine_args
+        );
     }
 
     #[test]
@@ -366,7 +379,10 @@ mod tests {
         // Should be overridden (merge() overrides ALL fields from other)
         assert!(!base_settings.mouse_support);
         assert_eq!(base_settings.dark_color_fg, 100);
-        assert_eq!(base_settings.preferred_tts_engine, Some("new_tts".to_string()));
+        assert_eq!(
+            base_settings.preferred_tts_engine,
+            Some("new_tts".to_string())
+        );
         assert_eq!(base_settings.default_viewer, "should_override");
 
         // Should be from default (since override_settings had default values)
@@ -387,7 +403,10 @@ mod tests {
         base_settings.merge(override_settings);
 
         // Should preserve existing values when override has None/empty
-        assert_eq!(base_settings.preferred_tts_engine, Some("existing".to_string()));
+        assert_eq!(
+            base_settings.preferred_tts_engine,
+            Some("existing".to_string())
+        );
         assert_eq!(base_settings.tts_engine_args, vec!["--old".to_string()]);
     }
 

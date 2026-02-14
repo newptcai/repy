@@ -16,16 +16,32 @@ fn test_wrapped_formatting_markers() {
     // If bug exists, we might see "**This" or "somewhere.**"
     for line in &result.text_lines {
         println!("Line: {}", line);
-        assert!(!line.contains("**This"), "Start marker not stripped: {}", line);
-        assert!(!line.contains("somewhere.**"), "End marker not stripped: {}", line);
+        assert!(
+            !line.contains("**This"),
+            "Start marker not stripped: {}",
+            line
+        );
+        assert!(
+            !line.contains("somewhere.**"),
+            "End marker not stripped: {}",
+            line
+        );
         // Also check general markers just in case
-        assert!(!line.contains("**"), "Bold markers remaining in line: {}", line);
+        assert!(
+            !line.contains("**"),
+            "Bold markers remaining in line: {}",
+            line
+        );
     }
 
     // Verify formatting is detected
     let bold_styles: Vec<_> = result.formatting.iter().filter(|s| s.attr == 1).collect();
     assert!(!bold_styles.is_empty(), "No bold formatting detected");
-    
+
     // We expect at least two segments of bold text (since it wrapped)
-    assert!(bold_styles.len() >= 2, "Expected bold formatting to be split across lines, found {} segments", bold_styles.len());
+    assert!(
+        bold_styles.len() >= 2,
+        "Expected bold formatting to be split across lines, found {} segments",
+        bold_styles.len()
+    );
 }

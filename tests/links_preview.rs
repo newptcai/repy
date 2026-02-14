@@ -19,13 +19,20 @@ mod tests {
         let result = parse_html(html, Some(80), Some(section_ids), 0).unwrap();
 
         // Verify that the link was extracted
-        let link = result.links.iter().find(|l| l.url == "#target").expect("Link to #target not found");
+        let link = result
+            .links
+            .iter()
+            .find(|l| l.url == "#target")
+            .expect("Link to #target not found");
         assert_eq!(link.label, "the target");
-        
+
         // Verify that the target section was mapped
-        let target_row = *result.section_rows.get("target").expect("Section #target not found");
+        let target_row = *result
+            .section_rows
+            .get("target")
+            .expect("Section #target not found");
         assert!(target_row > 0);
-        
+
         // Verify that the target content is at the mapped row
         assert!(result.text_lines[target_row].contains("Target Section"));
     }
@@ -39,7 +46,7 @@ mod tests {
             "Preview 1".to_string(),
             "Preview 2".to_string(),
         ];
-        
+
         let board = Board::new().with_text_structure(repy::models::TextStructure {
             text_lines,
             ..Default::default()

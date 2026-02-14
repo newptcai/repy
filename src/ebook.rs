@@ -1,7 +1,7 @@
-use crate::models::{BookMetadata, TextStructure, TocEntry, CHAPTER_BREAK_MARKER};
+use crate::models::{BookMetadata, CHAPTER_BREAK_MARKER, TextStructure, TocEntry};
 use crate::parser::parse_html;
-use eyre::Result;
 use epub::doc::{EpubDoc, NavPoint};
+use eyre::Result;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
@@ -16,8 +16,17 @@ pub trait Ebook {
     fn get_img_bytestr(&mut self, path: &str) -> Result<(String, Vec<u8>)>;
     fn cleanup(&mut self) -> Result<()>;
 
-    fn get_parsed_content(&mut self, content_id: &str, text_width: usize, starting_line: usize) -> Result<TextStructure>;
-    fn get_all_parsed_content(&mut self, text_width: usize, page_height: Option<usize>) -> Result<Vec<TextStructure>>;
+    fn get_parsed_content(
+        &mut self,
+        content_id: &str,
+        text_width: usize,
+        starting_line: usize,
+    ) -> Result<TextStructure>;
+    fn get_all_parsed_content(
+        &mut self,
+        text_width: usize,
+        page_height: Option<usize>,
+    ) -> Result<Vec<TextStructure>>;
 }
 
 pub struct Epub {
@@ -136,8 +145,10 @@ impl Ebook for Epub {
 
     fn initialize(&mut self) -> Result<()> {
         let doc = EpubDoc::new(&self.path)?;
-        
-        self.contents = doc.spine.iter()
+
+        self.contents = doc
+            .spine
+            .iter()
             .filter(|item| {
                 if let Some(resource) = doc.resources.get(&item.idref) {
                     // Filter out NCX (EPUB 2 TOC)
@@ -146,8 +157,9 @@ impl Ebook for Epub {
                     }
                     // Filter out Nav Document (EPUB 3 TOC)
                     if let Some(properties) = &resource.properties
-                        && properties.split_whitespace().any(|p| p == "nav") {
-                            return false;
+                        && properties.split_whitespace().any(|p| p == "nav")
+                    {
+                        return false;
                     }
                 }
                 true
@@ -200,20 +212,23 @@ impl Ebook for Epub {
         if let Some(ref mut doc) = self.doc
             && let Some(index) = self.contents.iter().position(|id| id == content_id)
             && doc.set_current_chapter(index)
-            && let Some((content, _)) = doc.get_current_str() {
-                self.raw_text_cache.insert(content_id.to_string(), content.clone());
-                return Ok(content);
+            && let Some((content, _)) = doc.get_current_str()
+        {
+            self.raw_text_cache
+                .insert(content_id.to_string(), content.clone());
+            return Ok(content);
         }
         Err(eyre::eyre!("Content not found"))
     }
 
     fn get_img_bytestr(&mut self, path: &str) -> Result<(String, Vec<u8>)> {
         if let Some(ref mut doc) = self.doc
-            && let Some(bytes) = doc.get_resource_by_path(path) {
-                // For now, assume it's an image and use a generic MIME type
-                // In a real implementation, we'd determine the MIME type from the file extension
-                let mime = "image/jpeg".to_string(); // Default assumption
-                return Ok((mime, bytes));
+            && let Some(bytes) = doc.get_resource_by_path(path)
+        {
+            // For now, assume it's an image and use a generic MIME type
+            // In a real implementation, we'd determine the MIME type from the file extension
+            let mime = "image/jpeg".to_string(); // Default assumption
+            return Ok((mime, bytes));
         }
         Err(eyre::eyre!("Image not found"))
     }
@@ -223,19 +238,34 @@ impl Ebook for Epub {
         Ok(())
     }
 
-    fn get_parsed_content(&mut self, content_id: &str, text_width: usize, starting_line: usize) -> Result<TextStructure> {
+    fn get_parsed_content(
+        &mut self,
+        content_id: &str,
+        text_width: usize,
+        starting_line: usize,
+    ) -> Result<TextStructure> {
         let raw_html = self.get_raw_text(content_id)?;
 
         // Collect section IDs from table of contents
-        let section_ids: HashSet<String> = self.toc_entries()
+        let section_ids: HashSet<String> = self
+            .toc_entries()
             .iter()
             .filter_map(|entry| entry.section.clone())
             .collect();
 
-        parse_html(&raw_html, Some(text_width), Some(section_ids), starting_line)
+        parse_html(
+            &raw_html,
+            Some(text_width),
+            Some(section_ids),
+            starting_line,
+        )
     }
 
-    fn get_all_parsed_content(&mut self, text_width: usize, page_height: Option<usize>) -> Result<Vec<TextStructure>> {
+    fn get_all_parsed_content(
+        &mut self,
+        text_width: usize,
+        page_height: Option<usize>,
+    ) -> Result<Vec<TextStructure>> {
         let mut all_content = Vec::new();
         let mut starting_line = 0;
 
@@ -244,12 +274,14 @@ impl Ebook for Epub {
         let total_chapters = content_ids.len();
 
         for (index, content_id) in content_ids.into_iter().enumerate() {
-            let mut parsed_content = self.get_parsed_content(&content_id, text_width, starting_line)?;
+            let mut parsed_content =
+                self.get_parsed_content(&content_id, text_width, starting_line)?;
             if let Some(page_height) = page_height
-                && index + 1 < total_chapters {
-                    let total_lines = starting_line + parsed_content.text_lines.len();
-                    let break_lines = build_chapter_break(page_height, total_lines);
-                    parsed_content.text_lines.extend(break_lines);
+                && index + 1 < total_chapters
+            {
+                let total_lines = starting_line + parsed_content.text_lines.len();
+                let break_lines = build_chapter_break(page_height, total_lines);
+                parsed_content.text_lines.extend(break_lines);
             }
             starting_line += parsed_content.text_lines.len();
             all_content.push(parsed_content);
@@ -267,7 +299,11 @@ pub fn build_chapter_break(page_height: usize, total_lines: usize) -> Vec<String
         return lines;
     }
     let remainder = (total_lines + lines.len()) % page_height;
-    let pad = if remainder == 0 { 0 } else { page_height - remainder };
+    let pad = if remainder == 0 {
+        0
+    } else {
+        page_height - remainder
+    };
     lines.extend(std::iter::repeat_n(String::new(), pad));
     lines
 }
@@ -283,10 +319,10 @@ mod tests {
 
         // The spine has 'htmltoc', but our contents should not
         let contents = epub.contents();
-        
+
         // We know 'htmltoc' is the ID of the TOC in small.epub
         assert!(!contents.contains(&"htmltoc".to_string()));
-        
+
         Ok(())
     }
 
@@ -422,7 +458,12 @@ mod tests {
 
         let result = epub.get_raw_text("nonexistent_content_id");
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("Content not found"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Content not found")
+        );
 
         Ok(())
     }
@@ -527,9 +568,7 @@ mod tests {
         }
 
         // Total lines should be substantial
-        let total_lines: usize = all_content.iter()
-            .map(|c| c.text_lines.len())
-            .sum();
+        let total_lines: usize = all_content.iter().map(|c| c.text_lines.len()).sum();
         assert!(total_lines > 1000); // Should be a large book
 
         Ok(())
@@ -715,7 +754,8 @@ mod tests {
             let meditations_first_id = meditations_epub.contents()[0].clone();
 
             let small_content = small_epub.get_parsed_content(&small_first_id, 80, 0)?;
-            let meditations_content = meditations_epub.get_parsed_content(&meditations_first_id, 80, 0)?;
+            let meditations_content =
+                meditations_epub.get_parsed_content(&meditations_first_id, 80, 0)?;
 
             // Both should have parsed content (or at least not crash)
             assert!(!small_content.text_lines.is_empty() || true); // Allow empty for edge cases

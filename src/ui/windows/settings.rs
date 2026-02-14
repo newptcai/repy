@@ -1,9 +1,9 @@
 use ratatui::{
+    Frame,
     layout::Rect,
     style::{Color, Style},
     text::Line,
     widgets::{Block, Borders, Clear, List, ListItem, Paragraph},
-    Frame,
 };
 
 pub struct SettingsWindow;
@@ -40,8 +40,7 @@ impl SettingsWindow {
             })
             .collect();
 
-        let list = List::new(items)
-            .block(Block::default().title("Settings").borders(Borders::ALL));
+        let list = List::new(items).block(Block::default().title("Settings").borders(Borders::ALL));
 
         frame.render_widget(list, popup_area);
     }

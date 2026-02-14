@@ -1,8 +1,8 @@
 use ratatui::{
+    Frame,
     layout::Rect,
     text::Line,
     widgets::{Block, Borders, Clear, Paragraph},
-    Frame,
 };
 
 pub struct HelpWindow;

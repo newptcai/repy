@@ -1,9 +1,9 @@
 use ratatui::{
+    Frame,
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Clear, List, ListItem, ListState, Padding, Paragraph, Wrap},
-    Frame,
 };
 
 use crate::models::LinkEntry;
@@ -62,12 +62,14 @@ impl LinksWindow {
                 };
 
                 let is_internal = entry.target_row.is_some() || !entry.url.contains("://");
-                
+
                 let display_text = if is_internal {
                     if entry.label.starts_with("^{") && entry.label.ends_with('}') {
                         let num = &entry.label[2..entry.label.len() - 1];
                         format!("Footnote {}", num)
-                    } else if (entry.url.contains("fn") || entry.url.contains("note")) && entry.label.len() <= 4 {
+                    } else if (entry.url.contains("fn") || entry.url.contains("note"))
+                        && entry.label.len() <= 4
+                    {
                         format!("Footnote ({})", entry.label)
                     } else {
                         entry.label.clone()
@@ -92,10 +94,10 @@ impl LinksWindow {
             .collect();
 
         let list = List::new(items).block(block);
-        
+
         let mut state = ListState::default();
         state.select(Some(selected_index));
-        
+
         frame.render_stateful_widget(list, list_area, &mut state);
 
         // Status line in list area

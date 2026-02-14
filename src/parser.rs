@@ -41,7 +41,12 @@ pub fn parse_html(
 
     // Extract structure information using the parsed fragment
     let image_maps = extract_images(&fragment, starting_line, &plain_text)?;
-    let section_rows = extract_sections(&fragment, &section_ids.unwrap_or_default(), starting_line, &plain_text)?;
+    let section_rows = extract_sections(
+        &fragment,
+        &section_ids.unwrap_or_default(),
+        starting_line,
+        &plain_text,
+    )?;
     let formatting = extract_formatting(&fragment, starting_line, &plain_text)?;
     let links = extract_links(&fragment, starting_line, &plain_text)?;
 
@@ -93,8 +98,6 @@ fn wrap_text(lines: Vec<String>, width: usize) -> Vec<String> {
     wrapped
 }
 
-
-
 fn preprocess_inline_annotations(html: &str) -> String {
     let sup_open = Regex::new(r"(?i)<sup[^>]*>").unwrap();
     let sup_close = Regex::new(r"(?i)</sup>").unwrap();
@@ -139,10 +142,14 @@ fn html_to_plain_text(html: &str, width: usize) -> Result<Vec<String>> {
 }
 
 /// Extract image information from HTML and map to text lines
-fn extract_images(fragment: &Html, starting_line: usize, text_lines: &[String]) -> Result<HashMap<usize, String>> {
+fn extract_images(
+    fragment: &Html,
+    starting_line: usize,
+    text_lines: &[String],
+) -> Result<HashMap<usize, String>> {
     let mut images = HashMap::new();
     let img_selector = Selector::parse("img").unwrap();
-    
+
     // Get all image sources in order
     let mut image_sources: Vec<String> = Vec::new();
     for element in fragment.select(&img_selector) {
@@ -157,7 +164,7 @@ fn extract_images(fragment: &Html, starting_line: usize, text_lines: &[String]) 
         if image_idx >= image_sources.len() {
             break;
         }
-        
+
         // Check for [Image: ...] or [[Image: ...]] pattern
         // html2text wraps alt in [], and our alt is [Image: ...], so it becomes [[Image: ...]]
         if line.contains("[Image:") || line.contains("[[Image:") {
@@ -190,7 +197,10 @@ fn extract_sections(
             // Estimate the line number where this section starts.
             // This is approximate since html2text changes the structure.
             let mut element_text = element.text().collect::<String>();
-            if !matches!(element.value().name(), "h1" | "h2" | "h3" | "h4" | "h5" | "h6") {
+            if !matches!(
+                element.value().name(),
+                "h1" | "h2" | "h3" | "h4" | "h5" | "h6"
+            ) {
                 if let Some(heading) = element.select(&heading_selector).next() {
                     let heading_text = heading.text().collect::<String>();
                     if !heading_text.trim().is_empty() {
@@ -256,10 +266,10 @@ fn extract_sections(
                     if end <= skip {
                         continue;
                     }
-                    
+
                     let search_str = words[skip..end].join(" ");
                     if search_str.len() < 3 {
-                         // Too short to be unique
+                        // Too short to be unique
                         continue;
                     }
 
@@ -315,9 +325,8 @@ fn extract_formatting(
     let mut formatting = Vec::new();
 
     // Helper to normalize whitespace (collapse multiple spaces/newlines to single space)
-    let normalize_text = |text: String| -> String {
-        text.split_whitespace().collect::<Vec<_>>().join(" ")
-    };
+    let normalize_text =
+        |text: String| -> String { text.split_whitespace().collect::<Vec<_>>().join(" ") };
 
     let selector = Selector::parse("h1, h2, h3, h4, h5, h6, strong, b, em, i").unwrap();
 
@@ -376,8 +385,6 @@ fn extract_formatting(
             high_water_mark
         };
 
-
-
         // Search for text
         if let Some(segments) = find_text_across_lines(&text, text_lines, start_line, start_col) {
             let mut first_start = None;
@@ -421,7 +428,7 @@ fn find_text_across_lines(
     for line_idx in start_line..text_lines.len() {
         let line = &text_lines[line_idx];
         let search_start = if line_idx == start_line { start_col } else { 0 };
-        
+
         if search_start >= line.len() {
             continue;
         }
@@ -435,7 +442,7 @@ fn find_text_across_lines(
             if let Some(segments) = match_sequence(&tokens, text_lines, line_idx, abs_pos) {
                 return Some(segments);
             }
-            
+
             if let Some(c) = line[abs_pos..].chars().next() {
                 start_search_pos = abs_pos + c.len_utf8();
             } else {
@@ -506,10 +513,10 @@ fn match_sequence(
                     continue;
                 }
             }
-            
+
             return None;
         } else {
-             return None;
+            return None;
         }
     }
 
@@ -532,12 +539,17 @@ fn is_valid_gap(gap: &str) -> bool {
     // Gap can contain whitespace, *, [, ], (, ), punctuation?
     // Usually just spaces.
     // And for line transitions: **, *
-    gap.chars().all(|c| c.is_whitespace() || c == '*' || c == '[' || c == ']')
+    gap.chars()
+        .all(|c| c.is_whitespace() || c == '*' || c == '[' || c == ']')
 }
 
 /// Extract link metadata without injecting markers into the rendered text.
 /// We keep links as separate entries so reading flow stays unchanged; link UI uses these rows.
-fn extract_links(fragment: &Html, starting_line: usize, text_lines: &[String]) -> Result<Vec<LinkEntry>> {
+fn extract_links(
+    fragment: &Html,
+    starting_line: usize,
+    text_lines: &[String],
+) -> Result<Vec<LinkEntry>> {
     let mut links = Vec::new();
     let link_selector = Selector::parse("a[href]").unwrap();
     let sup_selector = Selector::parse("sup").unwrap();
@@ -558,23 +570,24 @@ fn extract_links(fragment: &Html, starting_line: usize, text_lines: &[String]) -
             let mut inside_footnote = false;
             while let Some(node) = parent {
                 if let Some(element_ref) = scraper::ElementRef::wrap(node)
-                     && element_ref.value().attr("epub:type") == Some("footnote") {
-                         inside_footnote = true;
-                         break;
+                    && element_ref.value().attr("epub:type") == Some("footnote")
+                {
+                    inside_footnote = true;
+                    break;
                 }
                 parent = node.parent();
             }
-            
+
             if inside_footnote {
-                 // heuristic: if it's an internal link, likely a backlink.
-                 // To be safer, we check if label is short (likely a number or symbol).
-                 // We keep external links and longer internal links (e.g. "See Chapter 1").
-                 if href.starts_with('#') {
-                     let text = element.text().collect::<String>().trim().to_string();
-                     if text.len() <= 4 {
-                         continue;
-                     }
-                 }
+                // heuristic: if it's an internal link, likely a backlink.
+                // To be safer, we check if label is short (likely a number or symbol).
+                // We keep external links and longer internal links (e.g. "See Chapter 1").
+                if href.starts_with('#') {
+                    let text = element.text().collect::<String>().trim().to_string();
+                    if text.len() <= 4 {
+                        continue;
+                    }
+                }
             }
         }
 
@@ -606,7 +619,11 @@ fn extract_links(fragment: &Html, starting_line: usize, text_lines: &[String]) -
 
         links.push(LinkEntry {
             row: row.unwrap_or(starting_line),
-            label: if label.is_empty() { href.to_string() } else { label },
+            label: if label.is_empty() {
+                href.to_string()
+            } else {
+                label
+            },
             url: href.to_string(),
             target_row: None,
         });
@@ -755,7 +772,10 @@ mod tests {
 
         assert_eq!(result.text_lines.len(), 9);
         assert_eq!(result.text_lines[0], "# Chapter 1");
-        assert_eq!(result.text_lines[2], "This is a bold paragraph with some italic text.");
+        assert_eq!(
+            result.text_lines[2],
+            "This is a bold paragraph with some italic text."
+        );
 
         assert_eq!(result.image_maps.len(), 1);
         assert!(result.image_maps.values().any(|v| v == "test.jpg"));
@@ -802,7 +822,11 @@ mod tests {
         // html2text might add blank lines between paragraphs, so check minimum
         assert!(lines.len() >= 3);
         assert!(lines.iter().any(|l| l.contains("First paragraph.")));
-        assert!(lines.iter().any(|l| l.contains("Second paragraph with **bold** text.")));
+        assert!(
+            lines
+                .iter()
+                .any(|l| l.contains("Second paragraph with **bold** text."))
+        );
         assert!(lines.iter().any(|l| l.contains("Third paragraph.")));
     }
 
@@ -811,9 +835,7 @@ mod tests {
         let html = r#"<p>Here's an image: <img src="test.jpg" alt="[Image: test.jpg]"></p>"#;
         let fragment = Html::parse_fragment(html);
         // Mock text lines that html2text would produce
-        let text_lines = vec![
-            "Here's an image: [[Image: test.jpg]]".to_string()
-        ];
+        let text_lines = vec!["Here's an image: [[Image: test.jpg]]".to_string()];
         let images = extract_images(&fragment, 0, &text_lines).unwrap();
         assert_eq!(images.len(), 1);
         assert_eq!(images.get(&0), Some(&"test.jpg".to_string()));
@@ -827,14 +849,14 @@ mod tests {
         <img src="image3.gif" alt="[Image: image3.gif]">
         "#;
         let fragment = Html::parse_fragment(html);
-        
+
         // Mock text lines
         let text_lines = vec![
             "First image: [[Image: image1.jpg]]".to_string(),
             "Second image: [[Image: image2.png]]".to_string(),
             "[[Image: image3.gif]]".to_string(),
         ];
-        
+
         let images = extract_images(&fragment, 5, &text_lines).unwrap();
         assert_eq!(images.len(), 3);
         assert_eq!(images.get(&5), Some(&"image1.jpg".to_string()));
@@ -1161,7 +1183,12 @@ mod tests {
 
         // Check that text was extracted
         assert!(!result.text_lines.is_empty());
-        assert!(result.text_lines.iter().any(|line| line.contains("Introduction")));
+        assert!(
+            result
+                .text_lines
+                .iter()
+                .any(|line| line.contains("Introduction"))
+        );
 
         // Check section mapping
         assert_eq!(result.section_rows.len(), 1);
@@ -1210,8 +1237,18 @@ mod tests {
 
         // Check that text was extracted correctly
         assert!(!result.text_lines.is_empty());
-        assert!(result.text_lines.iter().any(|line| line.contains("INTRODUCTION")));
-        assert!(result.text_lines.iter().any(|line| line.contains("MARCUS AURELIUS")));
+        assert!(
+            result
+                .text_lines
+                .iter()
+                .any(|line| line.contains("INTRODUCTION"))
+        );
+        assert!(
+            result
+                .text_lines
+                .iter()
+                .any(|line| line.contains("MARCUS AURELIUS"))
+        );
 
         // Check section mapping
         assert!(result.section_rows.len() >= 1);
@@ -1276,18 +1313,26 @@ mod tests {
         let result = html_to_plain_text(html, 80).unwrap();
         // Should normalize whitespace appropriately - html2text handles this
         assert!(result.len() >= 2);
-        assert!(result.iter().any(|l| l.trim().contains("Text with extra spaces")));
-        assert!(result.iter().any(|l| l.trim().contains("Text with newlines and spaces")));
+        assert!(
+            result
+                .iter()
+                .any(|l| l.trim().contains("Text with extra spaces"))
+        );
+        assert!(
+            result
+                .iter()
+                .any(|l| l.trim().contains("Text with newlines and spaces"))
+        );
     }
 
     #[test]
     fn test_italic_marker_stripping() {
         let html = "<p>This is <em>italic</em> text.</p>";
         let result = parse_html(html, Some(80), None, 0).unwrap();
-        
+
         // Check that markers are stripped
         assert_eq!(result.text_lines[0], "This is italic text.");
-        
+
         // Check that formatting is preserved
         assert_eq!(result.formatting.len(), 1);
         let style = &result.formatting[0];
@@ -1301,11 +1346,14 @@ mod tests {
     fn test_italic_marker_stripping_whitespace_mismatch() {
         let html = "<p>This is <em>italic  text</em> with extra space.</p>";
         let result = parse_html(html, Some(80), None, 0).unwrap();
-        
+
         // This assertion might fail if my hypothesis is correct
         assert!(!result.text_lines[0].contains("*italic text*"));
-        assert_eq!(result.text_lines[0], "This is italic text with extra space.");
-        
+        assert_eq!(
+            result.text_lines[0],
+            "This is italic text with extra space."
+        );
+
         // Check that formatting is preserved
         assert_eq!(result.formatting.len(), 1);
         let style = &result.formatting[0];
@@ -1319,15 +1367,31 @@ mod tests {
         <p>Text <em>Meditations</em>, more text.</p>
         "#;
         let result = parse_html(html, Some(80), None, 0).unwrap();
-        
+
         // Check header
         // html2text likely produces "# Start *Meditations*, End" or similar
-        let header_line = result.text_lines.iter().find(|l| l.contains("Start")).unwrap();
-        assert!(!header_line.contains("*Meditations*"), "Header markers not stripped: {}", header_line);
-        
+        let header_line = result
+            .text_lines
+            .iter()
+            .find(|l| l.contains("Start"))
+            .unwrap();
+        assert!(
+            !header_line.contains("*Meditations*"),
+            "Header markers not stripped: {}",
+            header_line
+        );
+
         // Check paragraph
-        let p_line = result.text_lines.iter().find(|l| l.contains("Text")).unwrap();
-        assert!(!p_line.contains("*Meditations*"), "Paragraph markers not stripped: {}", p_line);
+        let p_line = result
+            .text_lines
+            .iter()
+            .find(|l| l.contains("Text"))
+            .unwrap();
+        assert!(
+            !p_line.contains("*Meditations*"),
+            "Paragraph markers not stripped: {}",
+            p_line
+        );
     }
 
     #[test]
@@ -1348,7 +1412,7 @@ mod tests {
             n_letters: 6,
             attr: 2, // Italic
         }];
-        
+
         strip_inline_markers(&mut text_lines, &mut formatting, 0);
         // It should NOT strip the '*' because it's preceded by 'O' (not boundary)
         assert_eq!(text_lines[0], "O*REILLY");
@@ -1357,43 +1421,53 @@ mod tests {
 
 fn preprocess_images(html: &str) -> String {
     let img_re = Regex::new(r#"(?i)<img\s+([^>]+)>"#).unwrap();
-    img_re.replace_all(html, |caps: &Captures| {
-        let attrs_str = &caps[1];
-        let src_re = Regex::new(r#"src=["']([^"']+)["']"#).unwrap();
-        let alt_re = Regex::new(r#"alt=["']([^"']*)["']"#).unwrap();
-        let title_re = Regex::new(r#"title=["']([^"']*)["']"#).unwrap();
+    img_re
+        .replace_all(html, |caps: &Captures| {
+            let attrs_str = &caps[1];
+            let src_re = Regex::new(r#"src=["']([^"']+)["']"#).unwrap();
+            let alt_re = Regex::new(r#"alt=["']([^"']*)["']"#).unwrap();
+            let title_re = Regex::new(r#"title=["']([^"']*)["']"#).unwrap();
 
-        let src = src_re.captures(attrs_str).map(|c| c.get(1).unwrap().as_str().to_string());
-        let alt = alt_re.captures(attrs_str).map(|c| c.get(1).unwrap().as_str().to_string());
-        let title = title_re.captures(attrs_str).map(|c| c.get(1).unwrap().as_str().to_string());
+            let src = src_re
+                .captures(attrs_str)
+                .map(|c| c.get(1).unwrap().as_str().to_string());
+            let alt = alt_re
+                .captures(attrs_str)
+                .map(|c| c.get(1).unwrap().as_str().to_string());
+            let title = title_re
+                .captures(attrs_str)
+                .map(|c| c.get(1).unwrap().as_str().to_string());
 
-        if let Some(src) = src {
-             let filename = std::path::Path::new(&src)
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or("image");
-             
-             let new_alt_text = if let Some(t) = title {
-                 format!("[Image: {}]", t)
-             } else if let Some(a) = alt.as_ref() {
-                 if a.trim().is_empty() || a.to_lowercase() == "image" {
-                     format!("[Image: {}]", filename)
-                 } else {
-                     format!("[Image: {}]", a)
-                 }
-             } else {
-                 format!("[Image: {}]", filename)
-             };
-             
-             let new_attrs = if alt.is_some() {
-                 alt_re.replace(attrs_str, format!(r#"alt="{}""#, new_alt_text)).to_string()
-             } else {
-                 format!(r#"{} alt="{}""#, attrs_str, new_alt_text)
-             };
-             
-             format!("<img {}>", new_attrs)
-        } else {
-            caps[0].to_string()
-        }
-    }).to_string()
+            if let Some(src) = src {
+                let filename = std::path::Path::new(&src)
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("image");
+
+                let new_alt_text = if let Some(t) = title {
+                    format!("[Image: {}]", t)
+                } else if let Some(a) = alt.as_ref() {
+                    if a.trim().is_empty() || a.to_lowercase() == "image" {
+                        format!("[Image: {}]", filename)
+                    } else {
+                        format!("[Image: {}]", a)
+                    }
+                } else {
+                    format!("[Image: {}]", filename)
+                };
+
+                let new_attrs = if alt.is_some() {
+                    alt_re
+                        .replace(attrs_str, format!(r#"alt="{}""#, new_alt_text))
+                        .to_string()
+                } else {
+                    format!(r#"{} alt="{}""#, attrs_str, new_alt_text)
+                };
+
+                format!("<img {}>", new_attrs)
+            } else {
+                caps[0].to_string()
+            }
+        })
+        .to_string()
 }

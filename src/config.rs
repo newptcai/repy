@@ -1,7 +1,7 @@
-use crate::settings::{Settings, Keymap, CfgDefaultKeymaps};
+use crate::settings::{CfgDefaultKeymaps, Keymap, Settings};
 use eyre::Result;
-use std::{fs, path::PathBuf};
 use serde_json;
+use std::{fs, path::PathBuf};
 
 #[derive(Debug, Clone)]
 pub struct Config {
@@ -22,55 +22,216 @@ impl Config {
         if filepath.exists() {
             let config_str = fs::read_to_string(&filepath)?;
             if let Ok(user_config) = serde_json::from_str::<serde_json::Value>(&config_str) {
-                if let Some(user_settings_map) = user_config.get("Setting").and_then(|v| v.as_object()) {
-                        if let Some(val) = user_settings_map.get("default_viewer").and_then(|v| v.as_str()) { settings.default_viewer = val.to_string(); }
-                        if let Some(val) = user_settings_map.get("dictionary_client").and_then(|v| v.as_str()) { settings.dictionary_client = val.to_string(); }
-                        if let Some(val) = user_settings_map.get("show_progress_indicator").and_then(|v| v.as_bool()) { settings.show_progress_indicator = val; }
-                        if let Some(val) = user_settings_map.get("page_scroll_animation").and_then(|v| v.as_bool()) { settings.page_scroll_animation = val; }
-                        if let Some(val) = user_settings_map.get("mouse_support").and_then(|v| v.as_bool()) { settings.mouse_support = val; }
-                        if let Some(val) = user_settings_map.get("start_with_double_spread").and_then(|v| v.as_bool()) { settings.start_with_double_spread = val; }
-                        if let Some(val) = user_settings_map.get("default_color_fg").and_then(|v| v.as_i64()) { settings.default_color_fg = val as i16; }
-                        if let Some(val) = user_settings_map.get("default_color_bg").and_then(|v| v.as_i64()) { settings.default_color_bg = val as i16; }
-                        if let Some(val) = user_settings_map.get("dark_color_fg").and_then(|v| v.as_i64()) { settings.dark_color_fg = val as i16; }
-                        if let Some(val) = user_settings_map.get("dark_color_bg").and_then(|v| v.as_i64()) { settings.dark_color_bg = val as i16; }
-                        if let Some(val) = user_settings_map.get("light_color_fg").and_then(|v| v.as_i64()) { settings.light_color_fg = val as i16; }
-                        if let Some(val) = user_settings_map.get("light_color_bg").and_then(|v| v.as_i64()) { settings.light_color_bg = val as i16; }
-                        if let Some(val) = user_settings_map.get("seamless_between_chapters").and_then(|v| v.as_bool()) { settings.seamless_between_chapters = val; }
-                        if let Some(val) = user_settings_map.get("preferred_tts_engine").and_then(|v| v.as_str()) { settings.preferred_tts_engine = Some(val.to_string()); }
-                        if let Some(val) = user_settings_map.get("tts_engine_args").and_then(|v| v.as_array()) {
-                            settings.tts_engine_args = val.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect();
-                        }
+                if let Some(user_settings_map) =
+                    user_config.get("Setting").and_then(|v| v.as_object())
+                {
+                    if let Some(val) = user_settings_map
+                        .get("default_viewer")
+                        .and_then(|v| v.as_str())
+                    {
+                        settings.default_viewer = val.to_string();
+                    }
+                    if let Some(val) = user_settings_map
+                        .get("dictionary_client")
+                        .and_then(|v| v.as_str())
+                    {
+                        settings.dictionary_client = val.to_string();
+                    }
+                    if let Some(val) = user_settings_map
+                        .get("show_progress_indicator")
+                        .and_then(|v| v.as_bool())
+                    {
+                        settings.show_progress_indicator = val;
+                    }
+                    if let Some(val) = user_settings_map
+                        .get("page_scroll_animation")
+                        .and_then(|v| v.as_bool())
+                    {
+                        settings.page_scroll_animation = val;
+                    }
+                    if let Some(val) = user_settings_map
+                        .get("mouse_support")
+                        .and_then(|v| v.as_bool())
+                    {
+                        settings.mouse_support = val;
+                    }
+                    if let Some(val) = user_settings_map
+                        .get("start_with_double_spread")
+                        .and_then(|v| v.as_bool())
+                    {
+                        settings.start_with_double_spread = val;
+                    }
+                    if let Some(val) = user_settings_map
+                        .get("default_color_fg")
+                        .and_then(|v| v.as_i64())
+                    {
+                        settings.default_color_fg = val as i16;
+                    }
+                    if let Some(val) = user_settings_map
+                        .get("default_color_bg")
+                        .and_then(|v| v.as_i64())
+                    {
+                        settings.default_color_bg = val as i16;
+                    }
+                    if let Some(val) = user_settings_map
+                        .get("dark_color_fg")
+                        .and_then(|v| v.as_i64())
+                    {
+                        settings.dark_color_fg = val as i16;
+                    }
+                    if let Some(val) = user_settings_map
+                        .get("dark_color_bg")
+                        .and_then(|v| v.as_i64())
+                    {
+                        settings.dark_color_bg = val as i16;
+                    }
+                    if let Some(val) = user_settings_map
+                        .get("light_color_fg")
+                        .and_then(|v| v.as_i64())
+                    {
+                        settings.light_color_fg = val as i16;
+                    }
+                    if let Some(val) = user_settings_map
+                        .get("light_color_bg")
+                        .and_then(|v| v.as_i64())
+                    {
+                        settings.light_color_bg = val as i16;
+                    }
+                    if let Some(val) = user_settings_map
+                        .get("seamless_between_chapters")
+                        .and_then(|v| v.as_bool())
+                    {
+                        settings.seamless_between_chapters = val;
+                    }
+                    if let Some(val) = user_settings_map
+                        .get("preferred_tts_engine")
+                        .and_then(|v| v.as_str())
+                    {
+                        settings.preferred_tts_engine = Some(val.to_string());
+                    }
+                    if let Some(val) = user_settings_map
+                        .get("tts_engine_args")
+                        .and_then(|v| v.as_array())
+                    {
+                        settings.tts_engine_args = val
+                            .iter()
+                            .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                            .collect();
+                    }
                 }
 
-                if let Some(user_keymap_map) = user_config.get("Keymap").and_then(|v| v.as_object()) {
-                        if let Some(val) = user_keymap_map.get("scroll_up").and_then(|v| v.as_str()) { keymap_user_dict.scroll_up = val.to_string(); }
-                        if let Some(val) = user_keymap_map.get("scroll_down").and_then(|v| v.as_str()) { keymap_user_dict.scroll_down = val.to_string(); }
-                        if let Some(val) = user_keymap_map.get("page_up").and_then(|v| v.as_str()) { keymap_user_dict.page_up = val.to_string(); }
-                        if let Some(val) = user_keymap_map.get("page_down").and_then(|v| v.as_str()) { keymap_user_dict.page_down = val.to_string(); }
-                        if let Some(val) = user_keymap_map.get("next_chapter").and_then(|v| v.as_str()) { keymap_user_dict.next_chapter = val.to_string(); }
-                        if let Some(val) = user_keymap_map.get("prev_chapter").and_then(|v| v.as_str()) { keymap_user_dict.prev_chapter = val.to_string(); }
-                        if let Some(val) = user_keymap_map.get("beginning_of_ch").and_then(|v| v.as_str()) { keymap_user_dict.beginning_of_ch = val.to_string(); }
-                        if let Some(val) = user_keymap_map.get("end_of_ch").and_then(|v| v.as_str()) { keymap_user_dict.end_of_ch = val.to_string(); }
-                        if let Some(val) = user_keymap_map.get("shrink").and_then(|v| v.as_str()) { keymap_user_dict.shrink = val.to_string(); }
-                        if let Some(val) = user_keymap_map.get("enlarge").and_then(|v| v.as_str()) { keymap_user_dict.enlarge = val.to_string(); }
-                        if let Some(val) = user_keymap_map.get("set_width").and_then(|v| v.as_str()) { keymap_user_dict.set_width = val.to_string(); }
-                        if let Some(val) = user_keymap_map.get("metadata").and_then(|v| v.as_str()) { keymap_user_dict.metadata = val.to_string(); }
-                        if let Some(val) = user_keymap_map.get("define_word").and_then(|v| v.as_str()) { keymap_user_dict.define_word = val.to_string(); }
-                        if let Some(val) = user_keymap_map.get("table_of_contents").and_then(|v| v.as_str()) { keymap_user_dict.table_of_contents = val.to_string(); }
-                        if let Some(val) = user_keymap_map.get("follow").and_then(|v| v.as_str()) { keymap_user_dict.follow = val.to_string(); }
-                        if let Some(val) = user_keymap_map.get("open_image").and_then(|v| v.as_str()) { keymap_user_dict.open_image = val.to_string(); }
-                        if let Some(val) = user_keymap_map.get("regex_search").and_then(|v| v.as_str()) { keymap_user_dict.regex_search = val.to_string(); }
-                        if let Some(val) = user_keymap_map.get("show_hide_progress").and_then(|v| v.as_str()) { keymap_user_dict.show_hide_progress = val.to_string(); }
-                        if let Some(val) = user_keymap_map.get("mark_position").and_then(|v| v.as_str()) { keymap_user_dict.mark_position = val.to_string(); }
-                        if let Some(val) = user_keymap_map.get("jump_to_position").and_then(|v| v.as_str()) { keymap_user_dict.jump_to_position = val.to_string(); }
-                        if let Some(val) = user_keymap_map.get("add_bookmark").and_then(|v| v.as_str()) { keymap_user_dict.add_bookmark = val.to_string(); }
-                        if let Some(val) = user_keymap_map.get("show_bookmarks").and_then(|v| v.as_str()) { keymap_user_dict.show_bookmarks = val.to_string(); }
-                        if let Some(val) = user_keymap_map.get("quit").and_then(|v| v.as_str()) { keymap_user_dict.quit = val.to_string(); }
-                        if let Some(val) = user_keymap_map.get("help").and_then(|v| v.as_str()) { keymap_user_dict.help = val.to_string(); }
-                        if let Some(val) = user_keymap_map.get("switch_color").and_then(|v| v.as_str()) { keymap_user_dict.switch_color = val.to_string(); }
-                        if let Some(val) = user_keymap_map.get("tts_toggle").and_then(|v| v.as_str()) { keymap_user_dict.tts_toggle = val.to_string(); }
-                        if let Some(val) = user_keymap_map.get("double_spread_toggle").and_then(|v| v.as_str()) { keymap_user_dict.double_spread_toggle = val.to_string(); }
-                        if let Some(val) = user_keymap_map.get("library").and_then(|v| v.as_str()) { keymap_user_dict.library = val.to_string(); }
+                if let Some(user_keymap_map) = user_config.get("Keymap").and_then(|v| v.as_object())
+                {
+                    if let Some(val) = user_keymap_map.get("scroll_up").and_then(|v| v.as_str()) {
+                        keymap_user_dict.scroll_up = val.to_string();
+                    }
+                    if let Some(val) = user_keymap_map.get("scroll_down").and_then(|v| v.as_str()) {
+                        keymap_user_dict.scroll_down = val.to_string();
+                    }
+                    if let Some(val) = user_keymap_map.get("page_up").and_then(|v| v.as_str()) {
+                        keymap_user_dict.page_up = val.to_string();
+                    }
+                    if let Some(val) = user_keymap_map.get("page_down").and_then(|v| v.as_str()) {
+                        keymap_user_dict.page_down = val.to_string();
+                    }
+                    if let Some(val) = user_keymap_map.get("next_chapter").and_then(|v| v.as_str())
+                    {
+                        keymap_user_dict.next_chapter = val.to_string();
+                    }
+                    if let Some(val) = user_keymap_map.get("prev_chapter").and_then(|v| v.as_str())
+                    {
+                        keymap_user_dict.prev_chapter = val.to_string();
+                    }
+                    if let Some(val) = user_keymap_map
+                        .get("beginning_of_ch")
+                        .and_then(|v| v.as_str())
+                    {
+                        keymap_user_dict.beginning_of_ch = val.to_string();
+                    }
+                    if let Some(val) = user_keymap_map.get("end_of_ch").and_then(|v| v.as_str()) {
+                        keymap_user_dict.end_of_ch = val.to_string();
+                    }
+                    if let Some(val) = user_keymap_map.get("shrink").and_then(|v| v.as_str()) {
+                        keymap_user_dict.shrink = val.to_string();
+                    }
+                    if let Some(val) = user_keymap_map.get("enlarge").and_then(|v| v.as_str()) {
+                        keymap_user_dict.enlarge = val.to_string();
+                    }
+                    if let Some(val) = user_keymap_map.get("set_width").and_then(|v| v.as_str()) {
+                        keymap_user_dict.set_width = val.to_string();
+                    }
+                    if let Some(val) = user_keymap_map.get("metadata").and_then(|v| v.as_str()) {
+                        keymap_user_dict.metadata = val.to_string();
+                    }
+                    if let Some(val) = user_keymap_map.get("define_word").and_then(|v| v.as_str()) {
+                        keymap_user_dict.define_word = val.to_string();
+                    }
+                    if let Some(val) = user_keymap_map
+                        .get("table_of_contents")
+                        .and_then(|v| v.as_str())
+                    {
+                        keymap_user_dict.table_of_contents = val.to_string();
+                    }
+                    if let Some(val) = user_keymap_map.get("follow").and_then(|v| v.as_str()) {
+                        keymap_user_dict.follow = val.to_string();
+                    }
+                    if let Some(val) = user_keymap_map.get("open_image").and_then(|v| v.as_str()) {
+                        keymap_user_dict.open_image = val.to_string();
+                    }
+                    if let Some(val) = user_keymap_map.get("regex_search").and_then(|v| v.as_str())
+                    {
+                        keymap_user_dict.regex_search = val.to_string();
+                    }
+                    if let Some(val) = user_keymap_map
+                        .get("show_hide_progress")
+                        .and_then(|v| v.as_str())
+                    {
+                        keymap_user_dict.show_hide_progress = val.to_string();
+                    }
+                    if let Some(val) = user_keymap_map
+                        .get("mark_position")
+                        .and_then(|v| v.as_str())
+                    {
+                        keymap_user_dict.mark_position = val.to_string();
+                    }
+                    if let Some(val) = user_keymap_map
+                        .get("jump_to_position")
+                        .and_then(|v| v.as_str())
+                    {
+                        keymap_user_dict.jump_to_position = val.to_string();
+                    }
+                    if let Some(val) = user_keymap_map.get("add_bookmark").and_then(|v| v.as_str())
+                    {
+                        keymap_user_dict.add_bookmark = val.to_string();
+                    }
+                    if let Some(val) = user_keymap_map
+                        .get("show_bookmarks")
+                        .and_then(|v| v.as_str())
+                    {
+                        keymap_user_dict.show_bookmarks = val.to_string();
+                    }
+                    if let Some(val) = user_keymap_map.get("quit").and_then(|v| v.as_str()) {
+                        keymap_user_dict.quit = val.to_string();
+                    }
+                    if let Some(val) = user_keymap_map.get("help").and_then(|v| v.as_str()) {
+                        keymap_user_dict.help = val.to_string();
+                    }
+                    if let Some(val) = user_keymap_map.get("switch_color").and_then(|v| v.as_str())
+                    {
+                        keymap_user_dict.switch_color = val.to_string();
+                    }
+                    if let Some(val) = user_keymap_map.get("tts_toggle").and_then(|v| v.as_str()) {
+                        keymap_user_dict.tts_toggle = val.to_string();
+                    }
+                    if let Some(val) = user_keymap_map
+                        .get("double_spread_toggle")
+                        .and_then(|v| v.as_str())
+                    {
+                        keymap_user_dict.double_spread_toggle = val.to_string();
+                    }
+                    if let Some(val) = user_keymap_map.get("library").and_then(|v| v.as_str()) {
+                        keymap_user_dict.library = val.to_string();
+                    }
                 }
             }
         } else {
@@ -84,7 +245,6 @@ impl Config {
         }
 
         let keymap = Keymap::default();
-
 
         Ok(Self {
             settings,
@@ -144,55 +304,216 @@ impl Config {
         if filepath.exists() {
             let config_str = fs::read_to_string(&filepath)?;
             if let Ok(user_config) = serde_json::from_str::<serde_json::Value>(&config_str) {
-                if let Some(user_settings_map) = user_config.get("Setting").and_then(|v| v.as_object()) {
-                        if let Some(val) = user_settings_map.get("default_viewer").and_then(|v| v.as_str()) { settings.default_viewer = val.to_string(); }
-                        if let Some(val) = user_settings_map.get("dictionary_client").and_then(|v| v.as_str()) { settings.dictionary_client = val.to_string(); }
-                        if let Some(val) = user_settings_map.get("show_progress_indicator").and_then(|v| v.as_bool()) { settings.show_progress_indicator = val; }
-                        if let Some(val) = user_settings_map.get("page_scroll_animation").and_then(|v| v.as_bool()) { settings.page_scroll_animation = val; }
-                        if let Some(val) = user_settings_map.get("mouse_support").and_then(|v| v.as_bool()) { settings.mouse_support = val; }
-                        if let Some(val) = user_settings_map.get("start_with_double_spread").and_then(|v| v.as_bool()) { settings.start_with_double_spread = val; }
-                        if let Some(val) = user_settings_map.get("default_color_fg").and_then(|v| v.as_i64()) { settings.default_color_fg = val as i16; }
-                        if let Some(val) = user_settings_map.get("default_color_bg").and_then(|v| v.as_i64()) { settings.default_color_bg = val as i16; }
-                        if let Some(val) = user_settings_map.get("dark_color_fg").and_then(|v| v.as_i64()) { settings.dark_color_fg = val as i16; }
-                        if let Some(val) = user_settings_map.get("dark_color_bg").and_then(|v| v.as_i64()) { settings.dark_color_bg = val as i16; }
-                        if let Some(val) = user_settings_map.get("light_color_fg").and_then(|v| v.as_i64()) { settings.light_color_fg = val as i16; }
-                        if let Some(val) = user_settings_map.get("light_color_bg").and_then(|v| v.as_i64()) { settings.light_color_bg = val as i16; }
-                        if let Some(val) = user_settings_map.get("seamless_between_chapters").and_then(|v| v.as_bool()) { settings.seamless_between_chapters = val; }
-                        if let Some(val) = user_settings_map.get("preferred_tts_engine").and_then(|v| v.as_str()) { settings.preferred_tts_engine = Some(val.to_string()); }
-                        if let Some(val) = user_settings_map.get("tts_engine_args").and_then(|v| v.as_array()) {
-                            settings.tts_engine_args = val.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect();
-                        }
+                if let Some(user_settings_map) =
+                    user_config.get("Setting").and_then(|v| v.as_object())
+                {
+                    if let Some(val) = user_settings_map
+                        .get("default_viewer")
+                        .and_then(|v| v.as_str())
+                    {
+                        settings.default_viewer = val.to_string();
+                    }
+                    if let Some(val) = user_settings_map
+                        .get("dictionary_client")
+                        .and_then(|v| v.as_str())
+                    {
+                        settings.dictionary_client = val.to_string();
+                    }
+                    if let Some(val) = user_settings_map
+                        .get("show_progress_indicator")
+                        .and_then(|v| v.as_bool())
+                    {
+                        settings.show_progress_indicator = val;
+                    }
+                    if let Some(val) = user_settings_map
+                        .get("page_scroll_animation")
+                        .and_then(|v| v.as_bool())
+                    {
+                        settings.page_scroll_animation = val;
+                    }
+                    if let Some(val) = user_settings_map
+                        .get("mouse_support")
+                        .and_then(|v| v.as_bool())
+                    {
+                        settings.mouse_support = val;
+                    }
+                    if let Some(val) = user_settings_map
+                        .get("start_with_double_spread")
+                        .and_then(|v| v.as_bool())
+                    {
+                        settings.start_with_double_spread = val;
+                    }
+                    if let Some(val) = user_settings_map
+                        .get("default_color_fg")
+                        .and_then(|v| v.as_i64())
+                    {
+                        settings.default_color_fg = val as i16;
+                    }
+                    if let Some(val) = user_settings_map
+                        .get("default_color_bg")
+                        .and_then(|v| v.as_i64())
+                    {
+                        settings.default_color_bg = val as i16;
+                    }
+                    if let Some(val) = user_settings_map
+                        .get("dark_color_fg")
+                        .and_then(|v| v.as_i64())
+                    {
+                        settings.dark_color_fg = val as i16;
+                    }
+                    if let Some(val) = user_settings_map
+                        .get("dark_color_bg")
+                        .and_then(|v| v.as_i64())
+                    {
+                        settings.dark_color_bg = val as i16;
+                    }
+                    if let Some(val) = user_settings_map
+                        .get("light_color_fg")
+                        .and_then(|v| v.as_i64())
+                    {
+                        settings.light_color_fg = val as i16;
+                    }
+                    if let Some(val) = user_settings_map
+                        .get("light_color_bg")
+                        .and_then(|v| v.as_i64())
+                    {
+                        settings.light_color_bg = val as i16;
+                    }
+                    if let Some(val) = user_settings_map
+                        .get("seamless_between_chapters")
+                        .and_then(|v| v.as_bool())
+                    {
+                        settings.seamless_between_chapters = val;
+                    }
+                    if let Some(val) = user_settings_map
+                        .get("preferred_tts_engine")
+                        .and_then(|v| v.as_str())
+                    {
+                        settings.preferred_tts_engine = Some(val.to_string());
+                    }
+                    if let Some(val) = user_settings_map
+                        .get("tts_engine_args")
+                        .and_then(|v| v.as_array())
+                    {
+                        settings.tts_engine_args = val
+                            .iter()
+                            .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                            .collect();
+                    }
                 }
 
-                if let Some(user_keymap_map) = user_config.get("Keymap").and_then(|v| v.as_object()) {
-                        if let Some(val) = user_keymap_map.get("scroll_up").and_then(|v| v.as_str()) { keymap_user_dict.scroll_up = val.to_string(); }
-                        if let Some(val) = user_keymap_map.get("scroll_down").and_then(|v| v.as_str()) { keymap_user_dict.scroll_down = val.to_string(); }
-                        if let Some(val) = user_keymap_map.get("page_up").and_then(|v| v.as_str()) { keymap_user_dict.page_up = val.to_string(); }
-                        if let Some(val) = user_keymap_map.get("page_down").and_then(|v| v.as_str()) { keymap_user_dict.page_down = val.to_string(); }
-                        if let Some(val) = user_keymap_map.get("next_chapter").and_then(|v| v.as_str()) { keymap_user_dict.next_chapter = val.to_string(); }
-                        if let Some(val) = user_keymap_map.get("prev_chapter").and_then(|v| v.as_str()) { keymap_user_dict.prev_chapter = val.to_string(); }
-                        if let Some(val) = user_keymap_map.get("beginning_of_ch").and_then(|v| v.as_str()) { keymap_user_dict.beginning_of_ch = val.to_string(); }
-                        if let Some(val) = user_keymap_map.get("end_of_ch").and_then(|v| v.as_str()) { keymap_user_dict.end_of_ch = val.to_string(); }
-                        if let Some(val) = user_keymap_map.get("shrink").and_then(|v| v.as_str()) { keymap_user_dict.shrink = val.to_string(); }
-                        if let Some(val) = user_keymap_map.get("enlarge").and_then(|v| v.as_str()) { keymap_user_dict.enlarge = val.to_string(); }
-                        if let Some(val) = user_keymap_map.get("set_width").and_then(|v| v.as_str()) { keymap_user_dict.set_width = val.to_string(); }
-                        if let Some(val) = user_keymap_map.get("metadata").and_then(|v| v.as_str()) { keymap_user_dict.metadata = val.to_string(); }
-                        if let Some(val) = user_keymap_map.get("define_word").and_then(|v| v.as_str()) { keymap_user_dict.define_word = val.to_string(); }
-                        if let Some(val) = user_keymap_map.get("table_of_contents").and_then(|v| v.as_str()) { keymap_user_dict.table_of_contents = val.to_string(); }
-                        if let Some(val) = user_keymap_map.get("follow").and_then(|v| v.as_str()) { keymap_user_dict.follow = val.to_string(); }
-                        if let Some(val) = user_keymap_map.get("open_image").and_then(|v| v.as_str()) { keymap_user_dict.open_image = val.to_string(); }
-                        if let Some(val) = user_keymap_map.get("regex_search").and_then(|v| v.as_str()) { keymap_user_dict.regex_search = val.to_string(); }
-                        if let Some(val) = user_keymap_map.get("show_hide_progress").and_then(|v| v.as_str()) { keymap_user_dict.show_hide_progress = val.to_string(); }
-                        if let Some(val) = user_keymap_map.get("mark_position").and_then(|v| v.as_str()) { keymap_user_dict.mark_position = val.to_string(); }
-                        if let Some(val) = user_keymap_map.get("jump_to_position").and_then(|v| v.as_str()) { keymap_user_dict.jump_to_position = val.to_string(); }
-                        if let Some(val) = user_keymap_map.get("add_bookmark").and_then(|v| v.as_str()) { keymap_user_dict.add_bookmark = val.to_string(); }
-                        if let Some(val) = user_keymap_map.get("show_bookmarks").and_then(|v| v.as_str()) { keymap_user_dict.show_bookmarks = val.to_string(); }
-                        if let Some(val) = user_keymap_map.get("quit").and_then(|v| v.as_str()) { keymap_user_dict.quit = val.to_string(); }
-                        if let Some(val) = user_keymap_map.get("help").and_then(|v| v.as_str()) { keymap_user_dict.help = val.to_string(); }
-                        if let Some(val) = user_keymap_map.get("switch_color").and_then(|v| v.as_str()) { keymap_user_dict.switch_color = val.to_string(); }
-                        if let Some(val) = user_keymap_map.get("tts_toggle").and_then(|v| v.as_str()) { keymap_user_dict.tts_toggle = val.to_string(); }
-                        if let Some(val) = user_keymap_map.get("double_spread_toggle").and_then(|v| v.as_str()) { keymap_user_dict.double_spread_toggle = val.to_string(); }
-                        if let Some(val) = user_keymap_map.get("library").and_then(|v| v.as_str()) { keymap_user_dict.library = val.to_string(); }
+                if let Some(user_keymap_map) = user_config.get("Keymap").and_then(|v| v.as_object())
+                {
+                    if let Some(val) = user_keymap_map.get("scroll_up").and_then(|v| v.as_str()) {
+                        keymap_user_dict.scroll_up = val.to_string();
+                    }
+                    if let Some(val) = user_keymap_map.get("scroll_down").and_then(|v| v.as_str()) {
+                        keymap_user_dict.scroll_down = val.to_string();
+                    }
+                    if let Some(val) = user_keymap_map.get("page_up").and_then(|v| v.as_str()) {
+                        keymap_user_dict.page_up = val.to_string();
+                    }
+                    if let Some(val) = user_keymap_map.get("page_down").and_then(|v| v.as_str()) {
+                        keymap_user_dict.page_down = val.to_string();
+                    }
+                    if let Some(val) = user_keymap_map.get("next_chapter").and_then(|v| v.as_str())
+                    {
+                        keymap_user_dict.next_chapter = val.to_string();
+                    }
+                    if let Some(val) = user_keymap_map.get("prev_chapter").and_then(|v| v.as_str())
+                    {
+                        keymap_user_dict.prev_chapter = val.to_string();
+                    }
+                    if let Some(val) = user_keymap_map
+                        .get("beginning_of_ch")
+                        .and_then(|v| v.as_str())
+                    {
+                        keymap_user_dict.beginning_of_ch = val.to_string();
+                    }
+                    if let Some(val) = user_keymap_map.get("end_of_ch").and_then(|v| v.as_str()) {
+                        keymap_user_dict.end_of_ch = val.to_string();
+                    }
+                    if let Some(val) = user_keymap_map.get("shrink").and_then(|v| v.as_str()) {
+                        keymap_user_dict.shrink = val.to_string();
+                    }
+                    if let Some(val) = user_keymap_map.get("enlarge").and_then(|v| v.as_str()) {
+                        keymap_user_dict.enlarge = val.to_string();
+                    }
+                    if let Some(val) = user_keymap_map.get("set_width").and_then(|v| v.as_str()) {
+                        keymap_user_dict.set_width = val.to_string();
+                    }
+                    if let Some(val) = user_keymap_map.get("metadata").and_then(|v| v.as_str()) {
+                        keymap_user_dict.metadata = val.to_string();
+                    }
+                    if let Some(val) = user_keymap_map.get("define_word").and_then(|v| v.as_str()) {
+                        keymap_user_dict.define_word = val.to_string();
+                    }
+                    if let Some(val) = user_keymap_map
+                        .get("table_of_contents")
+                        .and_then(|v| v.as_str())
+                    {
+                        keymap_user_dict.table_of_contents = val.to_string();
+                    }
+                    if let Some(val) = user_keymap_map.get("follow").and_then(|v| v.as_str()) {
+                        keymap_user_dict.follow = val.to_string();
+                    }
+                    if let Some(val) = user_keymap_map.get("open_image").and_then(|v| v.as_str()) {
+                        keymap_user_dict.open_image = val.to_string();
+                    }
+                    if let Some(val) = user_keymap_map.get("regex_search").and_then(|v| v.as_str())
+                    {
+                        keymap_user_dict.regex_search = val.to_string();
+                    }
+                    if let Some(val) = user_keymap_map
+                        .get("show_hide_progress")
+                        .and_then(|v| v.as_str())
+                    {
+                        keymap_user_dict.show_hide_progress = val.to_string();
+                    }
+                    if let Some(val) = user_keymap_map
+                        .get("mark_position")
+                        .and_then(|v| v.as_str())
+                    {
+                        keymap_user_dict.mark_position = val.to_string();
+                    }
+                    if let Some(val) = user_keymap_map
+                        .get("jump_to_position")
+                        .and_then(|v| v.as_str())
+                    {
+                        keymap_user_dict.jump_to_position = val.to_string();
+                    }
+                    if let Some(val) = user_keymap_map.get("add_bookmark").and_then(|v| v.as_str())
+                    {
+                        keymap_user_dict.add_bookmark = val.to_string();
+                    }
+                    if let Some(val) = user_keymap_map
+                        .get("show_bookmarks")
+                        .and_then(|v| v.as_str())
+                    {
+                        keymap_user_dict.show_bookmarks = val.to_string();
+                    }
+                    if let Some(val) = user_keymap_map.get("quit").and_then(|v| v.as_str()) {
+                        keymap_user_dict.quit = val.to_string();
+                    }
+                    if let Some(val) = user_keymap_map.get("help").and_then(|v| v.as_str()) {
+                        keymap_user_dict.help = val.to_string();
+                    }
+                    if let Some(val) = user_keymap_map.get("switch_color").and_then(|v| v.as_str())
+                    {
+                        keymap_user_dict.switch_color = val.to_string();
+                    }
+                    if let Some(val) = user_keymap_map.get("tts_toggle").and_then(|v| v.as_str()) {
+                        keymap_user_dict.tts_toggle = val.to_string();
+                    }
+                    if let Some(val) = user_keymap_map
+                        .get("double_spread_toggle")
+                        .and_then(|v| v.as_str())
+                    {
+                        keymap_user_dict.double_spread_toggle = val.to_string();
+                    }
+                    if let Some(val) = user_keymap_map.get("library").and_then(|v| v.as_str()) {
+                        keymap_user_dict.library = val.to_string();
+                    }
                 }
             }
         }
@@ -223,20 +544,25 @@ pub fn get_app_data_prefix() -> Result<PathBuf> {
         return Ok(PathBuf::from(user_profile).join(".repy"));
     }
 
-    Err(eyre::eyre!("Could not determine application data directory"))
+    Err(eyre::eyre!(
+        "Could not determine application data directory"
+    ))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::settings::{CfgDefaultKeymaps, Settings};
     use std::env;
     use std::sync::{Mutex, OnceLock};
     use tempfile::tempdir;
-    use crate::settings::{Settings, CfgDefaultKeymaps};
 
     fn lock_env() -> std::sync::MutexGuard<'static, ()> {
         static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        ENV_LOCK.get_or_init(|| Mutex::new(())).lock().expect("lock env mutex")
+        ENV_LOCK
+            .get_or_init(|| Mutex::new(()))
+            .lock()
+            .expect("lock env mutex")
     }
 
     fn set_test_environment(dir: &tempfile::TempDir) {
@@ -247,9 +573,11 @@ mod tests {
         }
     }
 
-    fn restore_test_environment(original_home: Option<std::ffi::OsString>,
-                              original_xdg_config_home: Option<std::ffi::OsString>,
-                              original_userprofile: Option<std::ffi::OsString>) {
+    fn restore_test_environment(
+        original_home: Option<std::ffi::OsString>,
+        original_xdg_config_home: Option<std::ffi::OsString>,
+        original_userprofile: Option<std::ffi::OsString>,
+    ) {
         unsafe {
             if let Some(home) = original_home {
                 env::set_var("HOME", home);
@@ -293,11 +621,16 @@ mod tests {
         assert_eq!(loaded_settings, default_settings);
 
         let default_keymaps = CfgDefaultKeymaps::default();
-        let loaded_keymaps: CfgDefaultKeymaps = serde_json::from_value(json_value["Keymap"].clone())?;
+        let loaded_keymaps: CfgDefaultKeymaps =
+            serde_json::from_value(json_value["Keymap"].clone())?;
         assert_eq!(loaded_keymaps, default_keymaps);
 
         // Restore environment
-        restore_test_environment(original_home, original_xdg_config_home, original_userprofile);
+        restore_test_environment(
+            original_home,
+            original_xdg_config_home,
+            original_userprofile,
+        );
         Ok(())
     }
 
@@ -336,7 +669,11 @@ mod tests {
         assert_eq!(config.keymap_user_dict().help, "H");
 
         // Restore environment
-        restore_test_environment(original_home, original_xdg_config_home, original_userprofile);
+        restore_test_environment(
+            original_home,
+            original_xdg_config_home,
+            original_userprofile,
+        );
         Ok(())
     }
 
@@ -392,7 +729,11 @@ mod tests {
             assert!(get_app_data_prefix().is_err());
 
             // Restore original environment variables using the helper function
-            restore_test_environment(original_home, original_xdg_config_home, original_userprofile);
+            restore_test_environment(
+                original_home,
+                original_xdg_config_home,
+                original_userprofile,
+            );
         }
     }
 
@@ -409,12 +750,19 @@ mod tests {
         let config = Config::new()?;
 
         // Test accessors
-        assert_eq!(config.filepath(), &dir.path().join("repy").join("configuration.json"));
+        assert_eq!(
+            config.filepath(),
+            &dir.path().join("repy").join("configuration.json")
+        );
         assert_eq!(config.keymap_user_dict().scroll_up, "k");
         assert_eq!(config.keymap_user_dict().scroll_down, "j");
 
         // Restore environment
-        restore_test_environment(original_home, original_xdg_config_home, original_userprofile);
+        restore_test_environment(
+            original_home,
+            original_xdg_config_home,
+            original_userprofile,
+        );
         Ok(())
     }
 
@@ -444,7 +792,11 @@ mod tests {
         assert_eq!(config.keymap_user_dict().quit, "Q");
 
         // Restore environment
-        restore_test_environment(original_home, original_xdg_config_home, original_userprofile);
+        restore_test_environment(
+            original_home,
+            original_xdg_config_home,
+            original_userprofile,
+        );
         Ok(())
     }
 
@@ -481,7 +833,11 @@ mod tests {
         std::fs::remove_file(saved_path)?;
 
         // Restore environment
-        restore_test_environment(original_home, original_xdg_config_home, original_userprofile);
+        restore_test_environment(
+            original_home,
+            original_xdg_config_home,
+            original_userprofile,
+        );
         Ok(())
     }
 
@@ -510,7 +866,11 @@ mod tests {
         std::fs::remove_file(&config_path)?;
 
         // Restore environment
-        restore_test_environment(original_home, original_xdg_config_home, original_userprofile);
+        restore_test_environment(
+            original_home,
+            original_xdg_config_home,
+            original_userprofile,
+        );
         Ok(())
     }
 
@@ -557,7 +917,11 @@ mod tests {
         std::fs::remove_file(&config_path)?;
 
         // Restore environment
-        restore_test_environment(original_home, original_xdg_config_home, original_userprofile);
+        restore_test_environment(
+            original_home,
+            original_xdg_config_home,
+            original_userprofile,
+        );
         Ok(())
     }
 
@@ -616,7 +980,11 @@ mod tests {
         std::fs::remove_file(&keymap_only_path)?;
 
         // Restore environment
-        restore_test_environment(original_home, original_xdg_config_home, original_userprofile);
+        restore_test_environment(
+            original_home,
+            original_xdg_config_home,
+            original_userprofile,
+        );
         Ok(())
     }
 }

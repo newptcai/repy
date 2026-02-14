@@ -1,9 +1,9 @@
 use ratatui::{
+    Frame,
     layout::Rect,
     style::{Color, Modifier, Style},
     text::Line,
     widgets::{Block, Borders, Clear, List, ListItem, ListState},
-    Frame,
 };
 
 pub struct ImagesWindow;
@@ -31,7 +31,11 @@ impl ImagesWindow {
             .collect();
 
         let list = List::new(items)
-            .block(Block::default().title("Images on Page").borders(Borders::ALL))
+            .block(
+                Block::default()
+                    .title("Images on Page")
+                    .borders(Borders::ALL),
+            )
             .highlight_style(
                 Style::default()
                     .bg(Color::Blue)

@@ -1,15 +1,21 @@
 use ratatui::{
+    Frame,
     layout::Rect,
     style::{Color, Modifier, Style},
     text::Line,
     widgets::{Block, Borders, Clear, List, ListItem, Paragraph},
-    Frame,
 };
 
 pub struct SearchWindow;
 
 impl SearchWindow {
-    pub fn render(frame: &mut Frame, area: Rect, query: &str, results: &[String], selected_index: usize) {
+    pub fn render(
+        frame: &mut Frame,
+        area: Rect,
+        query: &str,
+        results: &[String],
+        selected_index: usize,
+    ) {
         let popup_area = Self::centered_popup_area(area, 60, 70);
 
         frame.render_widget(Clear, popup_area);
@@ -21,7 +27,12 @@ impl SearchWindow {
         let header_area = Rect::new(popup_area.x, popup_area.y, popup_area.width, 3);
         frame.render_widget(header, header_area);
 
-        let list_area = Rect::new(popup_area.x, popup_area.y + 3, popup_area.width, popup_area.height - 3);
+        let list_area = Rect::new(
+            popup_area.x,
+            popup_area.y + 3,
+            popup_area.width,
+            popup_area.height - 3,
+        );
 
         if results.is_empty() {
             let empty = Paragraph::new("No matches yet")
@@ -44,8 +55,7 @@ impl SearchWindow {
             })
             .collect();
 
-        let list = List::new(items)
-            .block(Block::default().borders(Borders::ALL));
+        let list = List::new(items).block(Block::default().borders(Borders::ALL));
 
         frame.render_widget(list, list_area);
     }

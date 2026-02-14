@@ -1,15 +1,21 @@
 use ratatui::{
+    Frame,
     layout::Rect,
     style::{Color, Style},
     text::Line,
     widgets::{Block, Borders, Clear, List, ListItem, Paragraph},
-    Frame,
 };
 
 pub struct BookmarksWindow;
 
 impl BookmarksWindow {
-    pub fn render(frame: &mut Frame, area: Rect, entries: &[String], selected_index: usize, status: Option<&str>) {
+    pub fn render(
+        frame: &mut Frame,
+        area: Rect,
+        entries: &[String],
+        selected_index: usize,
+        status: Option<&str>,
+    ) {
         let popup_area = Rect::new(
             area.x + area.width / 5,
             area.y + area.height / 6,
@@ -40,15 +46,19 @@ impl BookmarksWindow {
             })
             .collect();
 
-        let list = List::new(items)
-            .block(Block::default().title("Bookmarks").borders(Borders::ALL));
+        let list =
+            List::new(items).block(Block::default().title("Bookmarks").borders(Borders::ALL));
 
         frame.render_widget(list, popup_area);
 
         if let Some(message) = status {
-            let status_area = Rect::new(popup_area.x + 1, popup_area.y + popup_area.height - 2, popup_area.width - 2, 1);
-            let status_line = Paragraph::new(message)
-                .style(Style::default().fg(Color::Yellow));
+            let status_area = Rect::new(
+                popup_area.x + 1,
+                popup_area.y + popup_area.height - 2,
+                popup_area.width - 2,
+                1,
+            );
+            let status_line = Paragraph::new(message).style(Style::default().fg(Color::Yellow));
             frame.render_widget(status_line, status_area);
         }
     }

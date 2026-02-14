@@ -463,20 +463,15 @@ mod tests {
         let mut section_rows = std::collections::HashMap::new();
         section_rows.insert("chapter-1".to_string(), 5);
 
-        let formatting = vec![
-            InlineStyle {
-                row: 0,
-                col: 0,
-                n_letters: 5,
-                attr: 0x210000,
-            },
-        ];
+        let formatting = vec![InlineStyle {
+            row: 0,
+            col: 0,
+            n_letters: 5,
+            attr: 0x210000,
+        }];
 
         let text_structure = TextStructure {
-            text_lines: vec![
-                "Line 1 of text".to_string(),
-                "Line 2 of text".to_string(),
-            ],
+            text_lines: vec!["Line 1 of text".to_string(), "Line 2 of text".to_string()],
             image_maps,
             section_rows,
             formatting,
@@ -490,7 +485,10 @@ mod tests {
 
         assert_eq!(text_structure.text_lines.len(), 2);
         assert_eq!(text_structure.text_lines[0], "Line 1 of text");
-        assert_eq!(text_structure.image_maps.get(&10), Some(&"image1.jpg".to_string()));
+        assert_eq!(
+            text_structure.image_maps.get(&10),
+            Some(&"image1.jpg".to_string())
+        );
         assert_eq!(text_structure.section_rows.get("chapter-1"), Some(&5));
         assert_eq!(text_structure.formatting.len(), 1);
         assert_eq!(text_structure.formatting[0].n_letters, 5);

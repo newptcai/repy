@@ -1,9 +1,9 @@
 use ratatui::{
+    Frame,
     layout::Rect,
     style::{Color, Style},
     text::Line,
     widgets::{Block, Borders, Clear, List, ListItem, Paragraph},
-    Frame,
 };
 
 pub struct LibraryWindow;
@@ -44,8 +44,8 @@ impl LibraryWindow {
             height: 1,
         };
 
-        let hint = Paragraph::new("HINT: Press 'd' to delete.")
-            .style(Style::default().fg(Color::Yellow));
+        let hint =
+            Paragraph::new("HINT: Press 'd' to delete.").style(Style::default().fg(Color::Yellow));
         frame.render_widget(hint, hint_area);
 
         let list_area = Rect {
