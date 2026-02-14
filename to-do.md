@@ -134,8 +134,7 @@ The detailed roadmap below remains the source of truth for planned work.
     *   [x] **Footnote Formatting**: User-friendly display of footnote labels (e.g., "Footnote 2")
     *   [ ] **Export Functionality**: Text and highlighted content export
 
-13. **Utilities (`src/utils.rs`):**
-    *   [ ] Port the helper functions from `epy/src/epy_reader/utils.py` and `epy/src/epy_reader/lib.py` to a `utils` module.
+13. **Utilities:**
     *   [ ] Add platform-specific utilities (Windows/Linux/macOS)
     *   [ ] Implement file format detection and validation
     *   [x] Add logging and debugging utilities (Basic implementation in `src/logging.rs`)
