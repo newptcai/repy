@@ -108,17 +108,24 @@ fn preprocess_inline_annotations(html: &str) -> String {
 }
 
 fn replace_superscript_link_markers(lines: &mut [String]) {
-    let re = Regex::new(r"\[\^\{[^}]+\}\]").unwrap();
+    // Pattern 1: [^{N}] — link wrapping a superscript (inline footnote reference)
+    // Renumber sequentially as ^{1}, ^{2}, etc.
+    let re_link_sup = Regex::new(r"\[\^\{[^}]+\}\]").unwrap();
+    // Pattern 2: ^{[N]} — superscript wrapping a link (footnote definition label)
+    // Strip the superscript wrapper, keeping just [N]
+    let re_sup_link = Regex::new(r"\^\{(\[[^\]]+\])\}").unwrap();
     let mut counter = 0usize;
     for line in lines.iter_mut() {
-        if !line.contains("[^{") {
-            continue;
+        if line.contains("[^{") {
+            let replaced = re_link_sup.replace_all(line, |_caps: &Captures| {
+                counter += 1;
+                format!("^{{{}}}", counter)
+            });
+            *line = replaced.to_string();
         }
-        let replaced = re.replace_all(line, |_caps: &Captures| {
-            counter += 1;
-            format!("^{{{}}}", counter)
-        });
-        *line = replaced.to_string();
+        if line.contains("^{[") {
+            *line = re_sup_link.replace_all(line, "$1").to_string();
+        }
     }
 }
 
@@ -1017,6 +1024,17 @@ mod tests {
         let mut lines = vec!["See [^{2}] and [^{7}]".to_string()];
         replace_superscript_link_markers(&mut lines);
         assert_eq!(lines[0], "See ^{1} and ^{2}");
+    }
+
+    #[test]
+    fn test_strip_superscript_from_footnote_definitions() {
+        let mut lines = vec![
+            "^{[1]} Poem by Vietnamese Dhyana Master".to_string(),
+            "^{[2]} This is described in [chap. 27].".to_string(),
+        ];
+        replace_superscript_link_markers(&mut lines);
+        assert_eq!(lines[0], "[1] Poem by Vietnamese Dhyana Master");
+        assert_eq!(lines[1], "[2] This is described in [chap. 27].");
     }
 
     #[test]
