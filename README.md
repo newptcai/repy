@@ -10,7 +10,7 @@ or crash your terminal. You're on your own. PRs welcome.
 
 ---
 
-Rust port of the awesome CLI ebook reader [`epy`](https://github.com/wustho/epy).
+Rust reimplementation of the awesome CLI ebook reader [`epy`](https://github.com/wustho/epy).
 
 The goal is to keep the reading experience and keybindings familiar while improving
 performance, robustness, and portability by using Rust and a fully self-contained
@@ -229,5 +229,5 @@ and any stored bookmarks.
 
 ## Contributing
 
-This port is still evolving. Bug reports, small focused patches, and feedback on
+This project is still evolving. Bug reports, small focused patches, and feedback on
 feature parity with `epy` are very welcome.

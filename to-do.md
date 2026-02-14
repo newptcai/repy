@@ -1,6 +1,6 @@
-# Comprehensive Rust Porting Plan: epy to repy
+# Comprehensive Rust Reimplementation Plan: epy to repy
 
-Concise roadmap for the Rust port of `epy`.
+Concise roadmap for the Rust reimplementation of `epy`.
 
 ## Current Progress (February 2026)
 
