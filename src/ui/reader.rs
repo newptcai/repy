@@ -1389,13 +1389,15 @@ impl Reader {
     }
 
     fn handle_help_mode_keys(&mut self, key: KeyEvent, repeat_count: u32) -> eyre::Result<()> {
+        let (term_width, term_height) = crossterm::terminal::size().unwrap_or((80, 24));
+        let max_offset = HelpWindow::max_scroll_offset(Rect::new(0, 0, term_width, term_height));
+
         match key.code {
             KeyCode::Esc | KeyCode::Char('q') | KeyCode::Enter => {
                 let mut state = self.state.borrow_mut();
                 state.ui_state.open_window(WindowType::Reader);
             }
             KeyCode::Char('j') | KeyCode::Down => {
-                let max_offset = HelpWindow::get_total_lines().saturating_sub(1) as u16;
                 let mut state = self.state.borrow_mut();
                 state.ui_state.help_scroll_offset = state
                     .ui_state
