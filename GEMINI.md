@@ -198,9 +198,18 @@ src/
 - History limited to 100 entries (configurable in code)
 - Avoids duplicate consecutive entries
 
+### Text-to-Speech (TTS)
+- Press `!` to toggle TTS (read aloud) from the current paragraph
+- Default engine: `edge-playback` (from `edge-tts` Python package, uses Microsoft Edge as backend)
+- Reads paragraph by paragraph; the active paragraph is underlined
+- Auto-scrolls to keep the current paragraph at the top of the page
+- Press `Esc` or `!` again to stop TTS
+- Configurable via `preferred_tts_engine` in settings (cycle through presets in Settings window)
+- Preset engines: `edge-playback`, `espeak`, `say` (macOS)
+- Custom engine: set `preferred_tts_engine` to a command template with `{}` placeholder for text (e.g., `espeak -s 150 "{}"`)
+
 ### Known Limitations
 - Only EPUB format supported (MOBI, AZW, FB2 not implemented)
-- No TTS (text-to-speech) support yet
 - No dictionary integration
 - No export functionality
 - No bottom status bar (command echo, messages)

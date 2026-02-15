@@ -187,18 +187,43 @@ impl Board {
                     }
                 }
 
-                let line_spans = self.build_line_spans(
-                    line,
-                    line_num,
-                    Style::default(),
-                    formatting,
-                    state
-                        .ui_state
-                        .search_matches
-                        .get(&line_num)
-                        .map(|ranges| ranges.as_slice()),
-                );
-                spans.extend(line_spans);
+                // Check for TTS character-level underline on this line
+                let tts_col_range = state.ui_state.tts_underline_ranges.get(&line_num);
+
+                if let Some(&(tts_start_col, tts_end_col)) = tts_col_range {
+                    // Build spans with partial underline for the TTS range
+                    let line_spans = self.build_line_spans(
+                        line,
+                        line_num,
+                        Style::default(),
+                        formatting,
+                        state
+                            .ui_state
+                            .search_matches
+                            .get(&line_num)
+                            .map(|ranges| ranges.as_slice()),
+                    );
+                    // Apply underline to the character range within the spans
+                    let underlined = Self::apply_underline_range(
+                        line_spans,
+                        tts_start_col,
+                        tts_end_col,
+                    );
+                    spans.extend(underlined);
+                } else {
+                    let line_spans = self.build_line_spans(
+                        line,
+                        line_num,
+                        Style::default(),
+                        formatting,
+                        state
+                            .ui_state
+                            .search_matches
+                            .get(&line_num)
+                            .map(|ranges| ranges.as_slice()),
+                    );
+                    spans.extend(line_spans);
+                }
                 Line::from(spans)
             })
             .collect();
@@ -370,6 +395,60 @@ impl Board {
         }
 
         spans
+    }
+
+    /// Take a list of spans and apply UNDERLINED to the character range
+    /// [col_start, col_end) across them, splitting spans as needed.
+    fn apply_underline_range(
+        spans: Vec<Span<'_>>,
+        col_start: usize,
+        col_end: usize,
+    ) -> Vec<Span<'static>> {
+        let mut result = Vec::new();
+        let mut char_pos = 0usize;
+
+        for span in spans {
+            let span_text: String = span.content.to_string();
+            let span_chars: Vec<char> = span_text.chars().collect();
+            let span_len = span_chars.len();
+            let span_end = char_pos + span_len;
+
+            if span_end <= col_start || char_pos >= col_end {
+                // Entirely outside underline range
+                result.push(Span::styled(span_text, span.style));
+            } else if char_pos >= col_start && span_end <= col_end {
+                // Entirely inside underline range
+                result.push(Span::styled(
+                    span_text,
+                    span.style.add_modifier(Modifier::UNDERLINED),
+                ));
+            } else {
+                // Partial overlap — split the span
+                let ul_start = col_start.max(char_pos) - char_pos;
+                let ul_end = col_end.min(span_end) - char_pos;
+
+                if ul_start > 0 {
+                    result.push(Span::styled(
+                        span_chars[..ul_start].iter().collect::<String>(),
+                        span.style,
+                    ));
+                }
+                result.push(Span::styled(
+                    span_chars[ul_start..ul_end].iter().collect::<String>(),
+                    span.style.add_modifier(Modifier::UNDERLINED),
+                ));
+                if ul_end < span_len {
+                    result.push(Span::styled(
+                        span_chars[ul_end..].iter().collect::<String>(),
+                        span.style,
+                    ));
+                }
+            }
+
+            char_pos = span_end;
+        }
+
+        result
     }
 
     pub fn total_lines(&self) -> usize {

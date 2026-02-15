@@ -23,6 +23,9 @@ hyphenation = { version = "0.8.4", features = ["embed_en-us"] }
 textwrap = { version = "0.16.1", features = ["hyphenation"] }
 reqwest = { version = "0.12.24", default-features = false, features = ["blocking", "json", "rustls-tls"] }
 
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 [dev-dependencies]
 assert_cmd = "2.1.1"
 predicates = "3.1.3"

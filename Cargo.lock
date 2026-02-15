@@ -2310,6 +2310,7 @@ dependencies = [
  "hex",
  "html2text",
  "hyphenation",
+ "libc",
  "predicates",
  "ratatui",
  "regex",
