@@ -174,11 +174,12 @@ src/
 - Manual adjustments are preserved even when resizing the terminal window.
 - Width changes trigger per-chapter re-parsing (cached, very fast) instead of full book re-parsing.
 
-### Visual Mode (Text Selection and Yanking)
-- Press `v` to enter visual mode
-- Use `hjkl` to move cursor and select text
+### Cursor & Selection Modes (Text Selection and Yanking)
+- Press `v` to enter cursor mode
+- Press `v` again to enter selection mode
+- Use `hjkl` to move the cursor or extend the selection
 - Press `y` to yank (copy) selected text to system clipboard using `arboard`
-- `Esc` exits visual mode
+- `Esc` in selection mode returns to cursor mode; `Esc` in cursor mode returns to reader mode
 
 ### Search Implementation
 - Press `/` to open search input window

@@ -1123,7 +1123,7 @@ impl Reader {
                 state.ui_state.open_window(WindowType::Search);
             }
 
-            // Visual Mode: first v enters cursor mode, second v starts selection
+            // Two-phase flow: first v enters cursor mode, second v starts selection
             KeyCode::Char('v') => {
                 let mut state = self.state.borrow_mut();
                 // Place cursor at the first non-empty line on the current page
@@ -1290,7 +1290,7 @@ impl Reader {
         Ok(())
     }
 
-    /// Handle keys in visual mode (two-phase: cursor mode → selection mode)
+    /// Handle keys in two phases: cursor mode -> selection mode
     ///
     /// Phase 1 (cursor mode): visual_cursor is Some, visual_anchor is None.
     ///   - hjkl/wbe move the cursor. Press v to anchor and start selecting.
@@ -1982,7 +1982,11 @@ impl Reader {
             None
         };
         let mode_hint = if state.ui_state.active_window == WindowType::Visual {
-            Some("-- VISUAL --".to_string())
+            if state.ui_state.visual_anchor.is_some() {
+                Some("-- SELECTION MODE --".to_string())
+            } else {
+                Some("-- CURSOR MODE --".to_string())
+            }
         } else {
             None
         };

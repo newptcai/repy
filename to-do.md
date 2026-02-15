@@ -17,10 +17,10 @@ Concise roadmap for the Rust reimplementation of `epy`.
 - Full terminal UI with ratatui (`src/ui/reader.rs`, `src/ui/board.rs`)
 - All navigation modes: line, page, half-page, chapter, book-level
 - Jump history navigation (Ctrl+o / Ctrl+i / Tab)
-- Two-phase visual mode with character-level cross-page selection and yanking
+- Two-phase cursor/selection modes with character-level cross-page selection and yanking
 - Visual-mode motions: `hjkl`, `w`/`b`/`e`, `0`, `$`
-- Basic dictionary lookup from visual selection (`d`, using `sdcv`/`dict`)
-- Wikipedia summary lookup from visual selection (`w`, 10s timeout)
+- Basic dictionary lookup from selection mode (`d`, using `sdcv`/`dict`)
+- Wikipedia summary lookup from selection mode (`w`, 10s timeout)
 - Regex search with highlighting (/, n, p/N)
 - Width adjustment (+/- keys, = to reset) with per-book persistence
 - Line numbers toggle (in settings window)
