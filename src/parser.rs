@@ -184,6 +184,109 @@ fn extract_images(
     Ok(images)
 }
 
+/// Resolve the representative text for an element, falling back to child headings,
+/// parent headings, or next siblings for empty anchors.
+fn resolve_element_text(
+    element: &scraper::ElementRef,
+    heading_selector: &Selector,
+) -> String {
+    let mut text = element.text().collect::<String>();
+
+    // If the element itself isn't a heading, try its child headings
+    if !matches!(
+        element.value().name(),
+        "h1" | "h2" | "h3" | "h4" | "h5" | "h6"
+    ) {
+        if let Some(heading) = element.select(heading_selector).next() {
+            let heading_text = heading.text().collect::<String>();
+            if !heading_text.trim().is_empty() {
+                text = heading_text;
+            }
+        }
+    }
+
+    // Empty anchors: fall back to parent heading or next sibling
+    if text.trim().is_empty() && element.value().name() == "a" {
+        if let Some(parent) = element.parent().and_then(scraper::ElementRef::wrap) {
+            if matches!(
+                parent.value().name(),
+                "h1" | "h2" | "h3" | "h4" | "h5" | "h6"
+            ) {
+                let parent_text = parent.text().collect::<String>();
+                if !parent_text.trim().is_empty() {
+                    text = parent_text;
+                }
+            }
+        }
+
+        if text.trim().is_empty() {
+            let mut sibling = element.next_sibling();
+            while let Some(node) = sibling {
+                if let Some(elem) = scraper::ElementRef::wrap(node) {
+                    let sibling_text = elem.text().collect::<String>();
+                    if !sibling_text.trim().is_empty() {
+                        text = sibling_text;
+                        break;
+                    }
+                }
+                sibling = node.next_sibling();
+            }
+        }
+    }
+
+    text
+}
+
+/// Search for the line matching a set of words using progressively shorter word-prefix strategies.
+/// Returns the matched line number (relative to `text_lines`), or None.
+fn find_line_by_words(
+    words: &[&str],
+    text_lines: &[String],
+    search_start: usize,
+) -> Option<usize> {
+    let attempts = [
+        (0, 32),
+        (0, 10),
+        (0, 5),
+        (1, 32), // Skip first word (handles "[1] Text" vs "1. Text")
+        (1, 10),
+        (1, 5),
+    ];
+
+    for (skip, take) in attempts {
+        if skip >= words.len() {
+            continue;
+        }
+        let end = (skip + take).min(words.len());
+        if end <= skip {
+            continue;
+        }
+        let search_str = words[skip..end].join(" ");
+        if search_str.len() < 3 {
+            continue;
+        }
+        for (line_num, line) in text_lines.iter().enumerate().skip(search_start) {
+            if line.contains(&search_str) {
+                return Some(line_num);
+            }
+        }
+    }
+
+    // Fallback: try normalized text or a 32-char prefix
+    let normalized = words.join(" ");
+    if normalized.is_empty() {
+        return None;
+    }
+    let prefix: String = normalized.chars().take(32).collect();
+    for (line_num, line) in text_lines.iter().enumerate().skip(search_start) {
+        if line.contains(&normalized) || (!prefix.is_empty() && line.contains(&prefix)) {
+            return Some(line_num);
+        }
+    }
+
+    None
+}
+
 /// Extract section/anchor ids from HTML for TOC navigation and internal link jumps.
 fn extract_sections(
     fragment: &Html,
@@ -194,127 +297,24 @@ fn extract_sections(
     let mut sections = HashMap::new();
     let mut search_start = 0usize;
 
-    // Look for elements with id attributes that match our section IDs
     let id_selector = Selector::parse("*[id]").unwrap();
     let heading_selector = Selector::parse("h1, h2, h3, h4, h5, h6").unwrap();
 
     for element in fragment.select(&id_selector) {
         if let Some(id) = element.value().attr("id") {
-            // Track all anchors so internal links can jump, even if the ID is not in the TOC.
-            // TOC navigation still relies on TOC entries; extra anchors do not change that.
-            // Estimate the line number where this section starts.
-            // This is approximate since html2text changes the structure.
-            let mut element_text = element.text().collect::<String>();
-            if !matches!(
-                element.value().name(),
-                "h1" | "h2" | "h3" | "h4" | "h5" | "h6"
-            ) {
-                if let Some(heading) = element.select(&heading_selector).next() {
-                    let heading_text = heading.text().collect::<String>();
-                    if !heading_text.trim().is_empty() {
-                        element_text = heading_text;
-                    }
-                }
-            }
-            if element_text.trim().is_empty() {
-                // Empty anchors are often used for TOC targets; fall back to nearby headings.
-                if element.value().name() == "a" {
-                    if let Some(parent) = element.parent().and_then(scraper::ElementRef::wrap) {
-                        let parent_name = parent.value().name();
-                        if matches!(parent_name, "h1" | "h2" | "h3" | "h4" | "h5" | "h6") {
-                            let parent_text = parent.text().collect::<String>();
-                            if !parent_text.trim().is_empty() {
-                                element_text = parent_text;
-                            }
-                        }
-                    }
-
-                    if element_text.trim().is_empty() {
-                        let mut sibling = element.next_sibling();
-                        while let Some(node) = sibling {
-                            if let Some(elem) = scraper::ElementRef::wrap(node) {
-                                let sibling_text = elem.text().collect::<String>();
-                                if !sibling_text.trim().is_empty() {
-                                    element_text = sibling_text;
-                                    break;
-                                }
-                            }
-                            sibling = node.next_sibling();
-                        }
-                    }
-                }
-            }
-
+            let element_text = resolve_element_text(&element, &heading_selector);
             let words: Vec<&str> = element_text.split_whitespace().collect();
+
             if words.is_empty() {
                 sections.insert(id.to_string(), starting_line + search_start);
                 continue;
             }
 
-            // Strategy 1: Match the first few words (exact sequence)
-            let mut found = false;
-            if !words.is_empty() {
-                // Try chunks of words to avoid issues with wrapping or partial matches
-                // We try a longer prefix first, then shorter ones.
-                // We also try skipping the first word to handle cases where decoration ([1]) matches differently than plain text (1).
-                let attempts = [
-                    (0, 32), // Start at 0, take up to 32 words
-                    (0, 10), // Start at 0, take up to 10
-                    (0, 5),  // Start at 0, take up to 5
-                    (1, 32), // Skip 1, take up to 32 (handles "[1] Text" vs "1. Text")
-                    (1, 10),
-                    (1, 5),
-                ];
-
-                for (skip, take) in attempts {
-                    if skip >= words.len() {
-                        continue;
-                    }
-                    let end = (skip + take).min(words.len());
-                    if end <= skip {
-                        continue;
-                    }
-
-                    let search_str = words[skip..end].join(" ");
-                    if search_str.len() < 3 {
-                        // Too short to be unique
-                        continue;
-                    }
-
-                    for (line_num, line) in text_lines.iter().enumerate().skip(search_start) {
-                        if line.contains(&search_str) {
-                            sections.insert(id.to_string(), starting_line + line_num);
-                            search_start = line_num;
-                            found = true;
-                            break;
-                        }
-                    }
-                    if found {
-                        break;
-                    }
-                }
-            }
-
-            // Fallback: If word matching failed, try the old normalization method
-            if !found {
-                let normalized = words.join(" ");
-                let prefix_len = normalized.chars().count().min(32);
-                let prefix: String = normalized.chars().take(prefix_len).collect();
-
-                for (line_num, line) in text_lines.iter().enumerate().skip(search_start) {
-                    if !normalized.is_empty()
-                        && (line.contains(&normalized)
-                            || (!prefix.is_empty() && line.contains(&prefix)))
-                    {
-                        sections.insert(id.to_string(), starting_line + line_num);
-                        search_start = line_num;
-                        break;
-                    }
-                }
-            }
-
-            // Final fallback: anchor targets often align with the current cursor.
-            if !sections.contains_key(id) {
+            if let Some(line_num) = find_line_by_words(&words, text_lines, search_start) {
+                sections.insert(id.to_string(), starting_line + line_num);
+                search_start = line_num;
+            } else {
+                // Final fallback: anchor targets often align with the current cursor.
                 sections.insert(id.to_string(), starting_line + search_start);
             }
         }
