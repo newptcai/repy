@@ -16,7 +16,7 @@ impl SearchWindow {
         results: &[String],
         selected_index: usize,
     ) {
-        let popup_area = Self::centered_popup_area(area, 60, 70);
+        let popup_area = super::centered_popup_area(area, 60, 70);
 
         frame.render_widget(Clear, popup_area);
 
@@ -61,14 +61,5 @@ impl SearchWindow {
         let list = List::new(items).block(Block::default().borders(Borders::ALL));
 
         frame.render_widget(list, list_area);
-    }
-
-    fn centered_popup_area(area: Rect, width_percent: u16, height_percent: u16) -> Rect {
-        let width = (area.width * width_percent) / 100;
-        let height = (area.height * height_percent) / 100;
-        let x = area.x + (area.width - width) / 2;
-        let y = area.y + (area.height - height) / 2;
-
-        Rect::new(x, y, width, height)
     }
 }
