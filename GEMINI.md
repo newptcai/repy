@@ -84,17 +84,31 @@ src/
 ├── settings.rs          # User settings structure
 ├── logging.rs           # Debug logging utilities
 ├── ui/
-│   ├── reader.rs        # Main reader application state and event handling
+│   ├── mod.rs           # UI module root
+│   ├── reader/
+│   │   ├── mod.rs       # Main reader application state and event handling
+│   │   └── tts.rs       # Text-to-speech engine abstraction
 │   ├── board.rs         # Rendering logic for the reading view
-│   └── windows/         # Window implementations (help, toc, bookmarks, etc.)
+│   └── windows/
+│       ├── mod.rs       # Windows module root, shared helpers (centered_popup_area)
+│       ├── bookmarks.rs
+│       ├── dictionary.rs
+│       ├── help.rs
+│       ├── images.rs
+│       ├── library.rs
+│       ├── links.rs
+│       ├── metadata.rs
+│       ├── search.rs
+│       ├── settings.rs
+│       └── toc.rs
 └── lib.rs               # Library crate root
 ```
 
 ### Key Modules
 
-**`src/config.rs`** (~800 lines):
+**`src/config.rs`** (~580 lines):
 - Config file discovery with XDG_CONFIG_HOME support
-- JSON-based configuration with sensible defaults
+- JSON-based configuration with serde deserialization
 - Settings and keymap management
 
 **`src/state.rs`** (~800 lines):
@@ -117,7 +131,7 @@ src/
 - Inline formatting (bold/italic marker stripping)
 - Per-chapter TextStructure caching for fast re-rendering
 
-**`src/ui/reader.rs`** (~2800 lines):
+**`src/ui/reader/mod.rs`** (~4600 lines):
 - ApplicationState management (reading state, UI state, config, search)
 - Event handling for all keybindings
 - Window state machine (Reader, Help, Toc, Bookmarks, etc.)
@@ -125,6 +139,13 @@ src/
 - Visual mode for text selection and yanking
 - Search navigation (n/p/N)
 - Width adjustment with database persistence
+- Wikipedia lookup for dictionary definitions
+
+**`src/ui/reader/tts.rs`** (~450 lines):
+- TTS engine abstraction (TtsEngine trait)
+- Preset engine support: edge-playback, espeak, say (macOS)
+- Custom engine templates with `{}` placeholder
+- Paragraph-by-paragraph reading with async child process management
 
 **`src/ui/board.rs`** (~400 lines):
 - Rendering the reading view with ratatui
@@ -133,15 +154,16 @@ src/
 - Progress indicator in header
 
 **`src/ui/windows/*.rs`**:
-- Modular window implementations (each ~50-200 lines)
+- Modular window implementations (each ~50-400 lines)
 - Consistent interface: render() and event handling
-- Windows: Help, ToC, Bookmarks, Library, Search, Links, Images, Metadata, Settings
+- Shared `centered_popup_area` helper in `mod.rs`
+- Windows: Help, ToC, Bookmarks, Library, Search, Links, Images, Metadata, Settings, Dictionary
 
 ### Testing Strategy
 - Integration tests in `tests/` directory
 - Test fixtures in `tests/fixtures/`
-- Tests cover: CLI args, EPUB loading, parser correctness, footnotes, images, jump history, hyphenation
-- Current coverage: ~13 test cases across 9 test files
+- Tests cover: CLI args, EPUB loading, parser correctness, footnotes, images, jump history, hyphenation, config, models, settings, state, board, dictionary, Wikipedia lookup
+- Current coverage: 162 test cases across unit and integration tests
 
 ### Dependencies
 - `ratatui` 0.30.0-beta.0: Terminal UI framework
@@ -210,7 +232,7 @@ src/
 
 ### Known Limitations
 - Only EPUB format supported (MOBI, AZW, FB2 not implemented)
-- No dictionary integration
+- Dictionary uses external commands (e.g., `dict`, `sdcv`) and Wikipedia lookup
 - No export functionality
 - No bottom status bar (command echo, messages)
 - Keybindings `b` and `f` documented in README but not implemented in code
