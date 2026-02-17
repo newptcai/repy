@@ -5,7 +5,24 @@ use hyphenation::{Language, Load, Standard};
 use regex::{Captures, Regex};
 use scraper::{Html, Selector};
 use std::collections::{HashMap, HashSet};
+use std::sync::LazyLock;
 use textwrap::{Options, WordSplitter};
+
+// Lazily compiled regex patterns used across parser functions.
+static RE_ORDERED_LIST: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^(\d+)\.\s").unwrap());
+static RE_SUP_OPEN: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)<sup[^>]*>").unwrap());
+static RE_SUP_CLOSE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)</sup>").unwrap());
+static RE_SUB_OPEN: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)<sub[^>]*>").unwrap());
+static RE_SUB_CLOSE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)</sub>").unwrap());
+static RE_LINK_SUP: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\[\^\{[^}]+\}\]").unwrap());
+static RE_SUP_LINK: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\^\{(\[[^\]]+\])\}").unwrap());
+static RE_IMG: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"(?i)<img\s+([^>]+)>"#).unwrap());
+static RE_IMG_SRC: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r#"src=["']([^"']+)["']"#).unwrap());
+static RE_IMG_ALT: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r#"alt=["']([^"']*)["']"#).unwrap());
+static RE_IMG_TITLE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r#"title=["']([^"']*)["']"#).unwrap());
 
 /// Simple HTML parser for ebook content
 /// This uses html2text for the heavy lifting and adds some basic structure tracking
@@ -64,8 +81,6 @@ fn wrap_text(lines: Vec<String>, width: usize) -> Vec<String> {
     // This expects the feature "embed_en-us" to be enabled in hyphenation crate
     let dictionary = Standard::from_embedded(Language::EnglishUS).unwrap();
     let mut wrapped = Vec::new();
-    let ordered_list_re = Regex::new(r"^(\d+)\.\s").unwrap();
-
     for line in lines {
         let line = line.trim_end();
         if line.trim().is_empty() {
@@ -79,7 +94,7 @@ fn wrap_text(lines: Vec<String>, width: usize) -> Vec<String> {
             subsequent_indent = "  ".to_string();
         } else if line.starts_with("> ") {
             subsequent_indent = "  ".to_string();
-        } else if let Some(mat) = ordered_list_re.find(&line) {
+        } else if let Some(mat) = RE_ORDERED_LIST.find(&line) {
             let len = mat.end();
             subsequent_indent = " ".repeat(len);
         } else {
@@ -99,35 +114,28 @@ fn wrap_text(lines: Vec<String>, width: usize) -> Vec<String> {
 }
 
 fn preprocess_inline_annotations(html: &str) -> String {
-    let sup_open = Regex::new(r"(?i)<sup[^>]*>").unwrap();
-    let sup_close = Regex::new(r"(?i)</sup>").unwrap();
-    let sub_open = Regex::new(r"(?i)<sub[^>]*>").unwrap();
-    let sub_close = Regex::new(r"(?i)</sub>").unwrap();
-
-    let mut processed = sup_open.replace_all(html, "^{").to_string();
-    processed = sup_close.replace_all(&processed, "}").to_string();
-    processed = sub_open.replace_all(&processed, "_{").to_string();
-    sub_close.replace_all(&processed, "}").to_string()
+    let mut processed = RE_SUP_OPEN.replace_all(html, "^{").to_string();
+    processed = RE_SUP_CLOSE.replace_all(&processed, "}").to_string();
+    processed = RE_SUB_OPEN.replace_all(&processed, "_{").to_string();
+    RE_SUB_CLOSE.replace_all(&processed, "}").to_string()
 }
 
 fn replace_superscript_link_markers(lines: &mut [String]) {
-    // Pattern 1: [^{N}] — link wrapping a superscript (inline footnote reference)
-    // Renumber sequentially as ^{1}, ^{2}, etc.
-    let re_link_sup = Regex::new(r"\[\^\{[^}]+\}\]").unwrap();
-    // Pattern 2: ^{[N]} — superscript wrapping a link (footnote definition label)
-    // Strip the superscript wrapper, keeping just [N]
-    let re_sup_link = Regex::new(r"\^\{(\[[^\]]+\])\}").unwrap();
     let mut counter = 0usize;
     for line in lines.iter_mut() {
+        // Pattern 1: [^{N}] — link wrapping a superscript (inline footnote reference)
+        // Renumber sequentially as ^{1}, ^{2}, etc.
         if line.contains("[^{") {
-            let replaced = re_link_sup.replace_all(line, |_caps: &Captures| {
+            let replaced = RE_LINK_SUP.replace_all(line, |_caps: &Captures| {
                 counter += 1;
                 format!("^{{{}}}", counter)
             });
             *line = replaced.to_string();
         }
+        // Pattern 2: ^{[N]} — superscript wrapping a link (footnote definition label)
+        // Strip the superscript wrapper, keeping just [N]
         if line.contains("^{[") {
-            *line = re_sup_link.replace_all(line, "$1").to_string();
+            *line = RE_SUP_LINK.replace_all(line, "$1").to_string();
         }
     }
 }
@@ -1420,21 +1428,16 @@ mod tests {
 }
 
 fn preprocess_images(html: &str) -> String {
-    let img_re = Regex::new(r#"(?i)<img\s+([^>]+)>"#).unwrap();
-    img_re
+    RE_IMG
         .replace_all(html, |caps: &Captures| {
             let attrs_str = &caps[1];
-            let src_re = Regex::new(r#"src=["']([^"']+)["']"#).unwrap();
-            let alt_re = Regex::new(r#"alt=["']([^"']*)["']"#).unwrap();
-            let title_re = Regex::new(r#"title=["']([^"']*)["']"#).unwrap();
-
-            let src = src_re
+            let src = RE_IMG_SRC
                 .captures(attrs_str)
                 .map(|c| c.get(1).unwrap().as_str().to_string());
-            let alt = alt_re
+            let alt = RE_IMG_ALT
                 .captures(attrs_str)
                 .map(|c| c.get(1).unwrap().as_str().to_string());
-            let title = title_re
+            let title = RE_IMG_TITLE
                 .captures(attrs_str)
                 .map(|c| c.get(1).unwrap().as_str().to_string());
 
@@ -1457,7 +1460,7 @@ fn preprocess_images(html: &str) -> String {
                 };
 
                 let new_attrs = if alt.is_some() {
-                    alt_re
+                    RE_IMG_ALT
                         .replace(attrs_str, format!(r#"alt="{}""#, new_alt_text))
                         .to_string()
                 } else {
