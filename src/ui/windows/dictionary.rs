@@ -19,7 +19,7 @@ impl DictionaryWindow {
             return 0;
         }
 
-        let popup_area = Self::centered_popup_area(area, 70, 80);
+        let popup_area = super::centered_popup_area(area, 70, 80);
         let inner_width = popup_area.width.saturating_sub(2) as usize;
         let inner_height = popup_area.height.saturating_sub(2) as usize;
         let reflowed = Self::reflow(definition, inner_width);
@@ -38,7 +38,7 @@ impl DictionaryWindow {
         scroll_offset: u16,
         loading: bool,
     ) {
-        let popup_area = Self::centered_popup_area(area, 70, 80);
+        let popup_area = super::centered_popup_area(area, 70, 80);
         frame.render_widget(Clear, popup_area);
 
         let title = if word.is_empty() {
@@ -206,15 +206,6 @@ impl DictionaryWindow {
         }
 
         result.join("\n")
-    }
-
-    fn centered_popup_area(area: Rect, width_percent: u16, height_percent: u16) -> Rect {
-        let width = (area.width * width_percent) / 100;
-        let height = (area.height * height_percent) / 100;
-        let x = area.x + (area.width - width) / 2;
-        let y = area.y + (area.height - height) / 2;
-
-        Rect::new(x, y, width, height)
     }
 }
 

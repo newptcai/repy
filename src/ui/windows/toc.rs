@@ -18,7 +18,7 @@ impl TocWindow {
         selected_index: usize,
         metadata: Option<&BookMetadata>,
     ) {
-        let popup_area = Self::centered_popup_area(area, 60, 70);
+        let popup_area = super::centered_popup_area(area, 60, 70);
 
         frame.render_widget(Clear, popup_area);
 
@@ -92,14 +92,5 @@ impl TocWindow {
             .scroll((scroll_offset as u16, 0));
 
         frame.render_widget(paragraph, popup_area);
-    }
-
-    fn centered_popup_area(area: Rect, width_percent: u16, height_percent: u16) -> Rect {
-        let width = (area.width * width_percent) / 100;
-        let height = (area.height * height_percent) / 100;
-        let x = area.x + (area.width - width) / 2;
-        let y = area.y + (area.height - height) / 2;
-
-        Rect::new(x, y, width, height)
     }
 }

@@ -172,33 +172,22 @@ impl Ebook for Epub {
         self.toc = toc_entries;
 
         let mut metadata = BookMetadata::default();
-        if let Some(title) = doc.mdata("title") {
-            metadata.title = Some(title.value.clone());
+        macro_rules! load_mdata {
+            ($field:ident) => {
+                if let Some(val) = doc.mdata(stringify!($field)) {
+                    metadata.$field = Some(val.value.clone());
+                }
+            };
         }
-        if let Some(creator) = doc.mdata("creator") {
-            metadata.creator = Some(creator.value.clone());
-        }
-        if let Some(description) = doc.mdata("description") {
-            metadata.description = Some(description.value.clone());
-        }
-        if let Some(publisher) = doc.mdata("publisher") {
-            metadata.publisher = Some(publisher.value.clone());
-        }
-        if let Some(date) = doc.mdata("date") {
-            metadata.date = Some(date.value.clone());
-        }
-        if let Some(language) = doc.mdata("language") {
-            metadata.language = Some(language.value.clone());
-        }
-        if let Some(format) = doc.mdata("format") {
-            metadata.format = Some(format.value.clone());
-        }
-        if let Some(identifier) = doc.mdata("identifier") {
-            metadata.identifier = Some(identifier.value.clone());
-        }
-        if let Some(source) = doc.mdata("source") {
-            metadata.source = Some(source.value.clone());
-        }
+        load_mdata!(title);
+        load_mdata!(creator);
+        load_mdata!(description);
+        load_mdata!(publisher);
+        load_mdata!(date);
+        load_mdata!(language);
+        load_mdata!(format);
+        load_mdata!(identifier);
+        load_mdata!(source);
         self.metadata = metadata;
         self.doc = Some(doc);
         Ok(())

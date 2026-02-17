@@ -1429,166 +1429,114 @@ impl Reader {
         Ok(())
     }
 
-    fn handle_toc_mode_keys(&mut self, key: KeyEvent, repeat_count: u32) -> eyre::Result<()> {
+    /// Handle common list navigation keys (Esc/q to close, j/k to move selection).
+    /// Returns `true` if the key was consumed, `false` if it should be handled by the caller.
+    fn handle_list_nav(
+        &self,
+        key: &KeyEvent,
+        repeat_count: u32,
+        list_len: usize,
+        index: &mut usize,
+    ) -> bool {
         match key.code {
             KeyCode::Esc | KeyCode::Char('q') => {
-                let mut state = self.state.borrow_mut();
-                state.ui_state.open_window(WindowType::Reader);
+                self.state.borrow_mut().ui_state.open_window(WindowType::Reader);
+                true
             }
             KeyCode::Char('j') | KeyCode::Down => {
-                let mut state = self.state.borrow_mut();
-                if !state.ui_state.toc_entries.is_empty() {
-                    let next = state
-                        .ui_state
-                        .toc_selected_index
-                        .saturating_add(repeat_count as usize);
-                    state.ui_state.toc_selected_index =
-                        next.min(state.ui_state.toc_entries.len() - 1);
+                if list_len > 0 {
+                    *index = index.saturating_add(repeat_count as usize).min(list_len - 1);
                 }
+                true
             }
             KeyCode::Char('k') | KeyCode::Up => {
-                let mut state = self.state.borrow_mut();
-                let current = state.ui_state.toc_selected_index;
-                state.ui_state.toc_selected_index = current.saturating_sub(repeat_count as usize);
+                *index = index.saturating_sub(repeat_count as usize);
+                true
             }
-            KeyCode::Enter => {
-                self.jump_to_toc_entry()?;
+            _ => false,
+        }
+    }
+
+    fn handle_toc_mode_keys(&mut self, key: KeyEvent, repeat_count: u32) -> eyre::Result<()> {
+        let (list_len, mut index) = {
+            let s = self.state.borrow();
+            (s.ui_state.toc_entries.len(), s.ui_state.toc_selected_index)
+        };
+        if !self.handle_list_nav(&key, repeat_count, list_len, &mut index) {
+            match key.code {
+                KeyCode::Enter => { self.jump_to_toc_entry()?; }
+                _ => {}
             }
-            _ => {}
+        } else {
+            self.state.borrow_mut().ui_state.toc_selected_index = index;
         }
         Ok(())
     }
 
     fn handle_bookmarks_mode_keys(&mut self, key: KeyEvent, repeat_count: u32) -> eyre::Result<()> {
-        match key.code {
-            KeyCode::Esc | KeyCode::Char('q') => {
-                let mut state = self.state.borrow_mut();
-                state.ui_state.open_window(WindowType::Reader);
+        let (list_len, mut index) = {
+            let s = self.state.borrow();
+            (s.ui_state.bookmarks.len(), s.ui_state.bookmarks_selected_index)
+        };
+        if !self.handle_list_nav(&key, repeat_count, list_len, &mut index) {
+            match key.code {
+                KeyCode::Char('a') => { self.add_bookmark()?; }
+                KeyCode::Char('d') => { self.delete_selected_bookmark()?; }
+                KeyCode::Enter => { self.jump_to_selected_bookmark()?; }
+                _ => {}
             }
-            KeyCode::Char('j') | KeyCode::Down => {
-                let mut state = self.state.borrow_mut();
-                if !state.ui_state.bookmarks.is_empty() {
-                    let next = state
-                        .ui_state
-                        .bookmarks_selected_index
-                        .saturating_add(repeat_count as usize);
-                    state.ui_state.bookmarks_selected_index =
-                        next.min(state.ui_state.bookmarks.len() - 1);
-                }
-            }
-            KeyCode::Char('k') | KeyCode::Up => {
-                let mut state = self.state.borrow_mut();
-                let current = state.ui_state.bookmarks_selected_index;
-                state.ui_state.bookmarks_selected_index =
-                    current.saturating_sub(repeat_count as usize);
-            }
-            KeyCode::Char('a') => {
-                self.add_bookmark()?;
-            }
-            KeyCode::Char('d') => {
-                self.delete_selected_bookmark()?;
-            }
-            KeyCode::Enter => {
-                self.jump_to_selected_bookmark()?;
-            }
-            _ => {}
+        } else {
+            self.state.borrow_mut().ui_state.bookmarks_selected_index = index;
         }
         Ok(())
     }
 
     fn handle_links_mode_keys(&mut self, key: KeyEvent, repeat_count: u32) -> eyre::Result<()> {
-        match key.code {
-            KeyCode::Esc | KeyCode::Char('q') => {
-                let mut state = self.state.borrow_mut();
-                state.ui_state.open_window(WindowType::Reader);
+        let (list_len, mut index) = {
+            let s = self.state.borrow();
+            (s.ui_state.links.len(), s.ui_state.links_selected_index)
+        };
+        if !self.handle_list_nav(&key, repeat_count, list_len, &mut index) {
+            match key.code {
+                KeyCode::Enter => { self.follow_selected_link()?; }
+                KeyCode::Char('y') => { self.copy_selected_link()?; }
+                _ => {}
             }
-            KeyCode::Char('j') | KeyCode::Down => {
-                let mut state = self.state.borrow_mut();
-                if !state.ui_state.links.is_empty() {
-                    let next = state
-                        .ui_state
-                        .links_selected_index
-                        .saturating_add(repeat_count as usize);
-                    state.ui_state.links_selected_index = next.min(state.ui_state.links.len() - 1);
-                }
-            }
-            KeyCode::Char('k') | KeyCode::Up => {
-                let mut state = self.state.borrow_mut();
-                let current = state.ui_state.links_selected_index;
-                state.ui_state.links_selected_index = current.saturating_sub(repeat_count as usize);
-            }
-            KeyCode::Enter => {
-                self.follow_selected_link()?;
-            }
-            KeyCode::Char('y') => {
-                self.copy_selected_link()?;
-            }
-            _ => {}
+        } else {
+            self.state.borrow_mut().ui_state.links_selected_index = index;
         }
         Ok(())
     }
 
     fn handle_images_mode_keys(&mut self, key: KeyEvent, repeat_count: u32) -> eyre::Result<()> {
-        match key.code {
-            KeyCode::Esc | KeyCode::Char('q') => {
-                let mut state = self.state.borrow_mut();
-                state.ui_state.open_window(WindowType::Reader);
+        let (list_len, mut index) = {
+            let s = self.state.borrow();
+            (s.ui_state.images_list.len(), s.ui_state.images_selected_index)
+        };
+        if !self.handle_list_nav(&key, repeat_count, list_len, &mut index) {
+            match key.code {
+                KeyCode::Enter => { self.open_selected_image()?; }
+                _ => {}
             }
-            KeyCode::Char('j') | KeyCode::Down => {
-                let mut state = self.state.borrow_mut();
-                if !state.ui_state.images_list.is_empty() {
-                    let next = state
-                        .ui_state
-                        .images_selected_index
-                        .saturating_add(repeat_count as usize);
-                    state.ui_state.images_selected_index =
-                        next.min(state.ui_state.images_list.len() - 1);
-                }
-            }
-            KeyCode::Char('k') | KeyCode::Up => {
-                let mut state = self.state.borrow_mut();
-                let current = state.ui_state.images_selected_index;
-                state.ui_state.images_selected_index =
-                    current.saturating_sub(repeat_count as usize);
-            }
-            KeyCode::Enter => {
-                self.open_selected_image()?;
-            }
-            _ => {}
+        } else {
+            self.state.borrow_mut().ui_state.images_selected_index = index;
         }
         Ok(())
     }
 
     fn handle_library_mode_keys(&mut self, key: KeyEvent, repeat_count: u32) -> eyre::Result<()> {
-        match key.code {
-            KeyCode::Esc | KeyCode::Char('q') => {
-                let mut state = self.state.borrow_mut();
-                state.ui_state.open_window(WindowType::Reader);
+        let (list_len, mut index) = {
+            let s = self.state.borrow();
+            (s.ui_state.library_items.len(), s.ui_state.library_selected_index)
+        };
+        if !self.handle_list_nav(&key, repeat_count, list_len, &mut index) {
+            match key.code {
+                KeyCode::Char('d') => { self.delete_selected_library_item()?; }
+                KeyCode::Enter => { self.open_selected_library_item()?; }
+                _ => {}
             }
-            KeyCode::Char('j') | KeyCode::Down => {
-                let mut state = self.state.borrow_mut();
-                if !state.ui_state.library_items.is_empty() {
-                    let next = state
-                        .ui_state
-                        .library_selected_index
-                        .saturating_add(repeat_count as usize);
-                    state.ui_state.library_selected_index =
-                        next.min(state.ui_state.library_items.len() - 1);
-                }
-            }
-            KeyCode::Char('k') | KeyCode::Up => {
-                let mut state = self.state.borrow_mut();
-                let current = state.ui_state.library_selected_index;
-                state.ui_state.library_selected_index =
-                    current.saturating_sub(repeat_count as usize);
-            }
-            KeyCode::Char('d') => {
-                self.delete_selected_library_item()?;
-            }
-            KeyCode::Enter => {
-                self.open_selected_library_item()?;
-            }
-            _ => {}
+        } else {
+            self.state.borrow_mut().ui_state.library_selected_index = index;
         }
         Ok(())
     }
