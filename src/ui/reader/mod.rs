@@ -662,10 +662,13 @@ impl Reader {
         language: &str,
         timeout: Duration,
     ) -> eyre::Result<WikipediaLookupResult> {
-        let client = reqwest::blocking::Client::builder()
+        let mut builder = reqwest::blocking::Client::builder()
             .timeout(timeout)
-            .user_agent("repy")
-            .build()?;
+            .user_agent("repy");
+        if language.starts_with("http://127.0.0.1") || language.starts_with("http://localhost") {
+            builder = builder.no_proxy();
+        }
+        let client = builder.build()?;
 
         if let Some(result) = Self::fetch_wikipedia_summary(&client, language, query)? {
             return Ok(result);
