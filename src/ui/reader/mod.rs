@@ -151,6 +151,7 @@ pub struct UiState {
     pub dictionary_command_query: String,
     pub settings_selected_index: usize,
     pub dictionary_loading: bool,
+    pub dictionary_is_wikipedia: bool,
     pub message: Option<String>,
     pub message_type: MessageType,
     pub message_time: Option<Instant>,
@@ -204,6 +205,7 @@ impl UiState {
             dictionary_command_query: String::new(),
             settings_selected_index: 0,
             dictionary_loading: false,
+            dictionary_is_wikipedia: false,
             message: None,
             message_type: MessageType::Info,
             message_time: None,
@@ -520,6 +522,50 @@ impl Reader {
                 }
             }
         }
+    }
+
+    /// Detect the Wikipedia language code based on the script of the query text.
+    /// ASCII text is treated as English and uses Simple English Wikipedia.
+    /// Non-ASCII text is mapped to the appropriate language Wikipedia.
+    fn detect_wikipedia_language(query: &str) -> String {
+        let trimmed = query.trim();
+        if trimmed.is_ascii() {
+            return "simple".to_string();
+        }
+        // Detect language from the dominant non-ASCII script
+        for ch in trimmed.chars() {
+            if ch.is_ascii() {
+                continue;
+            }
+            return match ch {
+                '\u{4E00}'..='\u{9FFF}' | '\u{3400}'..='\u{4DBF}' | '\u{F900}'..='\u{FAFF}' => {
+                    "zh".to_string()
+                }
+                '\u{3040}'..='\u{309F}' | '\u{30A0}'..='\u{30FF}' => "ja".to_string(),
+                '\u{AC00}'..='\u{D7AF}' | '\u{1100}'..='\u{11FF}' => "ko".to_string(),
+                '\u{0400}'..='\u{04FF}' => "ru".to_string(),
+                '\u{0600}'..='\u{06FF}' => "ar".to_string(),
+                '\u{0E00}'..='\u{0E7F}' => "th".to_string(),
+                '\u{0900}'..='\u{097F}' => "hi".to_string(),
+                '\u{0980}'..='\u{09FF}' => "bn".to_string(),
+                '\u{0A80}'..='\u{0AFF}' => "gu".to_string(),
+                '\u{0B80}'..='\u{0BFF}' => "ta".to_string(),
+                '\u{0370}'..='\u{03FF}' => "el".to_string(),
+                '\u{0590}'..='\u{05FF}' => "he".to_string(),
+                '\u{1000}'..='\u{109F}' => "my".to_string(),
+                '\u{10A0}'..='\u{10FF}' => "ka".to_string(),
+                '\u{0530}'..='\u{058F}' => "hy".to_string(),
+                '\u{1780}'..='\u{17FF}' => "km".to_string(),
+                '\u{0D00}'..='\u{0D7F}' => "ml".to_string(),
+                '\u{0C80}'..='\u{0CFF}' => "kn".to_string(),
+                '\u{0C00}'..='\u{0C7F}' => "te".to_string(),
+                // Latin-extended characters (accented) — could be many European languages,
+                // fall back to English Wikipedia which has the broadest coverage
+                '\u{00C0}'..='\u{024F}' => "en".to_string(),
+                _ => "en".to_string(),
+            };
+        }
+        "simple".to_string()
     }
 
     fn build_wikipedia_page_url(language: &str, title: &str) -> eyre::Result<String> {
@@ -1813,6 +1859,7 @@ impl Reader {
                 &state.ui_state.dictionary_definition,
                 state.ui_state.dictionary_scroll_offset,
                 state.ui_state.dictionary_loading,
+                state.ui_state.dictionary_is_wikipedia,
             );
         } else if state.ui_state.show_metadata {
             MetadataWindow::render(frame, frame.area(), state.ui_state.metadata.as_ref());
@@ -3553,6 +3600,7 @@ impl Reader {
             state.ui_state.dictionary_definition = String::new();
             state.ui_state.dictionary_loading = true;
             state.ui_state.dictionary_scroll_offset = 0;
+            state.ui_state.dictionary_is_wikipedia = false;
             state.ui_state.visual_anchor = None;
             state.ui_state.visual_cursor = None;
             state.ui_state.open_window(WindowType::Dictionary);
@@ -3650,6 +3698,7 @@ impl Reader {
             state.ui_state.dictionary_definition = String::new();
             state.ui_state.dictionary_loading = true;
             state.ui_state.dictionary_scroll_offset = 0;
+            state.ui_state.dictionary_is_wikipedia = true;
             state.ui_state.visual_anchor = None;
             state.ui_state.visual_cursor = None;
             state.ui_state.open_window(WindowType::Dictionary);
@@ -3657,9 +3706,9 @@ impl Reader {
 
         std::thread::spawn(move || {
             let total_timeout = Duration::from_secs(10);
-            let language = "simple";
+            let language = Self::detect_wikipedia_language(&query);
             let result_definition =
-                match Self::wikipedia_lookup_summary(&query, language, total_timeout) {
+                match Self::wikipedia_lookup_summary(&query, &language, total_timeout) {
                     Ok(result) => Ok(format!("Wikipedia: {}\n\n{}", result.url, result.summary)),
                     Err(err) => {
                         let message = err.to_string();
