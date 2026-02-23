@@ -1226,7 +1226,7 @@ impl Reader {
                 // Place cursor at the first non-empty line on the current page
                 let viewport_start = state.reading_state.row.saturating_sub(1);
                 let total_lines = self.board.total_lines();
-                let page = self.page_size();
+                let page = Self::page_size_for(state.config.settings.show_top_bar);
                 let viewport_end = (viewport_start + page).min(total_lines);
                 let mut start_row = viewport_start.min(total_lines.saturating_sub(1));
                 for row in viewport_start..viewport_end {
@@ -2298,14 +2298,17 @@ impl Reader {
 
     // Navigation methods
     fn move_cursor(&mut self, direction: AppDirection) {
-        let seamless = {
+        let (seamless, show_top_bar) = {
             let state = self.state.borrow();
-            state.config.settings.seamless_between_chapters
+            (
+                state.config.settings.seamless_between_chapters,
+                state.config.settings.show_top_bar,
+            )
         };
         let mut state = self.state.borrow_mut();
         let total_lines = self.board.total_lines();
         let current_row = state.reading_state.row;
-        let page = self.page_size();
+        let page = Self::page_size_for(show_top_bar);
 
         match direction {
             AppDirection::Up => {
@@ -2806,11 +2809,25 @@ impl Reader {
         last_content_row.unwrap_or_else(|| next_chapter_start.saturating_sub(1))
     }
 
-    fn page_size(&self) -> usize {
+    /// Pure page-size calculation; callers that already hold a borrow on `state`
+    /// should call this directly to avoid a RefCell double-borrow panic.
+    fn page_size_for(show_top_bar: bool) -> usize {
         match crossterm::terminal::size() {
-            Ok((_cols, rows)) => rows.saturating_sub(1) as usize,
+            Ok((_cols, rows)) => {
+                let chrome: u16 = if show_top_bar {
+                    1 + 2 + 2 // top_bar + top_gap + bottom_gap
+                } else {
+                    2 // bottom_gap only
+                };
+                rows.saturating_sub(chrome) as usize
+            }
             Err(_) => 0,
         }
+    }
+
+    fn page_size(&self) -> usize {
+        let show_top_bar = self.state.borrow().config.settings.show_top_bar;
+        Self::page_size_for(show_top_bar)
     }
 
     fn chapter_break_page_height(&self) -> Option<usize> {
