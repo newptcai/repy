@@ -16,6 +16,9 @@ The goal is to keep the reading experience and keybindings familiar while improv
 performance, robustness, and portability by using Rust and a fully self-contained
 SQLite implementation.
 
+![repy reading view](screenshots/reader-view.png)
+*A clean reading experience in `repy`, showing Marcus Aurelius's Meditations with hyphenation, footnote markers, and progress tracking.*
+
 ## Status
 
 **Functional for daily use!** Core reading features are complete: TUI navigation, search, bookmarks,
