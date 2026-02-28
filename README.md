@@ -33,19 +33,29 @@ See [to-do.md](to-do.md) for detailed feature status and roadmap.
 
 ## Installation
 
-### Prerequisites
+### Download Binaries
 
-You need Rust and Cargo installed. If you don't have them:
+You can download pre-built binaries for Linux, Windows, and macOS from the [GitHub Releases](https://github.com/newptcai/repy/releases) page.
+
+- **Linux**: Download `repy-linux-x86_64` (compatible with most modern distributions).
+- **Windows**: Download `repy-windows-x86_64.exe`.
+- **macOS**: Download `repy-macos-universal` (works natively on both Intel and Apple Silicon Macs).
+
+After downloading, rename the file to `repy` (or `repy.exe` on Windows) and make it executable:
 
 ```sh
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+# Linux/macOS
+chmod +x repy-*-*
+mv repy-*-* /usr/local/bin/repy
 ```
 
 ### Build from source
 
+If you prefer to build it yourself, you need Rust and Cargo installed.
+
 ```sh
 # Clone this repository
-git clone https://github.com/xing-rep/repy.git
+git clone https://github.com/newptcai/repy.git
 cd repy
 
 # Build and install
