@@ -4395,6 +4395,7 @@ impl Reader {
 
     /// Stop TTS playback — kill the entire process group.
     fn stop_tts(&mut self) {
+        #[allow(unused_variables)]
         if let Some(pid) = self.tts_kill_pid.take() {
             #[cfg(unix)]
             unsafe {
