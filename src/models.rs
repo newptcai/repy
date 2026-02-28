@@ -156,6 +156,7 @@ pub struct TextStructure {
     pub section_rows: HashMap<String, usize>,
     pub formatting: Vec<InlineStyle>,
     pub links: Vec<LinkEntry>,
+    pub pagebreak_map: HashMap<usize, String>,
 }
 
 pub const CHAPTER_BREAK_MARKER: &str = "<repy:chapter-break>";
@@ -455,6 +456,7 @@ mod tests {
         assert!(text_structure.section_rows.is_empty());
         assert!(text_structure.formatting.is_empty());
         assert!(text_structure.links.is_empty());
+        assert!(text_structure.pagebreak_map.is_empty());
     }
 
     #[test]
@@ -483,6 +485,7 @@ mod tests {
                 url: "https://example.com".to_string(),
                 target_row: None,
             }],
+            pagebreak_map: std::collections::HashMap::new(),
         };
 
         assert_eq!(text_structure.text_lines.len(), 2);

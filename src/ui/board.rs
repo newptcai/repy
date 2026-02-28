@@ -527,6 +527,18 @@ impl Board {
             .and_then(|ts| ts.image_maps.get(&line).cloned())
     }
 
+    /// Returns the page label at or before `row`, or None if the book has no pagebreak markers.
+    pub fn current_page_label(&self, row: usize) -> Option<&str> {
+        let map = &self.text_structure.as_ref()?.pagebreak_map;
+        if map.is_empty() {
+            return None;
+        }
+        map.iter()
+            .filter(|&(&k, _)| k <= row)
+            .max_by_key(|&(&k, _)| k)
+            .map(|(_, v)| v.as_str())
+    }
+
     pub fn get_selected_text_range(&self, start: (usize, usize), end: (usize, usize)) -> String {
         let Some(text_structure) = &self.text_structure else {
             return String::new();
@@ -608,6 +620,7 @@ mod tests {
             section_rows: HashMap::new(),
             formatting: vec![],
             links: vec![],
+            pagebreak_map: HashMap::new(),
         };
 
         let board = Board::new().with_text_structure(text_structure.clone());
@@ -630,6 +643,7 @@ mod tests {
             section_rows: HashMap::new(),
             formatting: vec![],
             links: vec![],
+            pagebreak_map: HashMap::new(),
         };
 
         board.update_text_structure(text_structure);
@@ -647,6 +661,7 @@ mod tests {
             section_rows: HashMap::new(),
             formatting: vec![],
             links: vec![],
+            pagebreak_map: HashMap::new(),
         };
 
         board.update_text_structure(text_structure);
@@ -666,6 +681,7 @@ mod tests {
             section_rows: HashMap::new(),
             formatting: vec![],
             links: vec![],
+            pagebreak_map: HashMap::new(),
         };
 
         board.update_text_structure(text_structure);
@@ -684,6 +700,7 @@ mod tests {
             section_rows: HashMap::new(),
             formatting: vec![],
             links: vec![],
+            pagebreak_map: HashMap::new(),
         };
 
         board.update_text_structure(text_structure.clone());

@@ -848,6 +848,9 @@ impl Reader {
                 .formatting
                 .extend(ts.formatting.clone());
             combined_text_structure.links.extend(ts.links.clone());
+            combined_text_structure
+                .pagebreak_map
+                .extend(ts.pagebreak_map.clone());
         }
 
         self.board.update_text_structure(combined_text_structure);
@@ -2058,18 +2061,29 @@ impl Reader {
         } else {
             None
         };
-        let right_text = match (mode_hint, link_hint, percent_text) {
-            (Some(mode), Some(link_hint), Some(percent_text)) => {
-                Some(format!("{} {} {}", mode, link_hint, percent_text))
+        let page_text = board
+            .current_page_label(state.reading_state.row)
+            .map(|label| format!("p.{}", label));
+        let progress_text = match (page_text, percent_text) {
+            (Some(page), Some(pct)) => Some(format!("{} {}", page, pct)),
+            (Some(page), None) => Some(page),
+            (None, Some(pct)) => Some(pct),
+            (None, None) => None,
+        };
+        let right_text = match (mode_hint, link_hint, progress_text) {
+            (Some(mode), Some(link_hint), Some(progress_text)) => {
+                Some(format!("{} {} {}", mode, link_hint, progress_text))
             }
             (Some(mode), Some(link_hint), None) => Some(format!("{} {}", mode, link_hint)),
-            (Some(mode), None, Some(percent_text)) => Some(format!("{} {}", mode, percent_text)),
+            (Some(mode), None, Some(progress_text)) => {
+                Some(format!("{} {}", mode, progress_text))
+            }
             (Some(mode), None, None) => Some(mode),
-            (None, Some(link_hint), Some(percent_text)) => {
-                Some(format!("{} {}", link_hint, percent_text))
+            (None, Some(link_hint), Some(progress_text)) => {
+                Some(format!("{} {}", link_hint, progress_text))
             }
             (None, Some(link_hint), None) => Some(link_hint),
-            (None, None, Some(percent_text)) => Some(percent_text),
+            (None, None, Some(progress_text)) => Some(progress_text),
             (None, None, None) => None,
         };
         if show_top_bar {
@@ -3532,6 +3546,9 @@ impl Reader {
                 .formatting
                 .extend(ts.formatting.clone());
             combined_text_structure.links.extend(ts.links.clone());
+            combined_text_structure
+                .pagebreak_map
+                .extend(ts.pagebreak_map.clone());
         }
         self.board.update_text_structure(combined_text_structure);
         self.content_start_rows = content_start_rows;

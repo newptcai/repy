@@ -24,6 +24,25 @@ static RE_IMG_ALT: LazyLock<Regex> =
 static RE_IMG_TITLE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r#"title=["']([^"']*)["']"#).unwrap());
 
+// Pagebreak sentinel regexes
+static RE_PAGEBREAK_SELF: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"(?is)<[a-z][a-z0-9]*[^>]*epub:type="pagebreak"[^>]*/>"#).unwrap()
+});
+// Matches open+close pagebreak tag pairs (no backreference — regex crate doesn't support them)
+static RE_PAGEBREAK_PAIR: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"(?is)<[a-z][a-z0-9]*[^>]*epub:type="pagebreak"[^>]*>[^<]*</[a-z][a-z0-9]*>"#)
+        .unwrap()
+});
+static RE_PB_LABEL_ATTR: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"(?i)(?:title|aria-label)="([^"]*)""#).unwrap()
+});
+static RE_PB_ID_ATTR: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"(?i)id="([^"]*)""#).unwrap()
+});
+static RE_PB_INNER: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#">([^<]*)<"#).unwrap());
+static RE_PB_SENTINEL: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"@@PB:([^@]+)@@").unwrap());
+
 /// Simple HTML parser for ebook content
 /// This uses html2text for the heavy lifting and adds some basic structure tracking
 pub fn parse_html(
@@ -35,6 +54,7 @@ pub fn parse_html(
     let text_width = text_width.unwrap_or(80);
     let html_src = preprocess_inline_annotations(html_src);
     let html_src = preprocess_images(&html_src);
+    let html_src = preprocess_pagebreaks(&html_src);
 
     // Parse HTML once
     let fragment = Html::parse_fragment(&html_src);
@@ -54,7 +74,8 @@ pub fn parse_html(
     // Strip inline markers before wrapping so invisible chars don't affect line breaks.
     let mut marker_formatting = extract_formatting(&fragment, starting_line, &raw_lines)?;
     strip_inline_markers(&mut raw_lines, &mut marker_formatting, starting_line);
-    let plain_text = wrap_text(raw_lines, text_width);
+    let mut plain_text = wrap_text(raw_lines, text_width);
+    let pagebreak_map = extract_pagebreak_map(&mut plain_text, starting_line);
 
     // Extract structure information using the parsed fragment
     let image_maps = extract_images(&fragment, starting_line, &plain_text)?;
@@ -73,6 +94,7 @@ pub fn parse_html(
         section_rows,
         formatting,
         links,
+        pagebreak_map,
     })
 }
 
@@ -111,6 +133,60 @@ fn wrap_text(lines: Vec<String>, width: usize) -> Vec<String> {
         }
     }
     wrapped
+}
+
+fn extract_page_label(element_str: &str) -> String {
+    if let Some(cap) = RE_PB_LABEL_ATTR.captures(element_str) {
+        let label = cap[1].trim().to_string();
+        if !label.is_empty() {
+            return label;
+        }
+    }
+    if let Some(cap) = RE_PB_INNER.captures(element_str) {
+        let inner = cap[1].trim().to_string();
+        if !inner.is_empty() {
+            return inner;
+        }
+    }
+    if let Some(cap) = RE_PB_ID_ATTR.captures(element_str) {
+        let id = cap[1].trim().to_string();
+        // Strip non-digit prefix (e.g. "page42" → "42")
+        let digits: String = id.chars().skip_while(|c| !c.is_ascii_digit()).collect();
+        if !digits.is_empty() {
+            return digits;
+        }
+        if !id.is_empty() {
+            return id;
+        }
+    }
+    "?".to_string()
+}
+
+fn preprocess_pagebreaks(html: &str) -> String {
+    let result = RE_PAGEBREAK_SELF.replace_all(html, |caps: &Captures| {
+        format!("@@PB:{}@@", extract_page_label(&caps[0]))
+    });
+    RE_PAGEBREAK_PAIR
+        .replace_all(&result, |caps: &Captures| {
+            format!("@@PB:{}@@", extract_page_label(&caps[0]))
+        })
+        .to_string()
+}
+
+fn extract_pagebreak_map(
+    text_lines: &mut Vec<String>,
+    starting_line: usize,
+) -> HashMap<usize, String> {
+    let mut map = HashMap::new();
+    for (i, line) in text_lines.iter_mut().enumerate() {
+        if line.contains("@@PB:") {
+            if let Some(cap) = RE_PB_SENTINEL.captures(line) {
+                map.insert(starting_line + i, cap[1].trim().to_string());
+            }
+            *line = RE_PB_SENTINEL.replace_all(line, "").trim().to_string();
+        }
+    }
+    map
 }
 
 fn preprocess_inline_annotations(html: &str) -> String {
@@ -1424,6 +1500,25 @@ mod tests {
         strip_inline_markers(&mut text_lines, &mut formatting, 0);
         // It should NOT strip the '*' because it's preceded by 'O' (not boundary)
         assert_eq!(text_lines[0], "O*REILLY");
+    }
+
+    #[test]
+    fn test_pagebreak_extraction() {
+        let html = r#"<p>End of page.</p>
+<span epub:type="pagebreak" id="page42" title="42"></span>
+<p>Start of new page.</p>"#;
+        let result = parse_html(html, Some(80), None, 0).unwrap();
+        assert!(!result.pagebreak_map.is_empty());
+        assert!(result.pagebreak_map.values().any(|v| v == "42"));
+        assert!(!result.text_lines.iter().any(|l| l.contains("@@PB:")));
+    }
+
+    #[test]
+    fn test_pagebreak_with_content() {
+        let html = r#"<p>Before.</p><span epub:type="pagebreak">99</span><p>After.</p>"#;
+        let result = parse_html(html, Some(80), None, 0).unwrap();
+        assert!(result.pagebreak_map.values().any(|v| v == "99"));
+        assert!(!result.text_lines.iter().any(|l| l.contains("@@PB:")));
     }
 }
 
