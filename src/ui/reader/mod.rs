@@ -3058,13 +3058,13 @@ impl Reader {
             && let Some(section_rows) = self.board.section_rows()
             && let Some(row) = section_rows.get(section_id)
         {
-            target_row = Some(*row);
+            target_row = Some(Self::row_from_start(*row));
         }
 
         if target_row.is_none()
             && let Some(row) = self.content_start_rows.get(content_index)
         {
-            target_row = Some(*row);
+            target_row = Some(Self::row_from_start(*row));
         }
 
         if let Some(row) = target_row {
