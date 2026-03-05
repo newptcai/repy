@@ -147,6 +147,7 @@ pub struct UiState {
     pub metadata: Option<BookMetadata>,
     pub dictionary_word: String,
     pub dictionary_definition: String,
+    pub dictionary_client_used: String,
     pub dictionary_scroll_offset: u16,
     pub dictionary_command_query: String,
     pub settings_selected_index: usize,
@@ -201,6 +202,7 @@ impl UiState {
             metadata: None,
             dictionary_word: String::new(),
             dictionary_definition: String::new(),
+            dictionary_client_used: String::new(),
             dictionary_scroll_offset: 0,
             dictionary_command_query: String::new(),
             settings_selected_index: 0,
@@ -292,6 +294,7 @@ pub struct SearchResult {
 pub struct DictionaryResult {
     pub word: String,
     pub definition: Result<String, String>,
+    pub client: String,
 }
 
 #[derive(Debug, Clone)]
@@ -939,6 +942,7 @@ impl Reader {
                 if let Ok(res) = rx.try_recv() {
                     let mut state = self.state.borrow_mut();
                     state.ui_state.dictionary_word = res.word;
+                    state.ui_state.dictionary_client_used = res.client;
                     state.ui_state.dictionary_definition = match res.definition {
                         Ok(def) => def,
                         Err(err) => err,
@@ -1860,6 +1864,7 @@ impl Reader {
                 frame.area(),
                 &state.ui_state.dictionary_word,
                 &state.ui_state.dictionary_definition,
+                &state.ui_state.dictionary_client_used,
                 state.ui_state.dictionary_scroll_offset,
                 state.ui_state.dictionary_loading,
                 state.ui_state.dictionary_is_wikipedia,
@@ -2194,24 +2199,8 @@ impl Reader {
         let mut selected_index = 0;
 
         for (i, entry) in toc_entries.iter().enumerate() {
-            let mut target_row = None;
-
-            // Try to resolve row from section ID
-            if let Some(section_id) = &entry.section
-                && let Some(section_rows) = self.board.section_rows()
-                && let Some(row) = section_rows.get(section_id)
-            {
-                target_row = Some(*row);
-            }
-
-            // Fallback to content index
-            if target_row.is_none()
-                && let Some(row) = self.content_start_rows.get(entry.content_index)
-            {
-                target_row = Some(*row);
-            }
-
-            if let Some(row) = target_row
+            if let Some(row) =
+                self.effective_toc_row(entry.content_index, entry.section.as_deref())
                 && row <= current_row
             {
                 selected_index = i;
@@ -2889,21 +2878,55 @@ impl Reader {
         if start_line == 0 { 0 } else { start_line + 1 }
     }
 
+    /// Resolve the effective jump target row for a TOC entry.
+    ///
+    /// EPUBs produced by tools like Calibre often place a section anchor at the very
+    /// END of the preceding chapter file (as a visual divider / forward pointer), while
+    /// the real chapter content starts in the NEXT file.  We detect this by counting
+    /// how many non-empty, non-break-marker lines remain from the resolved anchor row
+    /// to the end of its chapter.  If ≤ 2 such lines remain the anchor is treated as a
+    /// forward pointer and we return the start of the next chapter instead.
+    ///
+    /// Returns a raw 0-indexed row (suitable for passing to `row_from_start`), or
+    /// `None` when no position can be determined.
+    fn effective_toc_row(&self, content_index: usize, section_id: Option<&str>) -> Option<usize> {
+        if let Some(section_id) = section_id
+            && let Some(ts) = self.chapter_text_structures.get(content_index)
+            && let Some(&section_row) = ts.section_rows.get(section_id)
+        {
+            let ch_start = self.content_start_rows.get(content_index).copied().unwrap_or(0);
+            let local_row = section_row.saturating_sub(ch_start);
+            let meaningful_remaining = ts
+                .text_lines
+                .get(local_row..)
+                .map(|lines| {
+                    lines
+                        .iter()
+                        .filter(|l| !l.is_empty() && l.as_str() != CHAPTER_BREAK_MARKER)
+                        .count()
+                })
+                .unwrap_or(0);
+
+            if meaningful_remaining <= 2 {
+                // Forward anchor: the real chapter starts in the next file.
+                if let Some(&next_start) = self.content_start_rows.get(content_index + 1) {
+                    return Some(next_start);
+                }
+            }
+            return Some(section_row);
+        }
+        // No section anchor (or lookup failed) – fall back to chapter start.
+        self.content_start_rows.get(content_index).copied()
+    }
+
     fn chapter_rows(&self) -> Vec<usize> {
-        let section_rows = self.board.section_rows();
         let state = self.state.borrow();
         let mut rows = Vec::new();
         for entry in &state.ui_state.toc_entries {
-            // First try to use section ID if available
-            if let Some(section) = entry.section.as_ref() {
-                if let Some(section_rows) = section_rows
-                    && let Some(row) = section_rows.get(section)
-                {
-                    rows.push(*row);
-                }
-            } else if entry.content_index < self.content_start_rows.len() {
-                // Fall back to using content file index
-                rows.push(self.content_start_rows[entry.content_index]);
+            if let Some(row) =
+                self.effective_toc_row(entry.content_index, entry.section.as_deref())
+            {
+                rows.push(row);
             }
         }
         rows.sort_unstable();
@@ -3053,19 +3076,9 @@ impl Reader {
             }
         };
 
-        let mut target_row = None;
-        if let Some(section_id) = section.as_ref()
-            && let Some(section_rows) = self.board.section_rows()
-            && let Some(row) = section_rows.get(section_id)
-        {
-            target_row = Some(*row);
-        }
-
-        if target_row.is_none()
-            && let Some(row) = self.content_start_rows.get(content_index)
-        {
-            target_row = Some(*row);
-        }
+        let target_row = self
+            .effective_toc_row(content_index, section.as_deref())
+            .map(Self::row_from_start);
 
         if let Some(row) = target_row {
             self.record_jump_position();
@@ -3655,6 +3668,7 @@ impl Reader {
             let mut any_command_ran = false;
             let mut last_stderr: Option<String> = None;
             let mut definition: Option<String> = None;
+            let mut successful_client: String = String::new();
 
             for client in clients_to_try {
                 let remaining = total_timeout.saturating_sub(start_total.elapsed());
@@ -3669,6 +3683,7 @@ impl Reader {
                         let stderr_text = String::from_utf8_lossy(&out.stderr).trim().to_string();
                         if !stdout_text.is_empty() {
                             definition = Some(stdout_text);
+                            successful_client = client;
                             break;
                         }
                         if !stderr_text.is_empty() {
@@ -3692,12 +3707,13 @@ impl Reader {
                 Err(last_stderr
                     .unwrap_or_else(|| format!("No definition found for '{}'", word_clone)))
             } else {
-                Err("No dictionary program found (install sdcv, dict, or wkdict)".to_string())
+                Err("No dictionary program found (install dict, sdcv, or wkdict)".to_string())
             };
 
             let _ = tx.send(DictionaryResult {
                 word: word_clone,
                 definition: result_definition,
+                client: successful_client,
             });
         });
 
@@ -3760,6 +3776,7 @@ impl Reader {
             let _ = tx.send(DictionaryResult {
                 word: query,
                 definition: result_definition,
+                client: "Wikipedia".to_string(),
             });
         });
 

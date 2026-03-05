@@ -35,6 +35,7 @@ impl DictionaryWindow {
         area: Rect,
         word: &str,
         definition: &str,
+        client: &str,
         scroll_offset: u16,
         loading: bool,
         is_wikipedia: bool,
@@ -42,9 +43,15 @@ impl DictionaryWindow {
         let popup_area = super::centered_popup_area(area, 70, 80);
         frame.render_widget(Clear, popup_area);
 
-        let label = if is_wikipedia { "Wikipedia" } else { "Dictionary" };
+        let label = if is_wikipedia {
+            "Wikipedia".to_string()
+        } else if !client.is_empty() {
+            format!("Dictionary ({})", client)
+        } else {
+            "Dictionary".to_string()
+        };
         let title = if word.is_empty() {
-            label.to_string()
+            label
         } else {
             format!("{label}: {word}")
         };
