@@ -23,11 +23,11 @@ SQLite implementation.
 
 **Functional for daily use!** Core reading features are complete: TUI navigation, search, bookmarks,
 library management, two-phase cursor/selection modes, image viewing, link/footnote handling, dictionary lookup,
-and Wikipedia lookup all work. Text is intelligently wrapped and hyphenated. Reading state and
-preferences are persisted per-book.
+Wikipedia lookup, and TTS (text-to-speech) all work. Text is intelligently wrapped and hyphenated.
+Reading state and preferences are persisted per-book.
 
-**Not yet implemented:** TTS (text-to-speech), export functionality,
-advanced search features (history, fuzzy, incremental), mouse support, and additional ebook formats beyond EPUB.
+**Not yet implemented:** export functionality, advanced search features (history, fuzzy, incremental),
+mouse support, and additional ebook formats beyond EPUB.
 
 See [to-do.md](to-do.md) for detailed feature status and roadmap.
 
@@ -136,6 +136,7 @@ Press `?` in the TUI to see the help window at any time (`Help (?)`).
 
 ### Windows & Tools
 - `/` — Search
+- `!` — Text-to-Speech (Toggle)
 - `v` — Cursor Mode
 - `t` — Table of Contents
 - `m` — Bookmarks (`a` to add, `d` to delete, `Enter` to jump)
@@ -164,6 +165,15 @@ The text-selection flow is two-phase:
 6. Press `d` to run dictionary lookup on the selection. By default it tries `sdcv`, `dict`, and `wkdict`. You can configure a custom command template in Settings (`s`).
 7. Press `p` to run Wikipedia lookup on the selection; the popup shows a link to the page plus the summary (10s timeout).
 8. Press `Esc` to leave selection mode back to cursor mode; press `Esc` again to return to reader mode.
+
+## Text-to-Speech (TTS)
+
+Press `!` to toggle reading aloud from the current paragraph.
+
+- **Engine Support**: Defaults to `edge-playback` (Microsoft Edge TTS) for high-quality voices. Can be configured to `espeak`, `say` (macOS), or any custom shell command via Settings (`s`).
+- **Visual Feedback**: The paragraph currently being read is underlined in the UI.
+- **Smart Scrolling**: The reader automatically scrolls to keep the active paragraph visible as it progresses through the book.
+- **Granularity**: Text is sent to the TTS engine in manageable chunks (sentence-by-sentence) to ensure responsiveness and proper UI syncing.
 
 ## Configuration
 
