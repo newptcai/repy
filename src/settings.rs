@@ -28,7 +28,7 @@ pub const VIEWER_PRESET_LIST: &[&str] = &[
     "firefox",
 ];
 
-pub const DICT_PRESET_LIST: &[&str] = &["wkdict", "sdcv", "dict"];
+pub const DICT_PRESET_LIST: &[&str] = &["dict", "sdcv", "wkdict"];
 
 pub const TTS_PRESET_LIST: &[&str] = &["edge-playback", "espeak", "say"];
 

@@ -147,6 +147,7 @@ pub struct UiState {
     pub metadata: Option<BookMetadata>,
     pub dictionary_word: String,
     pub dictionary_definition: String,
+    pub dictionary_client_used: String,
     pub dictionary_scroll_offset: u16,
     pub dictionary_command_query: String,
     pub settings_selected_index: usize,
@@ -201,6 +202,7 @@ impl UiState {
             metadata: None,
             dictionary_word: String::new(),
             dictionary_definition: String::new(),
+            dictionary_client_used: String::new(),
             dictionary_scroll_offset: 0,
             dictionary_command_query: String::new(),
             settings_selected_index: 0,
@@ -292,6 +294,7 @@ pub struct SearchResult {
 pub struct DictionaryResult {
     pub word: String,
     pub definition: Result<String, String>,
+    pub client: String,
 }
 
 #[derive(Debug, Clone)]
@@ -939,6 +942,7 @@ impl Reader {
                 if let Ok(res) = rx.try_recv() {
                     let mut state = self.state.borrow_mut();
                     state.ui_state.dictionary_word = res.word;
+                    state.ui_state.dictionary_client_used = res.client;
                     state.ui_state.dictionary_definition = match res.definition {
                         Ok(def) => def,
                         Err(err) => err,
@@ -1860,6 +1864,7 @@ impl Reader {
                 frame.area(),
                 &state.ui_state.dictionary_word,
                 &state.ui_state.dictionary_definition,
+                &state.ui_state.dictionary_client_used,
                 state.ui_state.dictionary_scroll_offset,
                 state.ui_state.dictionary_loading,
                 state.ui_state.dictionary_is_wikipedia,
@@ -3663,6 +3668,7 @@ impl Reader {
             let mut any_command_ran = false;
             let mut last_stderr: Option<String> = None;
             let mut definition: Option<String> = None;
+            let mut successful_client: String = String::new();
 
             for client in clients_to_try {
                 let remaining = total_timeout.saturating_sub(start_total.elapsed());
@@ -3677,6 +3683,7 @@ impl Reader {
                         let stderr_text = String::from_utf8_lossy(&out.stderr).trim().to_string();
                         if !stdout_text.is_empty() {
                             definition = Some(stdout_text);
+                            successful_client = client;
                             break;
                         }
                         if !stderr_text.is_empty() {
@@ -3700,12 +3707,13 @@ impl Reader {
                 Err(last_stderr
                     .unwrap_or_else(|| format!("No definition found for '{}'", word_clone)))
             } else {
-                Err("No dictionary program found (install sdcv, dict, or wkdict)".to_string())
+                Err("No dictionary program found (install dict, sdcv, or wkdict)".to_string())
             };
 
             let _ = tx.send(DictionaryResult {
                 word: word_clone,
                 definition: result_definition,
+                client: successful_client,
             });
         });
 
@@ -3768,6 +3776,7 @@ impl Reader {
             let _ = tx.send(DictionaryResult {
                 word: query,
                 definition: result_definition,
+                client: "Wikipedia".to_string(),
             });
         });
 
