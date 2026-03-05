@@ -2198,8 +2198,8 @@ impl Reader {
 
             // Try to resolve row from section ID
             if let Some(section_id) = &entry.section
-                && let Some(section_rows) = self.board.section_rows()
-                && let Some(row) = section_rows.get(section_id)
+                && let Some(ts) = self.chapter_text_structures.get(entry.content_index)
+                && let Some(row) = ts.section_rows.get(section_id)
             {
                 target_row = Some(*row);
             }
@@ -2890,14 +2890,13 @@ impl Reader {
     }
 
     fn chapter_rows(&self) -> Vec<usize> {
-        let section_rows = self.board.section_rows();
         let state = self.state.borrow();
         let mut rows = Vec::new();
         for entry in &state.ui_state.toc_entries {
             // First try to use section ID if available
             if let Some(section) = entry.section.as_ref() {
-                if let Some(section_rows) = section_rows
-                    && let Some(row) = section_rows.get(section)
+                if let Some(ts) = self.chapter_text_structures.get(entry.content_index)
+                    && let Some(row) = ts.section_rows.get(section)
                 {
                     rows.push(*row);
                 }
@@ -3055,8 +3054,8 @@ impl Reader {
 
         let mut target_row = None;
         if let Some(section_id) = section.as_ref()
-            && let Some(section_rows) = self.board.section_rows()
-            && let Some(row) = section_rows.get(section_id)
+            && let Some(ts) = self.chapter_text_structures.get(content_index)
+            && let Some(row) = ts.section_rows.get(section_id)
         {
             target_row = Some(Self::row_from_start(*row));
         }
