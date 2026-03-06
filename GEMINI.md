@@ -60,6 +60,7 @@ Example
 - Test-driven development for complex components.
 - Cross-platform mindset (Linux/macOS/Windows).
 - Preserve epy behavior while improving performance.
+- Always update `Cargo.lock` with `cargo update` before tagging a release to avoid CI failures.
 
 
 ## Success Metrics
