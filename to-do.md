@@ -113,6 +113,7 @@ The detailed roadmap below remains the source of truth for planned work.
 
 10. **Text-to-Speech Integration (`src/tts/`):**
     *   [ ] Create TTS trait system for multiple engine support
+    *   [ ] **edge-playback Engine**: Default high-quality voices (requires [edge-tts](https://github.com/rany2/edge-tts))
     *   [ ] **GTTS + MPV Engine**: Async TTS with progress tracking
     *   [ ] **Mimic Engine**: Local TTS synthesis integration
     *   [ ] **Pico Engine**: Cross-platform voice synthesis

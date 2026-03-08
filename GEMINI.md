@@ -223,7 +223,7 @@ src/
 
 ### Text-to-Speech (TTS)
 - Press `!` to toggle TTS (read aloud) from the current paragraph
-- Default engine: `edge-playback` (from `edge-tts` Python package, uses Microsoft Edge as backend)
+- Default engine: `edge-playback` (requires [edge-tts](https://github.com/rany2/edge-tts))
 - Reads paragraph by paragraph; the active paragraph is underlined
 - Auto-scrolls to keep the current paragraph at the top of the page
 - Press `!` again to stop TTS

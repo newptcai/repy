@@ -170,7 +170,7 @@ The text-selection flow is two-phase:
 
 Press `!` to toggle reading aloud from the current paragraph.
 
-- **Engine Support**: Defaults to `edge-playback` (Microsoft Edge TTS) for high-quality voices. Can be configured to `espeak`, `say` (macOS), or any custom shell command via Settings (`s`).
+- **Engine Support**: Defaults to `edge-playback` (requires [edge-tts](https://github.com/rany2/edge-tts)) for high-quality voices. Can be configured to `espeak`, `say` (macOS), or any custom shell command via Settings (`s`).
 - **Visual Feedback**: The paragraph currently being read is underlined in the UI.
 - **Smart Scrolling**: The reader automatically scrolls to keep the active paragraph visible as it progresses through the book.
 - **Granularity**: Text is sent to the TTS engine in manageable chunks (sentence-by-sentence) to ensure responsiveness and proper UI syncing.
