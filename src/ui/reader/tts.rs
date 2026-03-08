@@ -241,6 +241,55 @@ impl Reader {
             self.stop_tts();
             return Ok(());
         }
+
+        // Check if the TTS engine is available
+        let engine = {
+            let state = self.state.borrow();
+            state
+                .config
+                .settings
+                .preferred_tts_engine
+                .clone()
+                .unwrap_or_default()
+        };
+        let program = if engine.is_empty() || engine == "edge-playback" {
+            "edge-playback"
+        } else if engine == "espeak" {
+            "espeak"
+        } else if engine == "say" {
+            "say"
+        } else if engine.contains("{}") {
+            engine.split_whitespace().next().unwrap_or_default()
+        } else {
+            &engine
+        };
+
+        if !program.is_empty() {
+            let exists = match std::process::Command::new(program)
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn()
+            {
+                Ok(mut child) => {
+                    let _ = child.kill();
+                    true
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => false,
+                Err(_) => true, // Some other error, assume it exists but failed for other reasons
+            };
+
+            if !exists {
+                let mut state = self.state.borrow_mut();
+                let msg = if program == "edge-playback" {
+                    "TTS failed: 'edge-playback' not found. Install edge-tts: https://github.com/rany2/edge-tts".to_string()
+                } else {
+                    format!("TTS failed: command '{}' not found", program)
+                };
+                state.ui_state.set_message(msg, MessageType::Error);
+                return Ok(());
+            }
+        }
+
         self.tts_chunks = self.build_tts_chunks();
         let current_row = self.state.borrow().reading_state.row;
         let idx = match self.find_chunk_at(current_row) {
