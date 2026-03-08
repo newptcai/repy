@@ -2139,17 +2139,35 @@ impl Reader {
             MessageType::Error => Color::Red,
         };
 
+        let frame_area = frame.area();
+        let max_width = frame_area.width.saturating_sub(4);
+        
+        // Simple line wrapping calculation to estimate height
+        let mut lines = 1;
+        let mut current_line_len = 0;
+        for word in message.split_whitespace() {
+            let word_len = word.chars().count();
+            if current_line_len + word_len + 1 > max_width as usize {
+                lines += 1;
+                current_line_len = word_len;
+            } else {
+                current_line_len += word_len + 1;
+            }
+        }
+        
+        let height = (lines + 2).min(frame_area.height.saturating_sub(4)) as u16;
+        let height = height.max(3);
+
         let message_paragraph = Paragraph::new(message)
             .style(Style::default().fg(color))
             .block(Block::default().borders(Borders::ALL))
             .wrap(Wrap { trim: true });
 
-        let frame_area = frame.area();
         let area = Rect {
             x: frame_area.x + 2,
             y: frame_area.y + 2,
-            width: frame_area.width - 4,
-            height: 3,
+            width: max_width,
+            height,
         };
 
         frame.render_widget(Clear, area);
