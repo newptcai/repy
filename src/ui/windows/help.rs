@@ -42,7 +42,6 @@ const HELP_TEXT: &[&str] = &[
     "   s                 Settings",
     " Text-to-Speech:",
     "   !                 Toggle TTS (Read Aloud)",
-    "   Esc               Stop TTS",
     " Cursor Mode:",
     "   hjkl, w/b/e       Move cursor",
     " Selection Mode:",

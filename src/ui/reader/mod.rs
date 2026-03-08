@@ -384,7 +384,7 @@ pub struct Reader {
     dictionary_res_rx: Option<std::sync::mpsc::Receiver<DictionaryResult>>,
     /// Channel to receive notification when a TTS chunk finishes speaking
     tts_done_rx: Option<std::sync::mpsc::Receiver<()>>,
-    /// Handle to the running TTS child process so we can kill it on Esc
+    /// Handle to the running TTS child process
     tts_child: Option<std::process::Child>,
     /// Precomputed TTS chunks with text and per-line underline ranges
     tts_chunks: Vec<TtsChunk>,
@@ -1310,12 +1310,6 @@ impl Reader {
             // TTS toggle
             KeyCode::Char('!') => {
                 self.toggle_tts()?;
-            }
-            // Esc stops TTS if active
-            KeyCode::Esc => {
-                if self.state.borrow().ui_state.tts_active {
-                    self.stop_tts();
-                }
             }
 
             _ => {}

@@ -226,7 +226,7 @@ src/
 - Default engine: `edge-playback` (from `edge-tts` Python package, uses Microsoft Edge as backend)
 - Reads paragraph by paragraph; the active paragraph is underlined
 - Auto-scrolls to keep the current paragraph at the top of the page
-- Press `Esc` or `!` again to stop TTS
+- Press `!` again to stop TTS
 - Configurable via `preferred_tts_engine` in settings (cycle through presets in Settings window)
 - Preset engines: `edge-playback`, `espeak`, `say` (macOS)
 - Custom engine: set `preferred_tts_engine` to a command template with `{}` placeholder for text (e.g., `espeak -s 150 "{}"`)
