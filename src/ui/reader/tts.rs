@@ -265,18 +265,13 @@ impl Reader {
         };
 
         if !program.is_empty() {
-            let exists = match std::process::Command::new(program)
+            let exists = std::process::Command::new("which")
+                .arg(program)
                 .stdout(std::process::Stdio::null())
                 .stderr(std::process::Stdio::null())
-                .spawn()
-            {
-                Ok(mut child) => {
-                    let _ = child.kill();
-                    true
-                }
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => false,
-                Err(_) => true, // Some other error, assume it exists but failed for other reasons
-            };
+                .status()
+                .map(|s| s.success())
+                .unwrap_or(false);
 
             if !exists {
                 let mut state = self.state.borrow_mut();
