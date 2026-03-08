@@ -29,6 +29,14 @@ impl State {
         Ok(Self { conn })
     }
 
+    /// Create a new in-memory state for testing.
+    #[cfg(test)]
+    pub fn new_for_test() -> Self {
+        let conn = Connection::open_in_memory().unwrap();
+        Self::init_db(&conn).unwrap();
+        Self { conn }
+    }
+
     fn init_db(conn: &Connection) -> Result<()> {
         conn.execute_batch(
             "

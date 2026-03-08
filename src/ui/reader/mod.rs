@@ -277,7 +277,7 @@ impl UiState {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum MessageType {
     Info,
     Warning,
@@ -4227,6 +4227,42 @@ impl Reader {
             self.stop_tts();
             return Ok(());
         }
+
+        // Check if the TTS engine is available
+        let engine = {
+            let state = self.state.borrow();
+            state
+                .config
+                .settings
+                .preferred_tts_engine
+                .clone()
+                .unwrap_or_default()
+        };
+        let program = if engine.is_empty() || engine == "edge-playback" {
+            "edge-playback"
+        } else if engine == "espeak" {
+            "espeak"
+        } else if engine == "say" {
+            "say"
+        } else if engine.contains("{}") {
+            engine.split_whitespace().next().unwrap_or_default()
+        } else {
+            &engine
+        };
+
+        if !program.is_empty() {
+            if !self.check_program_exists(program) {
+                let mut state = self.state.borrow_mut();
+                let msg = if program == "edge-playback" {
+                    "TTS failed: 'edge-playback' not found. Install edge-tts: https://github.com/rany2/edge-tts".to_string()
+                } else {
+                    format!("TTS failed: command '{}' not found", program)
+                };
+                state.ui_state.set_message(msg, MessageType::Error);
+                return Ok(());
+            }
+        }
+
         self.tts_chunks = self.build_tts_chunks();
         let current_row = self.state.borrow().reading_state.row;
         let idx = match self.find_chunk_at(current_row) {
@@ -4428,6 +4464,34 @@ impl Reader {
         let mut state = self.state.borrow_mut();
         state.ui_state.tts_active = false;
         state.ui_state.tts_underline_ranges.clear();
+    }
+
+    /// Check if a program exists in the PATH.
+    fn check_program_exists(&self, program: &str) -> bool {
+        // Try 'which' command first
+        let status = std::process::Command::new("which")
+            .arg(program)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status();
+
+        match status {
+            Ok(s) => s.success(),
+            Err(_) => {
+                // 'which' failed for any reason (missing, etc.), fallback to direct spawn check
+                match std::process::Command::new(program)
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .spawn()
+                {
+                    Ok(mut child) => {
+                        let _ = child.kill();
+                        true
+                    }
+                    Err(e) => e.kind() != std::io::ErrorKind::NotFound,
+                }
+            }
+        }
     }
 }
 
@@ -4675,5 +4739,72 @@ mod tests {
             "https://simple.wikipedia.org/wiki/Rust_(programming_language)"
         );
         assert!(result.summary.contains("focused on safety"));
+    }
+
+    #[test]
+    fn tts_detection_hint_on_missing_program() {
+        use crate::config::Config;
+        use crate::ui::reader::ApplicationState;
+        use crate::ui::board::Board;
+        use crate::state::State;
+        use std::rc::Rc;
+        use std::cell::RefCell;
+        use crate::ui::reader::MessageType;
+        use crate::settings::{Settings, CfgDefaultKeymaps};
+        use ratatui::Terminal;
+        use ratatui::backend::CrosstermBackend;
+        use arboard::Clipboard;
+
+        let config = Config::with_settings(Settings::default(), CfgDefaultKeymaps::default()).unwrap();
+        let state = State::new_for_test();
+        let app_state = Rc::new(RefCell::new(ApplicationState::new(config)));
+        
+        // Ensure tts engine is set to edge-playback (default)
+        {
+            let mut s = app_state.borrow_mut();
+            s.config.settings.preferred_tts_engine = Some("edge-playback".to_string());
+        }
+
+        use crate::models::TextStructure;
+
+        let mut board = Board::new();
+        let ts = TextStructure {
+            text_lines: vec!["Some text to read for TTS test.".to_string()],
+            ..Default::default()
+        };
+        board = board.with_text_structure(ts);
+
+        let mut reader = Reader {
+            state: app_state.clone(),
+            terminal: Terminal::new(CrosstermBackend::new(std::io::stdout())).unwrap(),
+            db_state: state,
+            board,
+            clipboard: Clipboard::new().unwrap(),
+            ebook: None,
+            content_start_rows: Vec::new(),
+            chapter_text_structures: Vec::new(),
+            current_text_width: None,
+            dictionary_res_rx: None,
+            tts_done_rx: None,
+            tts_child: None,
+            tts_chunks: Vec::new(),
+            tts_chunk_index: 0,
+            tts_kill_pid: None,
+        };
+
+        // Set to a definitely missing program
+        {
+            let mut s = app_state.borrow_mut();
+            s.config.settings.preferred_tts_engine = Some("definitely-not-a-real-program-12345".to_string());
+        }
+
+        reader.toggle_tts().unwrap();
+
+        let s = app_state.borrow();
+        assert!(s.ui_state.message.is_some());
+        let msg = s.ui_state.message.as_ref().unwrap();
+        let msg_type = &s.ui_state.message_type;
+        assert_eq!(*msg_type, MessageType::Error);
+        assert!(msg.contains("command 'definitely-not-a-real-program-12345' not found"));
     }
 }
