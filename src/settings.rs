@@ -31,7 +31,7 @@ pub const VIEWER_PRESET_LIST: &[&str] = &[
 
 pub const DICT_PRESET_LIST: &[&str] = &["dict", "sdcv", "wkdict"];
 
-pub const TTS_PRESET_LIST: &[&str] = &["edge-playback", "espeak", "say"];
+pub const TTS_PRESET_LIST: &[&str] = &["edge-tts", "espeak"];
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
