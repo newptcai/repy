@@ -1,1 +1,4 @@
 /target
+
+# Allow HTML test fixtures (despite global *.html ignore)
+!tests/fixtures/*.html
