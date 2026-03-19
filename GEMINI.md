@@ -170,7 +170,14 @@ src/
 - Integration tests in `tests/` directory
 - Test fixtures in `tests/fixtures/`
 - Tests cover: CLI args, EPUB loading, parser correctness, footnotes, images, jump history, hyphenation, config, models, settings, state, board, dictionary, Wikipedia lookup
-- Current coverage: 162 test cases across unit and integration tests
+- Current coverage: 166+ test cases across unit and integration tests
+
+#### Testing HTML Parsing Issues
+When debugging or fixing HTML parsing bugs (links, footnotes, sections, formatting):
+1. **Create a minimal HTML fixture** in `tests/fixtures/` that reproduces the issue — trim the source HTML to only the essential structure (a few paragraphs + the problematic elements).
+2. **Write unit tests** in `src/parser.rs` `mod tests` that call the internal functions directly (`extract_links`, `extract_sections`, `extract_formatting`, `find_line_by_words`, etc.) with `Html::parse_document(&html)` or `Html::parse_fragment(&html)`.
+3. **Provide explicit `text_lines`** that match what the parser would produce — this avoids coupling to the full `parse_html` pipeline and keeps tests fast and focused.
+4. See `tests/fixtures/footnotes-class-based.html` and the `test_extract_links_filters_class_based_backlinks` / `test_extract_sections_class_based_footnotes` tests for a reference pattern.
 
 ### Dependencies
 - `ratatui` 0.30.0-beta.0: Terminal UI framework

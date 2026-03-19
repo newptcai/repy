@@ -6,7 +6,7 @@ use ratatui::{
     widgets::{Block, Borders, Clear, List, ListItem, ListState, Padding, Paragraph, Wrap},
 };
 
-use crate::models::LinkEntry;
+use crate::models::{CHAPTER_BREAK_MARKER, LinkEntry};
 use crate::theme::Theme;
 use crate::ui::board::Board;
 
@@ -133,20 +133,28 @@ impl LinksWindow {
         let mut preview_text = String::new();
         if let Some(entry) = entries.get(selected_index) {
             if let Some(target_row) = entry.target_row {
-                for i in 0..8 {
-                    if let Some(line) = board.get_line(target_row + i) {
-                        let trimmed = line.trim();
-                        if trimmed.is_empty() {
-                            if !preview_text.is_empty() && !preview_text.ends_with("\n\n") {
-                                preview_text.push_str("\n\n");
-                            }
-                        } else {
-                            if !preview_text.is_empty() && !preview_text.ends_with('\n') {
-                                preview_text.push(' ');
-                            }
-                            preview_text.push_str(trimmed);
-                        }
+                let mut lines_shown = 0;
+                let mut offset = 0;
+                while lines_shown < 8 {
+                    let Some(line) = board.get_line(target_row + offset) else {
+                        break;
+                    };
+                    offset += 1;
+                    let trimmed = line.trim();
+                    if trimmed == CHAPTER_BREAK_MARKER {
+                        break;
                     }
+                    if trimmed.is_empty() {
+                        if !preview_text.is_empty() && !preview_text.ends_with("\n\n") {
+                            preview_text.push_str("\n\n");
+                        }
+                    } else {
+                        if !preview_text.is_empty() && !preview_text.ends_with('\n') {
+                            preview_text.push(' ');
+                        }
+                        preview_text.push_str(trimmed);
+                    }
+                    lines_shown += 1;
                 }
             } else {
                 preview_text = format!("URL: {}", entry.url);

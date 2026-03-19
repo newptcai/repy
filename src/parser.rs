@@ -281,6 +281,39 @@ fn resolve_element_text(
         }
     }
 
+    // For <a> elements with very short text (e.g. footnote anchors like "1"),
+    // climb up to the nearest block-level ancestor to get more context for searching.
+    if element.value().name() == "a" && text.trim().len() < 3 {
+        // Walk up through inline wrappers (sup, sub, span, a) to find a block parent
+        let mut ancestor = element.parent();
+        while let Some(node) = ancestor {
+            if let Some(elem) = scraper::ElementRef::wrap(node) {
+                let name = elem.value().name();
+                if matches!(
+                    name,
+                    "p" | "div"
+                        | "li"
+                        | "td"
+                        | "th"
+                        | "blockquote"
+                        | "h1"
+                        | "h2"
+                        | "h3"
+                        | "h4"
+                        | "h5"
+                        | "h6"
+                ) {
+                    let parent_text = elem.text().collect::<String>();
+                    if parent_text.trim().len() >= 3 {
+                        text = parent_text;
+                    }
+                    break;
+                }
+            }
+            ancestor = node.parent();
+        }
+    }
+
     // Empty anchors: fall back to parent heading or next sibling
     if text.trim().is_empty() && element.value().name() == "a" {
         if let Some(parent) = element.parent().and_then(scraper::ElementRef::wrap) {
@@ -646,18 +679,38 @@ fn extract_links(
         };
 
         // Filter out backlinks inside footnotes
-        // Check if any ancestor has epub:type="footnote"
+        // Check if any ancestor has epub:type="footnote" or a common footnote CSS class
         // explicitly allow epub:type="noteref" (links TO footnotes)
         let is_noteref = element.value().attr("epub:type") == Some("noteref");
         if !is_noteref {
+            let footnote_classes = [
+                "fn",
+                "footnote",
+                "footnotes",
+                "endnote",
+                "endnotes",
+                "note",
+                "notes",
+            ];
             let mut parent = element.parent();
             let mut inside_footnote = false;
             while let Some(node) = parent {
-                if let Some(element_ref) = scraper::ElementRef::wrap(node)
-                    && element_ref.value().attr("epub:type") == Some("footnote")
-                {
-                    inside_footnote = true;
-                    break;
+                if let Some(element_ref) = scraper::ElementRef::wrap(node) {
+                    // Check epub:type="footnote"
+                    if element_ref.value().attr("epub:type") == Some("footnote") {
+                        inside_footnote = true;
+                        break;
+                    }
+                    // Check common footnote CSS class names
+                    if let Some(class_attr) = element_ref.value().attr("class") {
+                        let has_fn_class = class_attr
+                            .split_whitespace()
+                            .any(|c| footnote_classes.contains(&c));
+                        if has_fn_class {
+                            inside_footnote = true;
+                            break;
+                        }
+                    }
                 }
                 parent = node.parent();
             }
@@ -1519,6 +1572,68 @@ mod tests {
         let result = parse_html(html, Some(80), None, 0).unwrap();
         assert!(result.pagebreak_map.values().any(|v| v == "99"));
         assert!(!result.text_lines.iter().any(|l| l.contains("@@PB:")));
+    }
+
+    #[test]
+    fn test_extract_links_filters_class_based_backlinks() {
+        let html = std::fs::read_to_string("tests/fixtures/footnotes-class-based.html").unwrap();
+        let fragment = Html::parse_document(&html);
+        let text_lines = vec![
+            "Chapter 8: The Teaching".to_string(),
+            "The Buddha gave a discourse on the nature of suffering.".to_string(),
+            "He further elaborated on the path to liberation.".to_string(),
+            "1 Gavampati Sutta, Samyutta Nikaya V, 436.".to_string(),
+            "2 Dhammacakkappavattana Sutta, Samyutta Nikaya LVI, 11.".to_string(),
+        ];
+        let links = extract_links(&fragment, 0, &text_lines).unwrap();
+        // Should only have 2 footnote reference links, not 4 (backlinks filtered)
+        assert_eq!(
+            links.len(),
+            2,
+            "Expected 2 links (footnote refs only), got {}: {:?}",
+            links.len(),
+            links.iter().map(|l| &l.url).collect::<Vec<_>>()
+        );
+        assert!(links[0].url.contains("fn8_11"));
+        assert!(links[1].url.contains("fn8_22"));
+    }
+
+    #[test]
+    fn test_extract_sections_class_based_footnotes() {
+        let html = std::fs::read_to_string("tests/fixtures/footnotes-class-based.html").unwrap();
+        let fragment = Html::parse_document(&html);
+        let section_ids = HashSet::new();
+        // Simulate the text lines that the parser would produce
+        let text_lines = vec![
+            "Chapter 8: The Teaching".to_string(),
+            "".to_string(),
+            "The Buddha gave a discourse on the nature of suffering.".to_string(),
+            "".to_string(),
+            "He further elaborated on the path to liberation.".to_string(),
+            "".to_string(),
+            "1 Gavampati Sutta, Samyutta Nikaya V, 436.".to_string(),
+            "".to_string(),
+            "2 Dhammacakkappavattana Sutta, Samyutta Nikaya LVI, 11.".to_string(),
+        ];
+        let sections = extract_sections(&fragment, &section_ids, 0, &text_lines).unwrap();
+        // fn8_11 should map to line 6 (the footnote definition), not line 0 or 2
+        let fn8_11_line = sections.get("fn8_11").expect("fn8_11 should be in sections");
+        assert!(
+            text_lines[*fn8_11_line].contains("Gavampati"),
+            "fn8_11 should point to the Gavampati footnote line (line {}), got line {} = {:?}",
+            6,
+            fn8_11_line,
+            text_lines.get(*fn8_11_line)
+        );
+        // fn8_22 should map to line 8 (the second footnote definition)
+        let fn8_22_line = sections.get("fn8_22").expect("fn8_22 should be in sections");
+        assert!(
+            text_lines[*fn8_22_line].contains("Dhammacakkappavattana"),
+            "fn8_22 should point to the Dhammacakkappavattana footnote line (line {}), got line {} = {:?}",
+            8,
+            fn8_22_line,
+            text_lines.get(*fn8_22_line)
+        );
     }
 }
 
