@@ -235,7 +235,5 @@ src/
 - Only EPUB format supported (MOBI, AZW, FB2 not implemented)
 - Dictionary uses external commands (e.g., `dict`, `sdcv`) and Wikipedia lookup
 - No export functionality
-- No bottom status bar (command echo, messages)
-- Keybindings `b` and `f` documented in README but not implemented in code
 - Search does not support: history, fuzzy matching, incremental search
 - No custom themes yet (colors hardcoded)
