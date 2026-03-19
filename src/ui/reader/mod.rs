@@ -3218,6 +3218,12 @@ impl Reader {
         };
         if let Some(path) = filepath {
             if std::path::Path::new(&path).exists() {
+                let already_open = self.ebook.as_ref().map_or(false, |e| e.path() == path);
+                if already_open {
+                    let mut state = self.state.borrow_mut();
+                    state.ui_state.open_window(WindowType::Reader);
+                    return Ok(());
+                }
                 self.load_ebook(&path)?;
                 let mut state = self.state.borrow_mut();
                 state.ui_state.open_window(WindowType::Reader);
