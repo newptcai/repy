@@ -860,22 +860,30 @@ impl Reader {
         self.ebook = Some(epub);
         self.content_start_rows = content_start_rows;
 
+        // Add the book to library immediately upon opening
         if let Some(epub) = self.ebook.as_ref() {
-            let mut state = self.state.borrow_mut();
-
-            // Load last reading state from the database (or default if none)
-            if let Some(s) = db_state {
-                state.reading_state = s;
-            }
-
-            // Ensure textwidth matches what we decided
-            state.reading_state.textwidth = textwidth;
-
+            // First, persist the reading state and update library
+            let reading_state = if let Some(s) = db_state {
+                s.clone()
+            } else {
+                let mut default_state = ReadingState::default();
+                default_state.textwidth = textwidth;
+                default_state
+            };
+            
             let total_lines = self.board.total_lines();
-            if total_lines > 0 && state.reading_state.row >= total_lines {
-                state.reading_state.row = total_lines - 1;
+            let mut final_reading_state = reading_state.clone();
+            if total_lines > 0 && final_reading_state.row >= total_lines {
+                final_reading_state.row = total_lines - 1;
             }
-
+            
+            // Persist the reading state first (required for foreign key constraint)
+            self.db_state.set_last_reading_state(epub, &final_reading_state)?;
+            self.db_state.update_library(epub, Some(0.0))?;
+            
+            // Now update the UI state
+            let mut state = self.state.borrow_mut();
+            state.reading_state = final_reading_state;
             state.ui_state.metadata = Some(epub.get_meta().clone());
             state.ui_state.toc_entries = epub.toc_entries().clone();
             state.ui_state.toc_selected_index = 0;
