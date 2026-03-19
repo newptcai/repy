@@ -62,6 +62,12 @@ Example
 - Preserve epy behavior while improving performance.
 - Always update `Cargo.lock` with `cargo update` before tagging a release to avoid CI failures.
 
+## Release Process
+1. Bump version in `Cargo.toml` (minor bump: 0.8.x → 0.9.0; patch bump: 0.8.x → 0.8.(x+1)).
+2. Run `cargo update` to refresh `Cargo.lock`.
+3. Commit: `🔧 (repy): Bump version to X.Y.Z`
+4. Tag: `git tag vX.Y.Z && git push --tags`
+
 
 ## Success Metrics
 - Feature parity with epy
