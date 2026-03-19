@@ -5,6 +5,8 @@ use ratatui::{
     widgets::{Block, Borders, Clear, Paragraph},
 };
 
+use crate::theme::Theme;
+
 pub struct HelpWindow;
 
 const HELP_TEXT: &[&str] = &[
@@ -32,6 +34,7 @@ const HELP_TEXT: &[&str] = &[
     "   + / -             Increase/Decrease Width",
     "   =                 Reset Width",
     "   T                 Toggle Top Bar",
+    "   c                 Cycle Color Theme",
     " Windows & Tools:",
     "   t                 Table Of Contents",
     "   m                 Bookmarks",
@@ -66,7 +69,7 @@ impl HelpWindow {
             .min(u16::MAX as usize) as u16
     }
 
-    pub fn render(frame: &mut Frame, area: Rect, scroll_offset: u16) {
+    pub fn render(frame: &mut Frame, area: Rect, scroll_offset: u16, theme: &Theme) {
         let help_content: Vec<Line> = HELP_TEXT.iter().map(|&s| Line::from(s)).collect();
 
         let max_width = help_content.iter().map(|l| l.width()).max().unwrap_or(0) as u16;
@@ -80,7 +83,8 @@ impl HelpWindow {
         frame.render_widget(Clear, popup_area);
 
         let help_paragraph = Paragraph::new(help_content)
-            .block(Block::default().title("Help (?)").borders(Borders::ALL))
+            .style(theme.base_style())
+            .block(Block::default().title("Help (?)").borders(Borders::ALL).style(theme.base_style()))
             .scroll((scroll_offset, 0));
 
         frame.render_widget(help_paragraph, popup_area);

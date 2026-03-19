@@ -1,15 +1,23 @@
 use ratatui::{
     Frame,
     layout::Rect,
-    style::{Color, Style},
+    style::Style,
     text::Line,
     widgets::{Block, Borders, Clear, List, ListItem, Paragraph},
 };
 
+use crate::theme::Theme;
+
 pub struct LibraryWindow;
 
 impl LibraryWindow {
-    pub fn render(frame: &mut Frame, area: Rect, entries: &[String], selected_index: usize) {
+    pub fn render(
+        frame: &mut Frame,
+        area: Rect,
+        entries: &[String],
+        selected_index: usize,
+        theme: &Theme,
+    ) {
         let popup_area = Rect::new(
             area.x + area.width / 6,
             area.y + area.height / 8,
@@ -21,13 +29,13 @@ impl LibraryWindow {
 
         if entries.is_empty() {
             let paragraph = Paragraph::new("No history yet")
-                .style(Style::default().fg(Color::DarkGray))
-                .block(Block::default().title("Library").borders(Borders::ALL));
+                .style(theme.base_style().fg(theme.muted_fg))
+                .block(Block::default().title("Library").borders(Borders::ALL).style(theme.base_style()));
             frame.render_widget(paragraph, popup_area);
             return;
         }
 
-        let border_block = Block::default().title("Library").borders(Borders::ALL);
+        let border_block = Block::default().title("Library").borders(Borders::ALL).style(theme.base_style());
         frame.render_widget(border_block, popup_area);
 
         let inner_area = Rect {
@@ -44,8 +52,8 @@ impl LibraryWindow {
             height: 1,
         };
 
-        let hint =
-            Paragraph::new("HINT: Press 'd' to delete.").style(Style::default().fg(Color::Yellow));
+        let hint = Paragraph::new("HINT: Press 'd' to delete.")
+            .style(Style::default().fg(theme.warning_fg));
         frame.render_widget(hint, hint_area);
 
         let list_area = Rect {
@@ -60,7 +68,9 @@ impl LibraryWindow {
             .enumerate()
             .map(|(i, entry)| {
                 let style = if i == selected_index {
-                    Style::default().bg(Color::Blue).fg(Color::White)
+                    Style::default()
+                        .bg(theme.highlight_bg)
+                        .fg(theme.highlight_fg)
                 } else {
                     Style::default()
                 };

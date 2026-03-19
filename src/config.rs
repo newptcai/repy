@@ -401,7 +401,7 @@ mod tests {
 
         let mut custom_settings = Settings::default();
         custom_settings.page_scroll_animation = false;
-        custom_settings.dark_color_fg = 255;
+        custom_settings.mouse_support = true;
 
         let mut custom_keymaps = CfgDefaultKeymaps::default();
         custom_keymaps.help = "H".to_string();
@@ -416,7 +416,7 @@ mod tests {
         // Load the saved config
         let loaded_config = Config::load_from(saved_path.clone())?;
         assert_eq!(loaded_config.settings.page_scroll_animation, false);
-        assert_eq!(loaded_config.settings.dark_color_fg, 255);
+        assert_eq!(loaded_config.settings.mouse_support, true);
 
         // Clean up
         std::fs::remove_file(saved_path)?;
@@ -480,7 +480,7 @@ mod tests {
         let partial_config = serde_json::json!({
             "Setting": {
                 "mouse_support": true,
-                "default_color_fg": 100
+                "show_line_numbers": true
             },
             "Keymap": {
                 "scroll_up": "K",
@@ -494,13 +494,13 @@ mod tests {
 
         // Custom settings should be loaded
         assert_eq!(config.settings.mouse_support, true);
-        assert_eq!(config.settings.default_color_fg, 100);
+        assert_eq!(config.settings.show_line_numbers, true);
         assert_eq!(config.keymap_user_dict().scroll_up, "K");
         assert_eq!(config.keymap_user_dict().quit, "Q");
 
         // Default settings should remain for unspecified values
         assert_eq!(config.settings.default_viewer, "auto");
-        assert_eq!(config.settings.dark_color_fg, 252);
+        assert_eq!(config.settings.show_top_bar, true);
 
         // Clean up
         std::fs::remove_file(&config_path)?;

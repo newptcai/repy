@@ -1,8 +1,9 @@
 use crate::models::BookMetadata;
+use crate::theme::Theme;
 use ratatui::{
     Frame,
     layout::Rect,
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Paragraph},
 };
@@ -10,7 +11,7 @@ use ratatui::{
 pub struct MetadataWindow;
 
 impl MetadataWindow {
-    pub fn render(frame: &mut Frame, area: Rect, metadata: Option<&BookMetadata>) {
+    pub fn render(frame: &mut Frame, area: Rect, metadata: Option<&BookMetadata>, theme: &Theme) {
         let popup_area = super::centered_popup_area(area, 60, 80);
 
         frame.render_widget(Clear, popup_area);
@@ -62,7 +63,8 @@ impl MetadataWindow {
             ];
 
             let paragraph = Paragraph::new(content)
-                .block(Block::default().title("Metadata").borders(Borders::ALL));
+                .style(theme.base_style())
+                .block(Block::default().title("Metadata").borders(Borders::ALL).style(theme.base_style()));
 
             frame.render_widget(paragraph, popup_area);
         } else {
@@ -76,8 +78,8 @@ impl MetadataWindow {
             ];
 
             let paragraph = Paragraph::new(content)
-                .style(Style::default().fg(Color::DarkGray))
-                .block(Block::default().title("Metadata").borders(Borders::ALL));
+                .style(theme.base_style().fg(theme.muted_fg))
+                .block(Block::default().title("Metadata").borders(Borders::ALL).style(theme.base_style()));
 
             frame.render_widget(paragraph, popup_area);
         }

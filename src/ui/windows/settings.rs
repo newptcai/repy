@@ -1,15 +1,23 @@
 use ratatui::{
     Frame,
     layout::{Constraint, Direction, Layout, Rect},
-    style::{Color, Style},
+    style::Style,
     text::Line,
     widgets::{Block, Borders, Clear, List, ListItem, Paragraph},
 };
 
+use crate::theme::Theme;
+
 pub struct SettingsWindow;
 
 impl SettingsWindow {
-    pub fn render(frame: &mut Frame, area: Rect, entries: &[String], selected_index: usize) {
+    pub fn render(
+        frame: &mut Frame,
+        area: Rect,
+        entries: &[String],
+        selected_index: usize,
+        theme: &Theme,
+    ) {
         let popup_area = Rect::new(
             area.x + area.width / 6,
             area.y + area.height / 8,
@@ -18,7 +26,7 @@ impl SettingsWindow {
         );
 
         frame.render_widget(Clear, popup_area);
-        let block = Block::default().title("Settings").borders(Borders::ALL);
+        let block = Block::default().title("Settings").borders(Borders::ALL).style(theme.base_style());
         let inner = block.inner(popup_area);
         frame.render_widget(block, popup_area);
         let rows = Layout::default()
@@ -28,8 +36,8 @@ impl SettingsWindow {
         let footer = Paragraph::new("Tips: Enter activate | r reset | Dict cmd uses %q");
 
         if entries.is_empty() {
-            let paragraph =
-                Paragraph::new("No settings available").style(Style::default().fg(Color::DarkGray));
+            let paragraph = Paragraph::new("No settings available")
+                .style(theme.base_style().fg(theme.muted_fg));
             frame.render_widget(paragraph, rows[0]);
             frame.render_widget(footer, rows[1]);
             return;
@@ -40,7 +48,9 @@ impl SettingsWindow {
             .enumerate()
             .map(|(i, entry)| {
                 let style = if i == selected_index {
-                    Style::default().bg(Color::Blue).fg(Color::White)
+                    Style::default()
+                        .bg(theme.highlight_bg)
+                        .fg(theme.highlight_fg)
                 } else {
                     Style::default()
                 };

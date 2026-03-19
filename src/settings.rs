@@ -1,3 +1,4 @@
+use crate::theme::ColorTheme;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Copy, Serialize, Deserialize)]
@@ -41,12 +42,7 @@ pub struct Settings {
     pub page_scroll_animation: bool,
     pub mouse_support: bool,
     pub start_with_double_spread: bool,
-    pub default_color_fg: i16,
-    pub default_color_bg: i16,
-    pub dark_color_fg: i16,
-    pub dark_color_bg: i16,
-    pub light_color_fg: i16,
-    pub light_color_bg: i16,
+    pub color_theme: ColorTheme,
     pub seamless_between_chapters: bool,
     pub preferred_tts_engine: Option<String>,
     pub tts_engine_args: Vec<String>,
@@ -63,12 +59,7 @@ impl Settings {
         self.page_scroll_animation = other.page_scroll_animation;
         self.mouse_support = other.mouse_support;
         self.start_with_double_spread = other.start_with_double_spread;
-        self.default_color_fg = other.default_color_fg;
-        self.default_color_bg = other.default_color_bg;
-        self.dark_color_fg = other.dark_color_fg;
-        self.dark_color_bg = other.dark_color_bg;
-        self.light_color_fg = other.light_color_fg;
-        self.light_color_bg = other.light_color_bg;
+        self.color_theme = other.color_theme;
         self.seamless_between_chapters = other.seamless_between_chapters;
         if other.preferred_tts_engine.is_some() {
             self.preferred_tts_engine = other.preferred_tts_engine;
@@ -91,12 +82,7 @@ impl Default for Settings {
             page_scroll_animation: true,
             mouse_support: false,
             start_with_double_spread: false,
-            default_color_fg: -1,
-            default_color_bg: -1,
-            dark_color_fg: 252,
-            dark_color_bg: 235,
-            light_color_fg: 238,
-            light_color_bg: 253,
+            color_theme: ColorTheme::Default,
             seamless_between_chapters: false,
             preferred_tts_engine: None,
             tts_engine_args: Vec::new(),
@@ -300,12 +286,7 @@ mod tests {
         assert!(settings.page_scroll_animation);
         assert!(!settings.mouse_support);
         assert!(!settings.start_with_double_spread);
-        assert_eq!(settings.default_color_fg, -1);
-        assert_eq!(settings.default_color_bg, -1);
-        assert_eq!(settings.dark_color_fg, 252);
-        assert_eq!(settings.dark_color_bg, 235);
-        assert_eq!(settings.light_color_fg, 238);
-        assert_eq!(settings.light_color_bg, 253);
+        assert_eq!(settings.color_theme, ColorTheme::Default);
         assert!(!settings.seamless_between_chapters);
         assert_eq!(settings.preferred_tts_engine, None);
         assert!(settings.tts_engine_args.is_empty());
@@ -327,8 +308,7 @@ mod tests {
         override_settings.mouse_support = true;
         override_settings.default_viewer = "feh".to_string();
         override_settings.page_scroll_animation = false;
-        override_settings.dark_color_fg = 255;
-        override_settings.light_color_bg = 128;
+        override_settings.color_theme = ColorTheme::Dark;
         override_settings.seamless_between_chapters = true;
         override_settings.preferred_tts_engine = Some("gtts".to_string());
         override_settings.tts_engine_args = vec!["--speed".to_string(), "1.5".to_string()];
@@ -344,11 +324,7 @@ mod tests {
             base_settings.page_scroll_animation,
             override_settings.page_scroll_animation
         );
-        assert_eq!(base_settings.dark_color_fg, override_settings.dark_color_fg);
-        assert_eq!(
-            base_settings.light_color_bg,
-            override_settings.light_color_bg
-        );
+        assert_eq!(base_settings.color_theme, override_settings.color_theme);
         assert_eq!(
             base_settings.seamless_between_chapters,
             override_settings.seamless_between_chapters
@@ -372,7 +348,7 @@ mod tests {
 
         let mut override_settings = Settings::default();
         override_settings.mouse_support = false;
-        override_settings.dark_color_fg = 100;
+        override_settings.color_theme = ColorTheme::Light;
         override_settings.default_viewer = "should_override".to_string(); // This WILL override
         override_settings.preferred_tts_engine = Some("new_tts".to_string());
 
@@ -380,7 +356,7 @@ mod tests {
 
         // Should be overridden (merge() overrides ALL fields from other)
         assert!(!base_settings.mouse_support);
-        assert_eq!(base_settings.dark_color_fg, 100);
+        assert_eq!(base_settings.color_theme, ColorTheme::Light);
         assert_eq!(
             base_settings.preferred_tts_engine,
             Some("new_tts".to_string())
@@ -412,23 +388,7 @@ mod tests {
         assert_eq!(base_settings.tts_engine_args, vec!["--old".to_string()]);
     }
 
-    #[test]
-    fn test_settings_edge_values() {
-        let mut settings = Settings::default();
-
-        // Test extreme color values
-        settings.default_color_fg = i16::MAX;
-        settings.default_color_bg = i16::MIN;
-        settings.dark_color_fg = 0;
-        settings.light_color_bg = u16::MAX as i16;
-
-        assert_eq!(settings.default_color_fg, i16::MAX);
-        assert_eq!(settings.default_color_bg, i16::MIN);
-        assert_eq!(settings.dark_color_fg, 0);
-        assert_eq!(settings.light_color_bg, u16::MAX as i16);
-    }
-
-    #[test]
+#[test]
     fn test_cfg_default_keymaps_default() {
         let keymaps = CfgDefaultKeymaps::default();
         assert_eq!(keymaps.scroll_up, "k");

@@ -1,12 +1,13 @@
 use ratatui::{
     Frame,
     layout::Rect,
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Paragraph},
 };
 
 use crate::models::{BookMetadata, TocEntry};
+use crate::theme::Theme;
 
 pub struct TocWindow;
 
@@ -17,6 +18,7 @@ impl TocWindow {
         entries: &[TocEntry],
         selected_index: usize,
         metadata: Option<&BookMetadata>,
+        theme: &Theme,
     ) {
         let popup_area = super::centered_popup_area(area, 60, 70);
 
@@ -33,11 +35,12 @@ impl TocWindow {
             ];
 
             let paragraph = Paragraph::new(empty_text)
-                .style(Style::default().fg(Color::DarkGray))
+                .style(theme.base_style().fg(theme.muted_fg))
                 .block(
                     Block::default()
                         .title("Table of Contents")
-                        .borders(Borders::ALL),
+                        .borders(Borders::ALL)
+                        .style(theme.base_style()),
                 );
 
             frame.render_widget(paragraph, popup_area);
@@ -60,7 +63,9 @@ impl TocWindow {
         // Indented table of contents entries; only show the label, not the raw section/html
         for (i, entry) in entries.iter().enumerate() {
             let style = if i == selected_index {
-                Style::default().bg(Color::Blue).fg(Color::White)
+                Style::default()
+                    .bg(theme.highlight_bg)
+                    .fg(theme.highlight_fg)
             } else {
                 Style::default()
             };
@@ -84,10 +89,12 @@ impl TocWindow {
         };
 
         let paragraph = Paragraph::new(lines)
+            .style(theme.base_style())
             .block(
                 Block::default()
                     .title("Table of Contents")
-                    .borders(Borders::ALL),
+                    .borders(Borders::ALL)
+                    .style(theme.base_style()),
             )
             .scroll((scroll_offset as u16, 0));
 

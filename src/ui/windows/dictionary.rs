@@ -5,6 +5,8 @@ use ratatui::{
 };
 use textwrap::{Options, WordSplitter};
 
+use crate::theme::Theme;
+
 pub struct DictionaryWindow;
 
 /// A logical paragraph: its leading indent (in columns) and the joined text content.
@@ -39,6 +41,7 @@ impl DictionaryWindow {
         scroll_offset: u16,
         loading: bool,
         is_wikipedia: bool,
+        theme: &Theme,
     ) {
         let popup_area = super::centered_popup_area(area, 70, 80);
         frame.render_widget(Clear, popup_area);
@@ -56,7 +59,7 @@ impl DictionaryWindow {
             format!("{label}: {word}")
         };
 
-        let block = Block::default().title(title).borders(Borders::ALL);
+        let block = Block::default().title(title).borders(Borders::ALL).style(theme.base_style());
 
         if loading {
             let loading_text = vec![
@@ -87,6 +90,7 @@ impl DictionaryWindow {
         let reflowed = Self::reflow(definition, inner_width);
 
         let paragraph = Paragraph::new(reflowed)
+            .style(theme.base_style())
             .block(block)
             .wrap(Wrap { trim: false })
             .scroll((scroll_offset, 0));

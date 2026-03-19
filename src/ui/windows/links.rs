@@ -1,12 +1,13 @@
 use ratatui::{
     Frame,
     layout::{Constraint, Direction, Layout, Rect},
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Clear, List, ListItem, ListState, Padding, Paragraph, Wrap},
 };
 
 use crate::models::LinkEntry;
+use crate::theme::Theme;
 use crate::ui::board::Board;
 
 pub struct LinksWindow;
@@ -18,6 +19,7 @@ impl LinksWindow {
         entries: &[LinkEntry],
         selected_index: usize,
         board: &Board,
+        theme: &Theme,
     ) {
         let popup_area = super::centered_popup_area(area, 60, 70);
 
@@ -27,9 +29,10 @@ impl LinksWindow {
             let block = Block::default()
                 .title("Links")
                 .borders(Borders::ALL)
-                .padding(Padding::horizontal(1));
+                .padding(Padding::horizontal(1))
+                .style(theme.base_style());
             let paragraph = Paragraph::new("No links on this page")
-                .style(Style::default().fg(Color::DarkGray))
+                .style(theme.base_style().fg(theme.muted_fg))
                 .block(block);
             frame.render_widget(paragraph, popup_area);
             return;
@@ -49,14 +52,17 @@ impl LinksWindow {
         let block = Block::default()
             .title("Links")
             .borders(Borders::ALL)
-            .padding(Padding::new(1, 1, 0, 1));
+            .padding(Padding::new(1, 1, 0, 1))
+            .style(theme.base_style());
 
         let items: Vec<ListItem> = entries
             .iter()
             .enumerate()
             .map(|(i, entry)| {
                 let style = if i == selected_index {
-                    Style::default().bg(Color::Blue).fg(Color::White)
+                    Style::default()
+                        .bg(theme.highlight_bg)
+                        .fg(theme.highlight_fg)
                 } else {
                     Style::default()
                 };
@@ -85,7 +91,10 @@ impl LinksWindow {
                 } else {
                     Line::from(vec![
                         Span::raw(display_text),
-                        Span::styled(" ↗", Style::default().fg(Color::Yellow)),
+                        Span::styled(
+                            " ↗",
+                            Style::default().fg(theme.external_link_fg),
+                        ),
                     ])
                 };
 
@@ -108,7 +117,7 @@ impl LinksWindow {
             1,
         );
         let status_line = Paragraph::new("Enter: follow  y: copy  q: close")
-            .style(Style::default().fg(Color::Yellow));
+            .style(Style::default().fg(theme.warning_fg));
         frame.render_widget(status_line, status_area);
 
         // Preview Area
@@ -118,7 +127,8 @@ impl LinksWindow {
                 Style::default().add_modifier(Modifier::BOLD),
             ))
             .borders(Borders::ALL)
-            .padding(Padding::horizontal(1));
+            .padding(Padding::horizontal(1))
+            .style(theme.base_style());
 
         let mut preview_text = String::new();
         if let Some(entry) = entries.get(selected_index) {

@@ -1,12 +1,13 @@
 use ratatui::{
     Frame,
     layout::{Alignment, Rect},
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Paragraph, Wrap},
 };
 
 use crate::models::{CHAPTER_BREAK_MARKER, InlineStyle, LinkEntry, TextStructure};
+use crate::theme::Theme;
 use crate::ui::reader::ApplicationState;
 
 /// Board widget for rendering book text content
@@ -32,11 +33,12 @@ impl Board {
         area: Rect,
         state: &ApplicationState,
         content_start_rows: Option<&[usize]>,
+        theme: &Theme,
     ) {
         if let Some(ref text_structure) = self.text_structure {
-            self.render_content(frame, area, text_structure, state, content_start_rows);
+            self.render_content(frame, area, text_structure, state, content_start_rows, theme);
         } else {
-            self.render_empty(frame, area);
+            self.render_empty(frame, area, theme);
         }
     }
 
@@ -47,6 +49,7 @@ impl Board {
         text_structure: &TextStructure,
         state: &ApplicationState,
         content_start_rows: Option<&[usize]>,
+        theme: &Theme,
     ) {
         let height = area.height as usize;
         let _width = area.width as usize;
@@ -123,7 +126,7 @@ impl Board {
                 if state.config.settings.show_line_numbers {
                     spans.push(Span::styled(
                         format!("{:>4} ", line_num + 1),
-                        Style::default().fg(Color::DarkGray),
+                        Style::default().fg(theme.muted_fg),
                     ));
                 }
 
@@ -202,6 +205,7 @@ impl Board {
                             .search_matches
                             .get(&line_num)
                             .map(|ranges| ranges.as_slice()),
+                        theme,
                     );
                     // Apply underline to the character range within the spans
                     let underlined = Self::apply_underline_range(
@@ -221,6 +225,7 @@ impl Board {
                             .search_matches
                             .get(&line_num)
                             .map(|ranges| ranges.as_slice()),
+                        theme,
                     );
                     spans.extend(line_spans);
                 }
@@ -304,7 +309,7 @@ impl Board {
         spans
     }
 
-    fn render_empty(&self, frame: &mut Frame, area: Rect) {
+    fn render_empty(&self, frame: &mut Frame, area: Rect, theme: &Theme) {
         let empty_text = vec![
             Line::from("No content loaded"),
             Line::from("Open a book to start reading"),
@@ -313,7 +318,7 @@ impl Board {
         let paragraph = Paragraph::new(empty_text)
             .style(
                 Style::default()
-                    .fg(Color::DarkGray)
+                    .fg(theme.muted_fg)
                     .add_modifier(Modifier::ITALIC),
             )
             .wrap(Wrap { trim: true });
@@ -328,6 +333,7 @@ impl Board {
         base_style: Style,
         formatting: &[InlineStyle],
         search_ranges: Option<&[(usize, usize)]>,
+        theme: &Theme,
     ) -> Vec<Span<'_>> {
         if line.is_empty() {
             return vec![Span::styled(String::new(), base_style)];
@@ -372,7 +378,7 @@ impl Board {
                     .iter()
                     .any(|(range_start, range_end)| start >= *range_start && end <= *range_end)
             {
-                style = style.fg(Color::Black).bg(Color::Yellow);
+                style = style.fg(theme.search_fg).bg(theme.search_bg);
             }
 
             for inline in &line_formatting {

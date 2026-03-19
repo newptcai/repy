@@ -1,10 +1,12 @@
 use ratatui::{
     Frame,
     layout::Rect,
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::Line,
     widgets::{Block, Borders, Clear, List, ListItem, ListState},
 };
+
+use crate::theme::Theme;
 
 pub struct ImagesWindow;
 
@@ -14,6 +16,7 @@ impl ImagesWindow {
         area: Rect,
         images: &[(usize, String)],
         selected_index: usize,
+        theme: &Theme,
     ) {
         let popup_area = super::centered_popup_area(area, 60, 60);
 
@@ -34,12 +37,13 @@ impl ImagesWindow {
             .block(
                 Block::default()
                     .title("Images on Page")
-                    .borders(Borders::ALL),
+                    .borders(Borders::ALL)
+                    .style(theme.base_style()),
             )
             .highlight_style(
                 Style::default()
-                    .bg(Color::Blue)
-                    .fg(Color::White)
+                    .bg(theme.highlight_bg)
+                    .fg(theme.highlight_fg)
                     .add_modifier(Modifier::BOLD),
             );
 

@@ -1,10 +1,12 @@
 use ratatui::{
     Frame,
     layout::Rect,
-    style::{Color, Style},
+    style::Style,
     text::Line,
     widgets::{Block, Borders, Clear, List, ListItem, Paragraph},
 };
+
+use crate::theme::Theme;
 
 pub struct BookmarksWindow;
 
@@ -15,6 +17,7 @@ impl BookmarksWindow {
         entries: &[String],
         selected_index: usize,
         status: Option<&str>,
+        theme: &Theme,
     ) {
         let popup_area = Rect::new(
             area.x + area.width / 5,
@@ -27,8 +30,8 @@ impl BookmarksWindow {
 
         if entries.is_empty() {
             let paragraph = Paragraph::new("No bookmarks yet")
-                .style(Style::default().fg(Color::DarkGray))
-                .block(Block::default().title("Bookmarks").borders(Borders::ALL));
+                .style(theme.base_style().fg(theme.muted_fg))
+                .block(Block::default().title("Bookmarks").borders(Borders::ALL).style(theme.base_style()));
             frame.render_widget(paragraph, popup_area);
             return;
         }
@@ -38,7 +41,9 @@ impl BookmarksWindow {
             .enumerate()
             .map(|(i, entry)| {
                 let style = if i == selected_index {
-                    Style::default().bg(Color::Blue).fg(Color::White)
+                    Style::default()
+                        .bg(theme.highlight_bg)
+                        .fg(theme.highlight_fg)
                 } else {
                     Style::default()
                 };
@@ -46,8 +51,12 @@ impl BookmarksWindow {
             })
             .collect();
 
-        let list =
-            List::new(items).block(Block::default().title("Bookmarks").borders(Borders::ALL));
+        let list = List::new(items).block(
+            Block::default()
+                .title("Bookmarks")
+                .borders(Borders::ALL)
+                .style(theme.base_style()),
+        );
 
         frame.render_widget(list, popup_area);
 
@@ -58,7 +67,8 @@ impl BookmarksWindow {
                 popup_area.width - 2,
                 1,
             );
-            let status_line = Paragraph::new(message).style(Style::default().fg(Color::Yellow));
+            let status_line =
+                Paragraph::new(message).style(Style::default().fg(theme.warning_fg));
             frame.render_widget(status_line, status_area);
         }
     }

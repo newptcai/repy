@@ -14,7 +14,7 @@ use ratatui::{
     Frame, Terminal,
     backend::CrosstermBackend,
     layout::{Constraint, Layout, Rect},
-    style::{Color, Style},
+    style::Style,
     text::Line,
     widgets::{Block, Borders, Clear, Paragraph, Wrap},
 };
@@ -28,6 +28,7 @@ use crate::models::{
 };
 use crate::settings::DICT_PRESET_LIST;
 use crate::state::State;
+use crate::theme::Theme;
 use crate::ui::board::Board;
 use crate::ui::windows::{
     bookmarks::BookmarksWindow, dictionary::DictionaryWindow, help::HelpWindow,
@@ -60,6 +61,10 @@ impl ApplicationState {
             jump_history: Vec::new(),
             jump_history_index: 0,
         }
+    }
+
+    pub fn theme(&self) -> Theme {
+        Theme::for_color_theme(self.config.settings.color_theme)
     }
 
     pub fn record_jump(&mut self) {
@@ -340,6 +345,7 @@ enum SettingItem {
     TtsEngine,
     Width,
     ShowTopBar,
+    ColorTheme,
 }
 
 impl SettingItem {
@@ -355,6 +361,7 @@ impl SettingItem {
             SettingItem::TtsEngine,
             SettingItem::Width,
             SettingItem::ShowTopBar,
+            SettingItem::ColorTheme,
         ]
     }
 }
@@ -1318,6 +1325,17 @@ impl Reader {
                 self.toggle_tts()?;
             }
 
+            // Color theme cycle
+            KeyCode::Char('c') => {
+                let mut state = self.state.borrow_mut();
+                let next = state.config.settings.color_theme.next();
+                state.config.settings.color_theme = next;
+                let _ = state.config.save();
+                state
+                    .ui_state
+                    .set_message(format!("Theme: {}", next.name()), MessageType::Info);
+            }
+
             _ => {}
         }
 
@@ -1788,12 +1806,25 @@ impl Reader {
         board: &Board,
         content_start_rows: &[usize],
     ) {
+        let theme = state.theme();
+
+        // Fill the terminal background for light/dark themes
+        if let Some(bg) = theme.text_bg {
+            let base_style = if let Some(fg) = theme.text_fg {
+                Style::default().fg(fg).bg(bg)
+            } else {
+                Style::default().bg(bg)
+            };
+            let bg_block = Block::default().style(base_style);
+            frame.render_widget(bg_block, frame.area());
+        }
+
         // Main reader view
-        Self::render_reader_static(frame, state, board, content_start_rows);
+        Self::render_reader_static(frame, state, board, content_start_rows, &theme);
 
         // Render overlays/modals if active
         if state.ui_state.show_help {
-            HelpWindow::render(frame, frame.area(), state.ui_state.help_scroll_offset);
+            HelpWindow::render(frame, frame.area(), state.ui_state.help_scroll_offset, &theme);
         } else if state.ui_state.show_toc {
             TocWindow::render(
                 frame,
@@ -1801,6 +1832,7 @@ impl Reader {
                 &state.ui_state.toc_entries,
                 state.ui_state.toc_selected_index,
                 state.ui_state.metadata.as_ref(),
+                &theme,
             );
         } else if state.ui_state.show_bookmarks {
             let entries: Vec<String> = state
@@ -1815,6 +1847,7 @@ impl Reader {
                 &entries,
                 state.ui_state.bookmarks_selected_index,
                 None,
+                &theme,
             );
         } else if state.ui_state.show_library {
             let entries: Vec<String> = state
@@ -1828,6 +1861,7 @@ impl Reader {
                 frame.area(),
                 &entries,
                 state.ui_state.library_selected_index,
+                &theme,
             );
         } else if state.ui_state.show_search {
             let entries: Vec<String> = state
@@ -1842,6 +1876,7 @@ impl Reader {
                 &state.ui_state.search_query,
                 &entries,
                 state.ui_state.selected_search_result,
+                &theme,
             );
         } else if state.ui_state.show_links {
             LinksWindow::render(
@@ -1850,6 +1885,7 @@ impl Reader {
                 &state.ui_state.links,
                 state.ui_state.links_selected_index,
                 board,
+                &theme,
             );
         } else if state.ui_state.show_images {
             ImagesWindow::render(
@@ -1857,6 +1893,7 @@ impl Reader {
                 frame.area(),
                 &state.ui_state.images_list,
                 state.ui_state.images_selected_index,
+                &theme,
             );
         } else if state.ui_state.show_dictionary {
             DictionaryWindow::render(
@@ -1868,11 +1905,17 @@ impl Reader {
                 state.ui_state.dictionary_scroll_offset,
                 state.ui_state.dictionary_loading,
                 state.ui_state.dictionary_is_wikipedia,
+                &theme,
             );
         } else if state.ui_state.show_metadata {
-            MetadataWindow::render(frame, frame.area(), state.ui_state.metadata.as_ref());
+            MetadataWindow::render(
+                frame,
+                frame.area(),
+                state.ui_state.metadata.as_ref(),
+                &theme,
+            );
         } else if state.ui_state.active_window == WindowType::DictionaryCommandInput {
-            Self::render_dictionary_command_input_static(frame, state);
+            Self::render_dictionary_command_input_static(frame, state, &theme);
         } else if state.ui_state.show_settings {
             let entries = Self::settings_entries(state);
             SettingsWindow::render(
@@ -1880,12 +1923,13 @@ impl Reader {
                 frame.area(),
                 &entries,
                 state.ui_state.settings_selected_index,
+                &theme,
             );
         }
 
         // Render message if present
         if let Some(ref message) = state.ui_state.message {
-            Self::render_message_static(frame, message, &state.ui_state.message_type);
+            Self::render_message_static(frame, message, &state.ui_state.message_type, &theme);
         }
     }
 
@@ -1982,6 +2026,9 @@ impl Reader {
                 }
                 SettingItem::Width => format!("Text width: {}", state.reading_state.textwidth),
                 SettingItem::ShowTopBar => format!("Show top bar: {}", settings.show_top_bar),
+                SettingItem::ColorTheme => {
+                    format!("Color theme: {}", settings.color_theme.name())
+                }
             })
             .collect()
     }
@@ -1992,6 +2039,7 @@ impl Reader {
         state: &ApplicationState,
         board: &Board,
         content_start_rows: &[usize],
+        theme: &Theme,
     ) {
         let frame_area = frame.area();
         let percent_text = if state.config.settings.show_progress_indicator {
@@ -2098,7 +2146,7 @@ impl Reader {
             frame.render_widget(header, chunks[0]);
         }
 
-        board.render(frame, content_area, state, Some(content_start_rows));
+        board.render(frame, content_area, state, Some(content_start_rows), theme);
     }
 
     fn build_header_line(title: &str, right_text: Option<&str>, width: u16) -> String {
@@ -2138,11 +2186,16 @@ impl Reader {
         buffer.into_iter().collect()
     }
 
-    fn render_message_static(frame: &mut Frame, message: &str, message_type: &MessageType) {
+    fn render_message_static(
+        frame: &mut Frame,
+        message: &str,
+        message_type: &MessageType,
+        theme: &Theme,
+    ) {
         let color = match message_type {
-            MessageType::Info => Color::Blue,
-            MessageType::Warning => Color::Yellow,
-            MessageType::Error => Color::Red,
+            MessageType::Info => theme.info_fg,
+            MessageType::Warning => theme.warning_fg,
+            MessageType::Error => theme.error_fg,
         };
 
         let frame_area = frame.area();
@@ -2180,7 +2233,11 @@ impl Reader {
         frame.render_widget(message_paragraph, area);
     }
 
-    fn render_dictionary_command_input_static(frame: &mut Frame, state: &ApplicationState) {
+    fn render_dictionary_command_input_static(
+        frame: &mut Frame,
+        state: &ApplicationState,
+        theme: &Theme,
+    ) {
         let area = Rect::new(
             frame.area().x + frame.area().width / 4,
             frame.area().y + frame.area().height / 2 - 2,
@@ -2193,7 +2250,7 @@ impl Reader {
                 Block::default()
                     .title("Dictionary Command Template (%q for query)")
                     .borders(Borders::ALL)
-                    .border_style(Style::default().fg(Color::Blue)),
+                    .border_style(Style::default().fg(theme.info_fg)),
             );
 
         frame.render_widget(Clear, area);
@@ -3414,6 +3471,9 @@ impl Reader {
             }
             SettingItem::ShowTopBar => {
                 state.config.settings.show_top_bar = !state.config.settings.show_top_bar;
+            }
+            SettingItem::ColorTheme => {
+                state.config.settings.color_theme = state.config.settings.color_theme.next();
             }
         }
         let _ = state.config.save();

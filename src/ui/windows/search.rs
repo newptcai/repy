@@ -1,10 +1,12 @@
 use ratatui::{
     Frame,
     layout::Rect,
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::Line,
     widgets::{Block, Borders, Clear, List, ListItem, Paragraph},
 };
+
+use crate::theme::Theme;
 
 pub struct SearchWindow;
 
@@ -15,14 +17,15 @@ impl SearchWindow {
         query: &str,
         results: &[String],
         selected_index: usize,
+        theme: &Theme,
     ) {
         let popup_area = super::centered_popup_area(area, 60, 70);
 
         frame.render_widget(Clear, popup_area);
 
         let header = Paragraph::new(Line::from(format!("/{}", query)))
-            .block(Block::default().title("Search").borders(Borders::ALL))
-            .style(Style::default().add_modifier(Modifier::BOLD));
+            .block(Block::default().title("Search").borders(Borders::ALL).style(theme.base_style()))
+            .style(theme.base_style().add_modifier(Modifier::BOLD));
 
         let header_area = Rect::new(popup_area.x, popup_area.y, popup_area.width, 3);
         frame.render_widget(header, header_area);
@@ -39,8 +42,8 @@ impl SearchWindow {
 
         if results.is_empty() {
             let empty = Paragraph::new("No matches yet")
-                .style(Style::default().fg(Color::DarkGray))
-                .block(Block::default().borders(Borders::ALL));
+                .style(theme.base_style().fg(theme.muted_fg))
+                .block(Block::default().borders(Borders::ALL).style(theme.base_style()));
             frame.render_widget(empty, list_area);
             return;
         }
@@ -50,7 +53,9 @@ impl SearchWindow {
             .enumerate()
             .map(|(i, entry)| {
                 let style = if i == selected_index {
-                    Style::default().bg(Color::Blue).fg(Color::White)
+                    Style::default()
+                        .bg(theme.highlight_bg)
+                        .fg(theme.highlight_fg)
                 } else {
                     Style::default()
                 };
@@ -58,7 +63,7 @@ impl SearchWindow {
             })
             .collect();
 
-        let list = List::new(items).block(Block::default().borders(Borders::ALL));
+        let list = List::new(items).block(Block::default().borders(Borders::ALL).style(theme.base_style()));
 
         frame.render_widget(list, list_area);
     }
