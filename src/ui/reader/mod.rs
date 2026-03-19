@@ -1,6 +1,7 @@
 use arboard::Clipboard;
 use regex::Regex;
 use serde::Deserialize;
+use std::sync::LazyLock;
 use serde_json::Value;
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -35,6 +36,11 @@ use crate::ui::windows::{
     images::ImagesWindow, library::LibraryWindow, links::LinksWindow, metadata::MetadataWindow,
     search::SearchWindow, settings::SettingsWindow, toc::TocWindow,
 };
+
+/// Regex to strip textwrap syllable-split hyphenation artifacts from TTS text.
+/// Matches letter + hyphen + whitespace + lowercase letter (e.g. "ex- ample").
+static RE_TTS_HYPHEN: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"([A-Za-z])-\s+([a-z])").unwrap());
 
 /// Application state that encompasses all UI and reading state
 #[derive(Debug, Clone)]
@@ -4231,8 +4237,11 @@ impl Reader {
                     }
                 }
 
+                let tts_text = RE_TTS_HYPHEN
+                    .replace_all(&chunk_text, "$1$2")
+                    .into_owned();
                 chunks.push(TtsChunk {
-                    text: chunk_text,
+                    text: tts_text,
                     first_line,
                     underline,
                 });
@@ -5139,5 +5148,13 @@ mod tests {
         let msg_type = &s.ui_state.message_type;
         assert_eq!(*msg_type, MessageType::Error);
         assert!(msg.contains("command 'definitely-not-a-real-program-12345' not found"));
+    }
+
+    #[test]
+    fn test_dehyphenate_tts_text() {
+        use super::RE_TTS_HYPHEN;
+        let input = "This is an ex- ample of hyphen- ation artifacts.";
+        let result = RE_TTS_HYPHEN.replace_all(input, "$1$2").into_owned();
+        assert_eq!(result, "This is an example of hyphenation artifacts.");
     }
 }
