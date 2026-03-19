@@ -133,6 +133,7 @@ Press `?` in the TUI to see the help window at any time (`Help (?)`).
 - `+` / `-` — Increase/Decrease Width
 - `=` — Reset Width
 - `T` — Toggle Top Bar
+- `c` — Cycle Color Theme
 
 ### Windows & Tools
 - `/` — Search
@@ -179,6 +180,16 @@ Press `!` to toggle reading aloud from the current paragraph.
 
 The configuration file is automatically created on first run with sensible defaults.
 
+### Color Themes
+
+`repy` supports three built-in color themes:
+
+- **Default**: Uses terminal colors
+- **Dark**: Gruvbox Dark theme
+- **Light**: Gruvbox Light theme
+
+Press `c` in the reader to cycle through themes. The selected theme is saved in `configuration.json` under `Settings.color_theme`.
+
 ### Location
 
 The config file location follows this priority order:
@@ -207,12 +218,7 @@ Example `configuration.json`:
     "mouse_support": false,
     "start_with_double_spread": false,
     "seamless_between_chapters": true,
-    "default_color_fg": 15,
-    "default_color_bg": 235,
-    "dark_color_fg": 252,
-    "dark_color_bg": null,
-    "light_color_fg": 15,
-    "light_color_bg": 235,
+    "color_theme": "Default",
     "preferred_tts_engine": null,
     "tts_engine_args": []
   },
