@@ -4260,7 +4260,7 @@ impl Reader {
                     .as_deref()
                     .unwrap_or("purr")
                     .to_string();
-                if engine == "purr" { (240, 320) } else { (300, 400) }
+                (50, 100)
             };
             let sentence_chunks = Self::split_into_sentence_chunks(&full_text, min_chunk, max_chunk);
 
@@ -4496,7 +4496,7 @@ impl Reader {
         if engine == "trans" {
             let path_str = path.to_string_lossy();
             let status = std::process::Command::new("trans")
-                .args(["-speak", "-no-play", "-download-audio-as", &path_str, text])
+                .args(["-brief", "-no-translate", "-download-audio-as", &path_str, "en:", text])
                 .stdout(std::process::Stdio::null())
                 .stderr(std::process::Stdio::null())
                 .status()?;
