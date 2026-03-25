@@ -174,6 +174,8 @@ pub struct UiState {
     /// Per-line underline ranges for the TTS chunk being read.
     /// Maps line_num -> (start_col, end_col_exclusive) in characters.
     pub tts_underline_ranges: HashMap<usize, (usize, usize)>,
+    pub tts_converting: bool,
+    pub tts_anim_frame: usize,
 }
 
 impl Default for UiState {
@@ -227,6 +229,8 @@ impl UiState {
             help_scroll_offset: 0,
             tts_active: false,
             tts_underline_ranges: HashMap::new(),
+            tts_converting: false,
+            tts_anim_frame: 0,
         }
     }
 
@@ -436,14 +440,16 @@ pub struct Reader {
     tts_kill_pid: Option<u32>,
     /// Detected audio player for edge-tts pipeline (mpv or ffplay)
     tts_audio_player: Option<EdgeTtsPlayer>,
-    /// PID of the prefetch (edge-tts) conversion process for killing
+    /// PID of the prefetch conversion process for killing
     tts_prefetch_kill_pid: Option<u32>,
-    /// Channel signaling that the prefetch conversion is complete
-    tts_prefetch_done_rx: Option<std::sync::mpsc::Receiver<bool>>,
+    /// Channel delivering the prefetched audio path (Some(path)) or None on failure
+    tts_prefetch_done_rx: Option<std::sync::mpsc::Receiver<Option<std::path::PathBuf>>>,
     /// Path of the temp audio file currently being played
     tts_current_audio_path: Option<std::path::PathBuf>,
-    /// Path of the temp audio file being prefetched (next chunk)
-    tts_prefetch_audio_path: Option<std::path::PathBuf>,
+    /// Channel delivering the current chunk's audio path once ready (async conversion)
+    tts_pending_audio_rx: Option<std::sync::mpsc::Receiver<Option<std::path::PathBuf>>>,
+    /// The TTS engine in use for the current session (needed for prefetch after async play)
+    tts_current_engine: String,
 }
 
 impl Reader {
@@ -832,7 +838,8 @@ impl Reader {
             tts_prefetch_kill_pid: None,
             tts_prefetch_done_rx: None,
             tts_current_audio_path: None,
-            tts_prefetch_audio_path: None,
+            tts_pending_audio_rx: None,
+            tts_current_engine: String::new(),
         })
     }
 
@@ -1015,6 +1022,35 @@ impl Reader {
                 }
             }
 
+            // Check for async TTS conversion completion → start playing
+            if self.tts_pending_audio_rx.is_some() {
+                let result = self.tts_pending_audio_rx.as_ref().unwrap().try_recv();
+                match result {
+                    Ok(Some(path)) => {
+                        self.tts_pending_audio_rx = None;
+                        self.state.borrow_mut().ui_state.tts_converting = false;
+                        self.tts_play_file(path)?;
+                    }
+                    Ok(None) => {
+                        self.tts_pending_audio_rx = None;
+                        self.stop_tts();
+                        self.state.borrow_mut().ui_state.set_message(
+                            "TTS conversion failed".to_string(),
+                            MessageType::Error,
+                        );
+                    }
+                    Err(std::sync::mpsc::TryRecvError::Empty) => {
+                        // Still converting — advance animation frame
+                        let next = self.state.borrow().ui_state.tts_anim_frame.wrapping_add(1);
+                        self.state.borrow_mut().ui_state.tts_anim_frame = next;
+                    }
+                    Err(_) => {
+                        self.tts_pending_audio_rx = None;
+                        self.stop_tts();
+                    }
+                }
+            }
+
             // Check for TTS paragraph completion → advance to next paragraph
             if self.state.borrow().ui_state.tts_active {
                 if let Some(rx) = &self.tts_done_rx {
@@ -1038,7 +1074,9 @@ impl Reader {
             // Poll with timeout so we can re-render when messages expire or for animation
             let poll_timeout = {
                 let state = self.state.borrow();
-                if state.ui_state.tts_active {
+                if state.ui_state.tts_converting {
+                    Duration::from_millis(80)
+                } else if state.ui_state.tts_active {
                     Duration::from_millis(200)
                 } else if state.ui_state.dictionary_loading && state.ui_state.show_dictionary {
                     Duration::from_millis(100)
@@ -1977,6 +2015,32 @@ impl Reader {
             );
         }
 
+        // Render TTS synthesis waiting popup
+        if state.ui_state.tts_converting {
+            let spinner_frames = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+            let frame_char = spinner_frames[state.ui_state.tts_anim_frame % spinner_frames.len()];
+            let label = format!("  {} Synthesizing…  ", frame_char);
+            let popup_w = (label.chars().count() as u16) + 2;
+            let popup_h = 3u16;
+            let area = frame.area();
+            let popup_area = Rect::new(
+                area.x + area.width.saturating_sub(popup_w) / 2,
+                area.y + area.height.saturating_sub(popup_h) / 2,
+                popup_w.min(area.width),
+                popup_h.min(area.height),
+            );
+            frame.render_widget(ratatui::widgets::Clear, popup_area);
+            let block = ratatui::widgets::Block::default()
+                .borders(ratatui::widgets::Borders::ALL)
+                .style(theme.base_style());
+            let inner = block.inner(popup_area);
+            frame.render_widget(block, popup_area);
+            frame.render_widget(
+                ratatui::widgets::Paragraph::new(label).style(theme.base_style()),
+                inner,
+            );
+        }
+
         // Render message if present
         if let Some(ref message) = state.ui_state.message {
             Self::render_message_static(frame, message, &state.ui_state.message_type, &theme);
@@ -2067,12 +2131,8 @@ impl Reader {
                     let engine = settings
                         .preferred_tts_engine
                         .as_deref()
-                        .unwrap_or("");
-                    if engine.is_empty() {
-                        "TTS engine: edge-tts (default)".to_string()
-                    } else {
-                        format!("TTS engine: {engine}")
-                    }
+                        .unwrap_or("purr");
+                    format!("TTS engine: {engine}")
                 }
                 SettingItem::Width => format!("Text width: {}", state.reading_state.textwidth),
                 SettingItem::ShowTopBar => format!("Show top bar: {}", settings.show_top_bar),
@@ -3495,7 +3555,7 @@ impl Reader {
                     .unwrap_or("")
                     .to_string();
                 let current_ref = if current.is_empty() {
-                    "edge-tts"
+                    "purr"
                 } else {
                     &current
                 };
@@ -4190,7 +4250,19 @@ impl Reader {
             }
             offsets.push(pos); // end sentinel
 
-            let sentence_chunks = Self::split_into_sentence_chunks(&full_text, 300, 400);
+            let (min_chunk, max_chunk) = {
+                let engine = self
+                    .state
+                    .borrow()
+                    .config
+                    .settings
+                    .preferred_tts_engine
+                    .as_deref()
+                    .unwrap_or("purr")
+                    .to_string();
+                if engine == "purr" { (240, 320) } else { (300, 400) }
+            };
+            let sentence_chunks = Self::split_into_sentence_chunks(&full_text, min_chunk, max_chunk);
 
             let mut byte_cursor = 0usize;
             for chunk_text in sentence_chunks {
@@ -4384,46 +4456,94 @@ impl Reader {
         self.tts_audio_player.clone()
     }
 
-    /// Synchronously convert `text` to an mp3 at `path` using edge-tts.
-    fn tts_convert_sync(text: &str, path: &std::path::Path) -> eyre::Result<()> {
-        let status = std::process::Command::new("edge-tts")
-            .args([
-                "--text",
-                text,
-                "--write-media",
-                &path.to_string_lossy(),
-            ])
+    /// Returns true for engines that write audio to a file for playback via mpv/ffplay.
+    fn is_file_based_engine(engine: &str) -> bool {
+        matches!(engine, "edge-tts" | "purr" | "trans")
+            || (engine.contains("{}") && engine.contains("{output}"))
+    }
+
+    /// Synchronously convert `text` to an audio file at `path`.
+    /// Handles both edge-tts and custom templates containing `{output}`.
+    fn tts_convert_with_engine(engine: &str, text: &str, path: &std::path::Path) -> eyre::Result<()> {
+        if engine == "edge-tts" {
+            let status = std::process::Command::new("edge-tts")
+                .args([
+                    "--text",
+                    text,
+                    "--write-media",
+                    &path.to_string_lossy(),
+                ])
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status()?;
+            if !status.success() {
+                return Err(eyre::eyre!("edge-tts exited with non-zero status"));
+            }
+            return Ok(());
+        }
+        if engine == "purr" {
+            let path_str = path.to_string_lossy();
+            let status = std::process::Command::new("purr")
+                .args(["speak", "--output", &path_str, "--quiet", text])
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status()?;
+            if !status.success() {
+                return Err(eyre::eyre!("purr exited with non-zero status"));
+            }
+            return Ok(());
+        }
+        if engine == "trans" {
+            let path_str = path.to_string_lossy();
+            let status = std::process::Command::new("trans")
+                .args(["-speak", "-no-play", "-download-audio-as", &path_str, text])
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status()?;
+            if !status.success() {
+                return Err(eyre::eyre!("trans exited with non-zero status"));
+            }
+            return Ok(());
+        }
+        // Custom template: substitute {} (text) and {output} (file path)
+        let expanded = engine
+            .replace("{output}", &path.to_string_lossy())
+            .replace("{}", text);
+        let parts: Vec<&str> = expanded.split_whitespace().collect();
+        if parts.is_empty() {
+            return Err(eyre::eyre!("empty TTS command"));
+        }
+        let status = std::process::Command::new(parts[0])
+            .args(&parts[1..])
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .status()?;
         if !status.success() {
-            return Err(eyre::eyre!("edge-tts exited with non-zero status"));
+            return Err(eyre::eyre!("TTS command exited with non-zero status"));
         }
         Ok(())
     }
 
-    /// Spawn an async edge-tts conversion for the chunk after the current one (prefetch).
-    fn tts_spawn_prefetch(&mut self) {
+    /// Spawn an async conversion for the chunk after the current one (prefetch).
+    fn tts_spawn_prefetch(&mut self, engine: String) {
         let next_index = self.tts_chunk_index + 1;
         let next_text = match self.tts_chunks.get(next_index) {
             Some(c) => c.text.clone(),
             None => return, // no next chunk
         };
         let path = Self::tts_temp_path(next_index);
-        self.tts_prefetch_audio_path = Some(path.clone());
 
-        let (tx, rx) = std::sync::mpsc::channel::<bool>();
+        let (tx, rx) = std::sync::mpsc::channel::<Option<std::path::PathBuf>>();
         self.tts_prefetch_done_rx = Some(rx);
 
         let path_clone = path.clone();
         let handle = std::thread::spawn(move || {
-            let ok = Self::tts_convert_sync(&next_text, &path_clone).is_ok();
-            let _ = tx.send(ok);
+            match Self::tts_convert_with_engine(&engine, &next_text, &path_clone) {
+                Ok(()) => { let _ = tx.send(Some(path_clone)); }
+                Err(_) => { let _ = tx.send(None); }
+            }
         });
-        // We don't need the handle; the thread will detach.
         drop(handle);
-        // We can't get the PID of a Rust thread, so tts_prefetch_kill_pid stays None.
-        // The thread will finish on its own when the conversion completes.
     }
 
     /// Toggle TTS: start if not active, stop if active.
@@ -4443,10 +4563,12 @@ impl Reader {
                 .clone()
                 .unwrap_or_default()
         };
-        let program = if engine.is_empty() || engine == "edge-tts" {
+        let program = if engine == "edge-tts" {
             "edge-tts"
-        } else if engine == "espeak" {
-            "espeak"
+        } else if engine == "purr" {
+            "purr"
+        } else if engine == "trans" {
+            "trans"
         } else if engine.contains("{}") {
             engine.split_whitespace().next().unwrap_or_default()
         } else {
@@ -4466,17 +4588,18 @@ impl Reader {
             }
         }
 
-        // For edge-tts, also verify that an audio player is available
-        if (engine.is_empty() || engine == "edge-tts") && self.tts_detect_player().is_none() {
+        // For file-based engines, verify that an audio player is available
+        if Self::is_file_based_engine(&engine) && self.tts_detect_player().is_none() {
             let mut state = self.state.borrow_mut();
             state.ui_state.set_message(
-                "TTS (edge-tts): no audio player found; install mpv or ffplay".to_string(),
+                "TTS: no audio player found; install mpv or ffplay".to_string(),
                 MessageType::Error,
             );
             return Ok(());
         }
 
         self.tts_chunks = self.build_tts_chunks();
+        self.tts_current_engine = engine.clone();
         let current_row = self.state.borrow().reading_state.row;
         let idx = match self.find_chunk_at(current_row) {
             Some(i) => i,
@@ -4519,20 +4642,15 @@ impl Reader {
             state.ui_state.tts_active = true;
             state.ui_state.tts_underline_ranges = underline;
 
-            // Smart scroll: only scroll if the chunk isn't fully visible.
-            // Scroll just enough so the chunk fits, or until its first line
-            // hits the top — whichever comes first.
             let current_top = state.reading_state.row.saturating_sub(1);
-            // Compute the real content height: terminal rows minus the
-            // layout chrome (top bar + gaps).
             let term_rows = match crossterm::terminal::size() {
                 Ok((_, rows)) => rows as usize,
                 Err(_) => 24,
             };
             let chrome = if state.config.settings.show_top_bar {
-                1 + 2 + 2 // top_bar + top_gap + bottom_gap
+                1 + 2 + 2
             } else {
-                2 // bottom_gap only
+                2
             };
             let page_height = term_rows.saturating_sub(chrome).max(1);
             let current_bottom = current_top + page_height;
@@ -4540,17 +4658,13 @@ impl Reader {
             if first_line >= current_top && last_line < current_bottom {
                 // Chunk is entirely visible — don't scroll
             } else {
-                // Need to scroll.  Ideal: put last_line at the bottom.
-                // new_top = last_line - page_height + 2  (so last_line is the
-                // last visible line).  But never scroll past first_line to top.
                 let top_to_show_bottom = (last_line + 2).saturating_sub(page_height);
                 let new_top = top_to_show_bottom.max(current_top).min(first_line);
                 state.reading_state.row = new_top.saturating_add(1);
             }
         }
 
-        // Redraw the screen so the scroll + underline are visible
-        // before the TTS process starts speaking.
+        // Redraw before starting synthesis
         {
             let state = self.state.clone();
             self.terminal.draw(|f| {
@@ -4559,128 +4673,40 @@ impl Reader {
             })?;
         }
 
-        // Build command
-        let engine = {
-            let state = self.state.borrow();
-            state
-                .config
-                .settings
-                .preferred_tts_engine
-                .clone()
-                .unwrap_or_default()
-        };
+        let engine = self.tts_current_engine.clone();
 
-        // --- Pipelined edge-tts engine (also handles empty/default) ---
-        if engine.is_empty() || engine == "edge-tts" {
-            let player = match self.tts_detect_player() {
-                Some(p) => p,
-                None => {
-                    self.stop_tts();
-                    let mut state = self.state.borrow_mut();
-                    state.ui_state.set_message(
-                        "TTS (edge-tts): no audio player found; install mpv or ffplay".to_string(),
-                        MessageType::Error,
-                    );
-                    return Ok(());
-                }
-            };
-
-            // Determine audio path: use the prefetched file if ready, else convert now.
-            let audio_path: std::path::PathBuf =
-                if let Some(prefetch_path) = self.tts_prefetch_audio_path.take() {
-                    // Wait for the prefetch thread to finish (should already be done).
-                    let ok = match self.tts_prefetch_done_rx.take() {
-                        Some(rx) => rx
-                            .recv_timeout(std::time::Duration::from_secs(30))
-                            .unwrap_or(false),
-                        None => prefetch_path.exists(),
-                    };
-                    self.tts_prefetch_kill_pid = None;
-                    if ok && prefetch_path.exists() {
-                        prefetch_path
-                    } else {
-                        // Prefetch failed — fall back to synchronous conversion.
-                        let _ = std::fs::remove_file(&prefetch_path);
-                        let p = Self::tts_temp_path(self.tts_chunk_index);
-                        if let Err(e) = Self::tts_convert_sync(&text, &p) {
-                            self.stop_tts();
-                            let mut state = self.state.borrow_mut();
-                            state.ui_state.set_message(
-                                format!("TTS (edge-tts) conversion failed: {e}"),
-                                MessageType::Error,
-                            );
-                            return Ok(());
-                        }
-                        p
+        // --- File-based engines: async convert → play via mpv/ffplay ---
+        if Self::is_file_based_engine(&engine) {
+            // Check if the prefetch for this chunk is already ready
+            if let Some(prefetch_rx) = self.tts_prefetch_done_rx.take() {
+                match prefetch_rx.try_recv() {
+                    Ok(Some(path)) => {
+                        // Prefetch done — play immediately
+                        return self.tts_play_file(path);
                     }
-                } else {
-                    // First chunk (or no prefetch available): synchronous conversion.
-                    let p = Self::tts_temp_path(self.tts_chunk_index);
-                    if let Err(e) = Self::tts_convert_sync(&text, &p) {
-                        self.stop_tts();
+                    Ok(None) => {
+                        // Prefetch failed — fall through to fresh async convert
+                    }
+                    Err(std::sync::mpsc::TryRecvError::Empty) => {
+                        // Prefetch still running — wait for it with a popup
+                        self.tts_pending_audio_rx = Some(prefetch_rx);
                         let mut state = self.state.borrow_mut();
-                        state.ui_state.set_message(
-                            format!("TTS (edge-tts) conversion failed: {e}"),
-                            MessageType::Error,
-                        );
+                        state.ui_state.tts_converting = true;
+                        state.ui_state.tts_anim_frame = 0;
                         return Ok(());
                     }
-                    p
-                };
-
-            self.tts_current_audio_path = Some(audio_path.clone());
-
-            // Spawn the audio player asynchronously.
-            let (tx, rx) = std::sync::mpsc::channel::<()>();
-            self.tts_done_rx = Some(rx);
-
-            let mut cmd = std::process::Command::new(player.program());
-            cmd.args(player.args(&audio_path))
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null());
-
-            #[cfg(unix)]
-            {
-                use std::os::unix::process::CommandExt;
-                unsafe {
-                    cmd.pre_exec(|| {
-                        libc::setsid();
-                        Ok(())
-                    });
+                    Err(_) => {
+                        // Channel disconnected — fall through to fresh async convert
+                    }
                 }
             }
-
-            match cmd.spawn() {
-                Ok(child) => {
-                    let pid = child.id();
-                    let mut child_for_thread = child;
-                    std::thread::spawn(move || {
-                        let _ = child_for_thread.wait();
-                        let _ = tx.send(());
-                    });
-                    self.tts_child = None;
-                    self.tts_kill_pid = Some(pid);
-                }
-                Err(err) => {
-                    self.stop_tts();
-                    let mut state = self.state.borrow_mut();
-                    state.ui_state.set_message(
-                        format!("TTS (edge-tts) player failed: {err}"),
-                        MessageType::Error,
-                    );
-                    return Ok(());
-                }
-            }
-
-            // Kick off prefetch for the next chunk while this one plays.
-            self.tts_spawn_prefetch();
+            // No prefetch available or it failed — start async conversion
+            self.tts_start_async_convert(engine, text);
             return Ok(());
         }
 
-        // --- Standard engines (espeak / custom template) ---
-        let (program, args) = if engine == "espeak" {
-            ("espeak".to_string(), vec![text])
-        } else if engine.contains("{}") {
+        // --- Inline engines (custom {}-only command) ---
+        let (program, args) = if engine.contains("{}") {
             let expanded = engine.replace("{}", &text);
             let parts: Vec<&str> = expanded.split_whitespace().collect();
             if parts.is_empty() {
@@ -4739,6 +4765,91 @@ impl Reader {
         Ok(())
     }
 
+    /// Spawn a background thread to convert text for the current chunk.
+    /// When done, the result is sent to `tts_pending_audio_rx`.
+    fn tts_start_async_convert(&mut self, engine: String, text: String) {
+        let index = self.tts_chunk_index;
+        let path = Self::tts_temp_path(index);
+        let (tx, rx) = std::sync::mpsc::channel::<Option<std::path::PathBuf>>();
+        self.tts_pending_audio_rx = Some(rx);
+
+        let path_clone = path.clone();
+        std::thread::spawn(move || {
+            match Self::tts_convert_with_engine(&engine, &text, &path_clone) {
+                Ok(()) => { let _ = tx.send(Some(path_clone)); }
+                Err(_) => { let _ = tx.send(None); }
+            }
+        });
+
+        let mut state = self.state.borrow_mut();
+        state.ui_state.tts_converting = true;
+        state.ui_state.tts_anim_frame = 0;
+    }
+
+    /// Spawn the audio player for `audio_path` and kick off the next prefetch.
+    fn tts_play_file(&mut self, audio_path: std::path::PathBuf) -> eyre::Result<()> {
+        let player = match self.tts_detect_player() {
+            Some(p) => p,
+            None => {
+                self.stop_tts();
+                let mut state = self.state.borrow_mut();
+                state.ui_state.set_message(
+                    "TTS: no audio player found; install mpv or ffplay".to_string(),
+                    MessageType::Error,
+                );
+                return Ok(());
+            }
+        };
+
+        self.tts_current_audio_path = Some(audio_path.clone());
+
+        let (tx, rx) = std::sync::mpsc::channel::<()>();
+        self.tts_done_rx = Some(rx);
+
+        let mut cmd = std::process::Command::new(player.program());
+        cmd.args(player.args(&audio_path))
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::CommandExt;
+            unsafe {
+                cmd.pre_exec(|| {
+                    libc::setsid();
+                    Ok(())
+                });
+            }
+        }
+
+        match cmd.spawn() {
+            Ok(child) => {
+                let pid = child.id();
+                let mut child_for_thread = child;
+                std::thread::spawn(move || {
+                    let _ = child_for_thread.wait();
+                    let _ = tx.send(());
+                });
+                self.tts_child = None;
+                self.tts_kill_pid = Some(pid);
+            }
+            Err(err) => {
+                self.stop_tts();
+                let mut state = self.state.borrow_mut();
+                state.ui_state.set_message(
+                    format!("TTS player failed: {err}"),
+                    MessageType::Error,
+                );
+                return Ok(());
+            }
+        }
+
+        // Kick off prefetch for the next chunk while this one plays.
+        let engine = self.tts_current_engine.clone();
+        self.tts_spawn_prefetch(engine);
+        Ok(())
+    }
+
     /// Advance to the next chunk after the current one finishes.
     fn tts_advance_paragraph(&mut self) -> eyre::Result<()> {
         // Clean up the temp file for the chunk that just finished playing.
@@ -4785,21 +4896,21 @@ impl Reader {
                 libc::kill(-(pid as i32), libc::SIGKILL);
             }
         }
-        // Drop the channel so any background thread unblocks.
+        // Drop channels so any background threads unblock.
         self.tts_prefetch_done_rx = None;
+        self.tts_pending_audio_rx = None;
 
         // Delete temp audio files.
         if let Some(path) = self.tts_current_audio_path.take() {
             let _ = std::fs::remove_file(&path);
         }
-        if let Some(path) = self.tts_prefetch_audio_path.take() {
-            let _ = std::fs::remove_file(&path);
-        }
 
         self.tts_chunks.clear();
         self.tts_chunk_index = 0;
+        self.tts_current_engine.clear();
         let mut state = self.state.borrow_mut();
         state.ui_state.tts_active = false;
+        state.ui_state.tts_converting = false;
         state.ui_state.tts_underline_ranges.clear();
     }
 

@@ -33,7 +33,7 @@ impl SettingsWindow {
             .direction(Direction::Vertical)
             .constraints([Constraint::Min(1), Constraint::Length(1)])
             .split(inner);
-        let footer = Paragraph::new("Tips: Enter activate | r reset | Dict cmd uses %q");
+        let footer = Paragraph::new("Enter: cycle value  r: reset  Dict cmd: use %q for query");
 
         if entries.is_empty() {
             let paragraph = Paragraph::new("No settings available")

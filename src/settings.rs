@@ -31,7 +31,7 @@ pub const VIEWER_PRESET_LIST: &[&str] = &[
 
 pub const DICT_PRESET_LIST: &[&str] = &["dict", "sdcv", "wkdict"];
 
-pub const TTS_PRESET_LIST: &[&str] = &["edge-tts", "espeak"];
+pub const TTS_PRESET_LIST: &[&str] = &["purr", "edge-tts", "trans"];
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -84,7 +84,7 @@ impl Default for Settings {
             start_with_double_spread: false,
             color_theme: ColorTheme::Default,
             seamless_between_chapters: false,
-            preferred_tts_engine: None,
+            preferred_tts_engine: Some("purr".to_string()),
             tts_engine_args: Vec::new(),
             width: None,
             show_line_numbers: false,
@@ -288,7 +288,7 @@ mod tests {
         assert!(!settings.start_with_double_spread);
         assert_eq!(settings.color_theme, ColorTheme::Default);
         assert!(!settings.seamless_between_chapters);
-        assert_eq!(settings.preferred_tts_engine, None);
+        assert_eq!(settings.preferred_tts_engine, Some("purr".to_string()));
         assert!(settings.tts_engine_args.is_empty());
     }
 

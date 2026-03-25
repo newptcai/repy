@@ -171,7 +171,24 @@ The text-selection flow is two-phase:
 
 Press `!` to toggle reading aloud from the current paragraph.
 
-- **Engine Support**: Defaults to the `edge-tts` pipeline, which requires two external tools: [edge-tts](https://github.com/rany2/edge-tts) (speech synthesis) and either `mpv` or `ffplay` (audio playback). Can be configured to `espeak`, `say` (macOS), or any custom shell command via Settings (`s`).
+- **Engine Support**: Defaults to `purr`. Cycle through built-in presets by pressing `Enter` on the **TTS Engine** row in Settings (`s`):
+  - `purr` — KittenTTS local neural TTS (default); requires [purr](https://github.com/rany2/purr)
+  - `edge-tts` — Microsoft Edge neural TTS; requires [edge-tts](https://github.com/rany2/edge-tts) and `mpv` or `ffplay`
+  - `trans` — Google Translate TTS; requires [translate-shell](https://github.com/soimort/translate-shell)
+- **Custom engine**: set `preferred_tts_engine` in `configuration.json` to a command template:
+  - `{}` is replaced with the spoken text; `{output}` is replaced with a temp audio file path
+  - If `{output}` is present, repy expects the command to write audio to that path, then plays it via mpv/ffplay (with prefetch, same as edge-tts). Example:
+    ```json
+    "preferred_tts_engine": "mytts --text \"{}\" --wav \"{output}\""
+    ```
+  - If only `{}` is used, the command is expected to speak the text directly (inline). Example:
+    ```json
+    "preferred_tts_engine": "myengine --speed 1.5 \"{}\""
+    ```
+  - A bare command name with no placeholders receives the text as its sole positional argument. Example:
+    ```json
+    "preferred_tts_engine": "myengine"
+    ```
 - **Visual Feedback**: The paragraph currently being read is underlined in the UI.
 - **Smart Scrolling**: The reader automatically scrolls to keep the active paragraph visible as it progresses through the book.
 - **Granularity**: Text is sent to the TTS engine in manageable chunks (sentence-by-sentence) to ensure responsiveness and proper UI syncing.
@@ -219,7 +236,7 @@ Example `configuration.json`:
     "start_with_double_spread": false,
     "seamless_between_chapters": true,
     "color_theme": "Default",
-    "preferred_tts_engine": null,
+    "preferred_tts_engine": "purr",
     "tts_engine_args": []
   },
   "Keymap": {
