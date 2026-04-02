@@ -4250,18 +4250,7 @@ impl Reader {
             }
             offsets.push(pos); // end sentinel
 
-            let (min_chunk, max_chunk) = {
-                let engine = self
-                    .state
-                    .borrow()
-                    .config
-                    .settings
-                    .preferred_tts_engine
-                    .as_deref()
-                    .unwrap_or("purr")
-                    .to_string();
-                (50, 100)
-            };
+            let (min_chunk, max_chunk) = (50, 100);
             let sentence_chunks = Self::split_into_sentence_chunks(&full_text, min_chunk, max_chunk);
 
             let mut byte_cursor = 0usize;
