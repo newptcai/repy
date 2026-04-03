@@ -4657,7 +4657,7 @@ impl Reader {
 
         self.tts_chunks = self.build_tts_chunks();
         self.tts_current_engine = engine.clone();
-        let current_row = self.state.borrow().reading_state.row;
+        let current_row = self.state.borrow().reading_state.row.saturating_sub(1);
         let idx = match self.find_chunk_at(current_row) {
             Some(i) => i,
             None => {
@@ -5000,11 +5000,61 @@ impl Reader {
 
 #[cfg(test)]
 mod tests {
-    use super::{Reader, WikipediaSearchResponse, WikipediaSummaryResponse};
+    use super::{Reader, TtsChunk, WikipediaSearchResponse, WikipediaSummaryResponse};
+    use arboard::Clipboard;
+    use ratatui::Terminal;
+    use ratatui::backend::CrosstermBackend;
+    use crate::config::Config;
+    use crate::models::TextStructure;
+    use crate::settings::{CfgDefaultKeymaps, Settings};
+    use crate::state::State;
+    use crate::ui::board::Board;
+    use crate::ui::reader::{ApplicationState, MessageType};
+    use std::cell::RefCell;
+    use std::collections::HashMap;
     use std::io::{BufRead, BufReader, Write};
     use std::net::{TcpListener, TcpStream};
+    use std::rc::Rc;
     use std::thread;
     use std::time::Duration;
+
+    fn make_test_reader(text_lines: Vec<String>) -> Reader {
+        let config =
+            Config::with_settings(Settings::default(), CfgDefaultKeymaps::default()).unwrap();
+        let state = State::new_for_test();
+        let app_state = Rc::new(RefCell::new(ApplicationState::new(config)));
+
+        let mut board = Board::new();
+        let ts = TextStructure {
+            text_lines,
+            ..Default::default()
+        };
+        board = board.with_text_structure(ts);
+
+        Reader {
+            state: app_state,
+            terminal: Terminal::new(CrosstermBackend::new(std::io::stdout())).unwrap(),
+            db_state: state,
+            board,
+            clipboard: Clipboard::new().unwrap(),
+            ebook: None,
+            content_start_rows: Vec::new(),
+            chapter_text_structures: Vec::new(),
+            current_text_width: None,
+            dictionary_res_rx: None,
+            tts_done_rx: None,
+            tts_child: None,
+            tts_chunks: Vec::new(),
+            tts_chunk_index: 0,
+            tts_kill_pid: None,
+            tts_audio_player: None,
+            tts_prefetch_kill_pid: None,
+            tts_prefetch_done_rx: None,
+            tts_current_audio_path: None,
+            tts_pending_audio_rx: None,
+            tts_current_engine: String::new(),
+        }
+    }
 
     fn read_request_line(stream: TcpStream) -> (TcpStream, String) {
         let mut reader = BufReader::new(stream);
@@ -5246,60 +5296,14 @@ mod tests {
 
     #[test]
     fn tts_detection_hint_on_missing_program() {
-        use crate::config::Config;
-        use crate::ui::reader::ApplicationState;
-        use crate::ui::board::Board;
-        use crate::state::State;
-        use std::rc::Rc;
-        use std::cell::RefCell;
-        use crate::ui::reader::MessageType;
-        use crate::settings::{Settings, CfgDefaultKeymaps};
-        use ratatui::Terminal;
-        use ratatui::backend::CrosstermBackend;
-        use arboard::Clipboard;
+        let mut reader = make_test_reader(vec!["Some text to read for TTS test.".to_string()]);
+        let app_state = reader.state.clone();
 
-        let config = Config::with_settings(Settings::default(), CfgDefaultKeymaps::default()).unwrap();
-        let state = State::new_for_test();
-        let app_state = Rc::new(RefCell::new(ApplicationState::new(config)));
-        
         // Ensure tts engine is set to edge-tts (default)
         {
             let mut s = app_state.borrow_mut();
             s.config.settings.preferred_tts_engine = Some("edge-tts".to_string());
         }
-
-        use crate::models::TextStructure;
-
-        let mut board = Board::new();
-        let ts = TextStructure {
-            text_lines: vec!["Some text to read for TTS test.".to_string()],
-            ..Default::default()
-        };
-        board = board.with_text_structure(ts);
-
-        let mut reader = Reader {
-            state: app_state.clone(),
-            terminal: Terminal::new(CrosstermBackend::new(std::io::stdout())).unwrap(),
-            db_state: state,
-            board,
-            clipboard: Clipboard::new().unwrap(),
-            ebook: None,
-            content_start_rows: Vec::new(),
-            chapter_text_structures: Vec::new(),
-            current_text_width: None,
-            dictionary_res_rx: None,
-            tts_done_rx: None,
-            tts_child: None,
-            tts_chunks: Vec::new(),
-            tts_chunk_index: 0,
-            tts_kill_pid: None,
-            tts_audio_player: None,
-            tts_prefetch_kill_pid: None,
-            tts_prefetch_done_rx: None,
-            tts_current_audio_path: None,
-            tts_pending_audio_rx: None,
-            tts_current_engine: String::new(),
-        };
 
         // Set to a definitely missing program
         {
@@ -5392,5 +5396,32 @@ mod tests {
         );
 
         assert_eq!(target_row, 11);
+    }
+
+    #[test]
+    fn find_chunk_at_uses_visible_top_line_without_skipping_footnotes() {
+        let mut reader = make_test_reader(vec![
+            "[1] Mahaparinibbana Sutta, Digha Nikaya 16.".to_string(),
+            String::new(),
+            "[2] See chap. 3, n. 1, on [here], regarding the use of the word \"Right.\""
+                .to_string(),
+        ]);
+        reader.tts_chunks = vec![
+            TtsChunk {
+                text: "[1] Mahaparinibbana Sutta, Digha Nikaya 16.".to_string(),
+                first_line: 0,
+                underline: HashMap::from([(0, (0, 43))]),
+            },
+            TtsChunk {
+                text: "[2] See chap. 3, n. 1, on [here], regarding the use of the word \"Right.\""
+                    .to_string(),
+                first_line: 2,
+                underline: HashMap::from([(2, (0, 73))]),
+            },
+        ];
+
+        let current_row = 1usize.saturating_sub(1);
+
+        assert_eq!(reader.find_chunk_at(current_row), Some(0));
     }
 }
