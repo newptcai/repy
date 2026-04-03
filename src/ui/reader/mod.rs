@@ -3063,6 +3063,53 @@ impl Reader {
         if start_line == 0 { 0 } else { start_line + 1 }
     }
 
+    fn chapter_index_for_start_row(content_start_rows: &[usize], row: usize) -> Option<usize> {
+        if content_start_rows.is_empty() {
+            return None;
+        }
+
+        let mut index = 0;
+        for (i, start) in content_start_rows.iter().enumerate() {
+            if *start <= row {
+                index = i;
+            } else {
+                break;
+            }
+        }
+        Some(index)
+    }
+
+    fn tts_target_row_for_chunk(
+        current_row: usize,
+        first_line: usize,
+        last_line: usize,
+        page_height: usize,
+        seamless_between_chapters: bool,
+        content_start_rows: &[usize],
+    ) -> usize {
+        let current_top = current_row.saturating_sub(1);
+
+        if !seamless_between_chapters
+            && let (Some(current_chapter), Some(chunk_chapter)) = (
+                Self::chapter_index_for_start_row(content_start_rows, current_top),
+                Self::chapter_index_for_start_row(content_start_rows, first_line),
+            )
+            && chunk_chapter != current_chapter
+            && let Some(&chapter_start) = content_start_rows.get(chunk_chapter)
+        {
+            return Self::row_from_start(chapter_start);
+        }
+
+        let current_bottom = current_top.saturating_add(page_height);
+        if first_line >= current_top && last_line < current_bottom {
+            return current_row;
+        }
+
+        let top_to_show_bottom = (last_line + 2).saturating_sub(page_height);
+        let new_top = top_to_show_bottom.max(current_top).min(first_line);
+        Self::row_from_start(new_top)
+    }
+
     /// Resolve the effective jump target row for a TOC entry.
     ///
     /// EPUBs produced by tools like Calibre often place a section anchor at the very
@@ -4652,7 +4699,6 @@ impl Reader {
             state.ui_state.tts_active = true;
             state.ui_state.tts_underline_ranges = underline;
 
-            let current_top = state.reading_state.row.saturating_sub(1);
             let term_rows = match crossterm::terminal::size() {
                 Ok((_, rows)) => rows as usize,
                 Err(_) => 24,
@@ -4663,15 +4709,14 @@ impl Reader {
                 2
             };
             let page_height = term_rows.saturating_sub(chrome).max(1);
-            let current_bottom = current_top + page_height;
-
-            if first_line >= current_top && last_line < current_bottom {
-                // Chunk is entirely visible — don't scroll
-            } else {
-                let top_to_show_bottom = (last_line + 2).saturating_sub(page_height);
-                let new_top = top_to_show_bottom.max(current_top).min(first_line);
-                state.reading_state.row = new_top.saturating_add(1);
-            }
+            state.reading_state.row = Self::tts_target_row_for_chunk(
+                state.reading_state.row,
+                first_line,
+                last_line,
+                page_height,
+                state.config.settings.seamless_between_chapters,
+                &self.content_start_rows,
+            );
         }
 
         // Redraw before starting synthesis
@@ -5319,5 +5364,33 @@ mod tests {
                 .any(|chunk| chunk.starts_with("The Buddha offered the Eightfold Path")),
             "expected a new chunk after the footnote boundary, got {chunks:?}"
         );
+    }
+
+    #[test]
+    fn tts_target_row_turns_page_when_next_chunk_starts_new_chapter() {
+        let target_row = Reader::tts_target_row_for_chunk(
+            1,
+            10,
+            12,
+            20,
+            false,
+            &[0, 10],
+        );
+
+        assert_eq!(target_row, 11);
+    }
+
+    #[test]
+    fn tts_target_row_keeps_viewport_when_chunk_is_visible_in_same_chapter() {
+        let target_row = Reader::tts_target_row_for_chunk(
+            11,
+            12,
+            13,
+            20,
+            false,
+            &[0, 10],
+        );
+
+        assert_eq!(target_row, 11);
     }
 }
