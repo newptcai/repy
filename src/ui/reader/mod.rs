@@ -4255,15 +4255,12 @@ impl Reader {
 
             let mut byte_cursor = 0usize;
             for chunk_text in sentence_chunks {
-                // Advance cursor past inter-chunk whitespace
-                while byte_cursor < full_text.len() {
-                    if full_text[byte_cursor..].starts_with(chunk_text.as_str()) {
-                        break;
-                    }
-                    byte_cursor += 1;
-                }
-                let chunk_byte_start = byte_cursor;
-                let chunk_byte_end = byte_cursor + chunk_text.len();
+                let suffix = &full_text[byte_cursor..];
+                let Some(rel_start) = suffix.find(chunk_text.as_str()) else {
+                    continue;
+                };
+                let chunk_byte_start = byte_cursor + rel_start;
+                let chunk_byte_end = chunk_byte_start + chunk_text.len();
                 byte_cursor = chunk_byte_end;
 
                 // Compute per-line underline ranges
@@ -5231,7 +5228,8 @@ mod tests {
             tts_prefetch_kill_pid: None,
             tts_prefetch_done_rx: None,
             tts_current_audio_path: None,
-            tts_prefetch_audio_path: None,
+            tts_pending_audio_rx: None,
+            tts_current_engine: String::new(),
         };
 
         // Set to a definitely missing program
@@ -5256,5 +5254,29 @@ mod tests {
         let input = "This is an ex- ample of hyphen- ation artifacts.";
         let result = RE_TTS_HYPHEN.replace_all(input, "$1$2").into_owned();
         assert_eq!(result, "This is an example of hyphenation artifacts.");
+    }
+
+    #[test]
+    fn tts_chunk_matching_handles_unicode_boundaries() {
+        let text = "“Well said, friend,” the delighted bhikkhus spoke, and asked, “Is there yet another teaching on how a disciple practices Right View?\u{a0}.\u{a0}.\u{a0}.”";
+        let chunks = Reader::split_into_sentence_chunks(text, 50, 100);
+
+        assert!(!chunks.is_empty());
+
+        let mut byte_cursor = 0usize;
+        for chunk_text in chunks {
+            let suffix = &text[byte_cursor..];
+            let rel_start = suffix
+                .find(chunk_text.as_str())
+                .expect("chunk should be found at a character boundary");
+            let chunk_byte_start = byte_cursor + rel_start;
+            let chunk_byte_end = chunk_byte_start + chunk_text.len();
+
+            assert!(text.is_char_boundary(chunk_byte_start));
+            assert!(text.is_char_boundary(chunk_byte_end));
+            assert_eq!(&text[chunk_byte_start..chunk_byte_end], chunk_text);
+
+            byte_cursor = chunk_byte_end;
+        }
     }
 }
