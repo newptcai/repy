@@ -4308,20 +4308,44 @@ impl Reader {
         chunks
     }
 
-    /// Check if a period at position `i` in `chars` is a real sentence end.
-    /// Filters out abbreviations like "L.", "Mr.", "Dr.", "St.", "e.g.", etc.
-    fn is_sentence_end(chars: &[char], i: usize) -> bool {
+    /// Skip trailing closers and inline footnote markers after terminal punctuation.
+    fn skip_sentence_trailers(chars: &[char], mut i: usize) -> usize {
+        while i < chars.len() {
+            match chars[i] {
+                '"' | '\'' | ')' | ']' | '}' | '»' | '”' | '’' => i += 1,
+                '[' => {
+                    let mut j = i + 1;
+                    while j < chars.len() && chars[j].is_ascii_alphanumeric() {
+                        j += 1;
+                    }
+                    if j > i + 1 && j < chars.len() && chars[j] == ']' {
+                        i = j + 1;
+                    } else {
+                        break;
+                    }
+                }
+                _ => break,
+            }
+        }
+        i
+    }
+
+    /// Return the exclusive end position of a sentence boundary, including
+    /// any trailing quote/bracket/footnote markers, if `chars[i]` ends a sentence.
+    fn sentence_end_after(chars: &[char], i: usize) -> Option<usize> {
         let ch = chars[i];
         // ? ! ; are almost always sentence endings
         if matches!(ch, '?' | '!' | ';') {
-            return i + 1 >= chars.len() || chars[i + 1].is_whitespace();
+            let next = Self::skip_sentence_trailers(chars, i + 1);
+            return (next >= chars.len() || chars[next].is_whitespace()).then_some(next);
         }
         if ch != '.' {
-            return false;
+            return None;
         }
-        // Must be followed by whitespace or end of text
-        if i + 1 < chars.len() && !chars[i + 1].is_whitespace() {
-            return false;
+        // Must be followed only by closers / footnotes, then whitespace or end of text.
+        let next = Self::skip_sentence_trailers(chars, i + 1);
+        if next < chars.len() && !chars[next].is_whitespace() {
+            return None;
         }
         // Walk back to find the word before the period
         let mut j = i;
@@ -4331,7 +4355,7 @@ impl Reader {
         let word_len = i - j;
         // Single letter before period → likely an initial (L. , M. , etc.)
         if word_len <= 1 {
-            return false;
+            return None;
         }
         // Check for common abbreviations (case-insensitive)
         let word: String = chars[j..i].iter().collect::<String>().to_lowercase();
@@ -4342,9 +4366,9 @@ impl Reader {
             "vol", "fig", "inc", "corp", "ltd", "no",
         ];
         if abbrevs.contains(&word.as_str()) {
-            return false;
+            return None;
         }
-        true
+        Some(next)
     }
 
     /// Split `text` into chunks of approximately `min_len`..`max_len` characters,
@@ -4377,16 +4401,16 @@ impl Reader {
 
             // Find the last sentence end in [min_len, max_len]
             for i in search_start..search_end {
-                if Self::is_sentence_end(&chars, i) {
-                    split_at = Some(i + 1);
+                if let Some(end) = Self::sentence_end_after(&chars, i) {
+                    split_at = Some(end);
                 }
             }
 
             // If none found, scan forward past max_len
             if split_at.is_none() {
                 for i in search_end..chars.len() {
-                    if Self::is_sentence_end(&chars, i) {
-                        split_at = Some(i + 1);
+                    if let Some(end) = Self::sentence_end_after(&chars, i) {
+                        split_at = Some(end);
                         break;
                     }
                 }
@@ -5278,5 +5302,22 @@ mod tests {
 
             byte_cursor = chunk_byte_end;
         }
+    }
+
+    #[test]
+    fn tts_chunk_split_respects_quote_and_footnote_sentence_boundaries() {
+        let text = "Subhadda asked, “World-Honored One, are the other religious teachers in Magadha and Koshala fully enlightened?” The Buddha knew he had only a short time to live and that answering such a question would be a waste of precious moments. When you have the opportunity to ask a teacher about the Dharma, ask a question that can change your life. The Buddha replied, “Subhadda, it is not important whether they are fully enlightened. The question is whether you want to liberate yourself. If you do, practice the Noble Eightfold Path. Wherever the Noble Eightfold Path is practiced, joy, peace, and insight are there.”[1] The Buddha offered the Eightfold Path in his first Dharma talk, he continued to teach the Eightfold Path for forty-five years, and in his last Dharma talk, spoken to Subhadda, he offered the Noble Eightfold Path. Right View, Right Thinking, Right Speech, Right Action, Right Livelihood, Right Diligence, Right Mindfulness, and Right Concentration.[2]";
+        let chunks = Reader::split_into_sentence_chunks(text, 50, 100);
+
+        assert!(
+            chunks.iter().any(|chunk| chunk.ends_with("there.”[1]")),
+            "expected a chunk to end at the quoted footnote boundary, got {chunks:?}"
+        );
+        assert!(
+            chunks
+                .iter()
+                .any(|chunk| chunk.starts_with("The Buddha offered the Eightfold Path")),
+            "expected a new chunk after the footnote boundary, got {chunks:?}"
+        );
     }
 }
