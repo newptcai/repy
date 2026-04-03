@@ -1,0 +1,358 @@
+-- allium: 3
+-- tts.allium
+
+-- Scope: Text-to-speech engine lifecycle and playback
+-- Includes: TTS state machine, chunk building, engine dispatch,
+--           prefetch pipeline, paragraph advancement
+-- Excludes:
+--   - Text rendering pipeline (see text-rendering.allium)
+--   - UI rendering of underline/spinner (presentation layer)
+--   - Keybinding handling (input layer)
+
+------------------------------------------------------------
+-- External Entities
+------------------------------------------------------------
+
+external entity TextLines {
+    -- The rendered text lines of the current book view,
+    -- produced by the text rendering pipeline.
+}
+
+external entity Settings {
+    preferred_tts_engine: String?
+}
+
+------------------------------------------------------------
+-- Value Types
+------------------------------------------------------------
+
+value TtsChunk {
+    text: String
+    first_line: Integer
+    underline_ranges: Set<UnderlineRange>
+}
+
+value UnderlineRange {
+    line: Integer
+    col_start: Integer
+    col_end: Integer
+}
+
+------------------------------------------------------------
+-- Enumerations
+------------------------------------------------------------
+
+enum EngineKind { file_based | inline }
+
+enum AudioPlayer { mpv | ffplay }
+
+------------------------------------------------------------
+-- Entities and Variants
+------------------------------------------------------------
+
+entity TtsSession {
+    status: idle | converting | speaking | finished
+    engine: String
+    engine_kind: EngineKind
+    chunks: List<TtsChunk>
+    current_chunk_index: Integer
+    audio_player: AudioPlayer?
+
+    -- Derived
+    current_chunk: chunks[current_chunk_index]?
+    has_next_chunk: current_chunk_index + 1 < chunks.count
+
+    transitions status {
+        idle -> converting
+        idle -> speaking
+        converting -> speaking
+        converting -> idle
+        speaking -> converting
+        speaking -> idle
+        speaking -> finished
+        finished -> idle
+        terminal: idle
+    }
+}
+
+------------------------------------------------------------
+-- Config
+------------------------------------------------------------
+
+config {
+    preferred_tts_engine: String? = "purr"
+    -- The TTS engine command to use.
+    -- Preset engines: "purr", "edge-tts", "trans"
+    -- Custom: any command template with {} for text
+    --         and optionally {output} for file path.
+
+    min_chunk_length: Integer = 50
+    -- Minimum character count per TTS chunk
+
+    max_chunk_length: Integer = 100
+    -- Maximum character count per TTS chunk (soft limit;
+    -- chunks may exceed this to reach a sentence boundary)
+}
+
+------------------------------------------------------------
+-- Rules
+------------------------------------------------------------
+
+-- ## Session lifecycle
+
+rule ToggleTts {
+    when: ToggleTts(text_lines, current_row)
+
+    requires: engine_program_exists(preferred_tts_engine)
+
+    ensures:
+        if TtsSession.status = idle:
+            TtsSession.status = speaking or TtsSession.status = converting
+        else:
+            StopTts()
+
+    @guidance
+        -- For file-based engines, also verify that an audio
+        -- player (mpv or ffplay) is available before starting.
+}
+
+rule StartSession {
+    when: StartSession(text_lines, engine, current_row)
+
+    requires: TtsSession.status = idle
+
+    let chunks = build_chunks(text_lines)
+    let start_index = find_chunk_at(chunks, current_row)
+
+    requires: chunks.count > 0
+    requires: start_index != null
+
+    ensures: TtsSession.status = speaking or TtsSession.status = converting
+    ensures: TtsSession.engine = engine
+    ensures: TtsSession.engine_kind = determine_engine_kind(engine)
+    ensures: TtsSession.chunks = chunks
+    ensures: TtsSession.current_chunk_index = start_index
+    ensures: SpeakCurrentChunk()
+}
+
+rule StopTts {
+    when: StopTts()
+
+    ensures: TtsSession.status = idle
+    ensures: TtsSession.chunks = []
+    ensures: TtsSession.current_chunk_index = 0
+
+    @guidance
+        -- Kill the entire process group (SIGKILL to -pid on Unix)
+        -- to ensure all child processes (TTS engine, audio player)
+        -- are terminated. Kill any prefetch conversion as well.
+        -- Clean up temporary audio files.
+}
+
+-- ## Chunk building
+
+rule BuildChunks {
+    when: BuildChunks(text_lines)
+
+    ensures: text is split into paragraphs (separated by blank
+             lines, chapter breaks, and image placeholders)
+    ensures: each paragraph is further split into sentence-boundary
+             chunks of approximately min_chunk_length to
+             max_chunk_length characters
+    ensures: each chunk records per-line underline character ranges
+             for visual feedback
+    ensures: soft hyphens inserted by the text wrapping pipeline
+             are removed from chunk text
+
+    @guidance
+        -- Paragraph detection: consecutive non-empty lines that
+        -- are not chapter break markers or image placeholders.
+        -- Sentence boundary detection uses terminal punctuation
+        -- (. ? ! ;) followed by optional closing quotes/brackets
+        -- and footnote markers, then whitespace or end-of-text.
+        -- Common abbreviations (Mr., Dr., etc.) and single-letter
+        -- initials are not treated as sentence ends.
+}
+
+rule FindChunkAt {
+    when: FindChunkAt(chunks, row)
+
+    ensures: returns the chunk whose underline ranges contain row,
+             or the first chunk starting at or after row
+
+    @guidance
+        -- This determines where TTS begins when toggled on.
+        -- It finds the paragraph closest to the reader's
+        -- current scroll position.
+}
+
+-- ## Speaking
+
+rule SpeakCurrentChunk {
+    when: SpeakCurrentChunk()
+
+    requires: TtsSession.status != idle
+    requires: TtsSession.current_chunk != null
+
+    ensures: the active chunk's underline ranges are applied
+             to the UI for visual feedback
+    ensures: the view scrolls to keep the active chunk visible
+
+    ensures:
+        if TtsSession.engine_kind = file_based:
+            FileBasedSpeak()
+        else:
+            InlineSpeak()
+}
+
+rule FileBasedSpeak {
+    when: FileBasedSpeak()
+
+    ensures:
+        if prefetch_audio_ready:
+            PlayAudioFile(prefetched_path)
+        else:
+            TtsSession.status = converting
+            AsyncConvert(TtsSession.engine, TtsSession.current_chunk.text)
+
+    @guidance
+        -- File-based engines (edge-tts, purr, trans, or custom
+        -- templates with {output}) convert text to an audio file,
+        -- then play it via mpv or ffplay.
+        -- If a prefetch for this chunk already completed, play
+        -- immediately. If prefetch is still running, show a
+        -- converting spinner and wait. Otherwise start a fresh
+        -- async conversion.
+}
+
+rule InlineSpeak {
+    when: InlineSpeak()
+
+    ensures: TtsSession.status = speaking
+    ensures: engine process spawned with chunk text as argument
+
+    @guidance
+        -- Inline engines (custom commands with {} placeholder)
+        -- speak directly without intermediate files.
+        -- The process is spawned in its own process group
+        -- so it can be killed cleanly on stop.
+}
+
+rule AsyncConvertCompleted {
+    when: AsyncConvertCompleted(audio_path)
+
+    requires: TtsSession.status = converting
+    requires: audio_path != null
+
+    ensures: TtsSession.status = speaking
+    ensures: PlayAudioFile(audio_path)
+}
+
+rule AsyncConvertFailed {
+    when: AsyncConvertFailed()
+
+    requires: TtsSession.status = converting
+
+    ensures: StopTts()
+}
+
+rule PlayAudioFile {
+    when: PlayAudioFile(path)
+
+    requires: TtsSession.audio_player != null
+
+    ensures: TtsSession.status = speaking
+    ensures: audio player process spawned for path
+    ensures: PrefetchNextChunk()
+
+    @guidance
+        -- Playback uses mpv (preferred) or ffplay.
+        -- A background thread waits for the player to exit
+        -- and signals completion via a channel.
+}
+
+-- ## Advancement and prefetch
+
+rule ChunkFinished {
+    when: ChunkFinished()
+
+    requires: TtsSession.status = speaking
+
+    ensures:
+        if TtsSession.has_next_chunk:
+            TtsSession.current_chunk_index = TtsSession.current_chunk_index + 1
+            SpeakCurrentChunk()
+        else:
+            TtsSession.status = finished
+            StopTts()
+
+    @guidance
+        -- Temporary audio files for the finished chunk are
+        -- cleaned up before advancing.
+}
+
+rule PrefetchNextChunk {
+    when: PrefetchNextChunk()
+
+    requires: TtsSession.has_next_chunk
+    requires: TtsSession.engine_kind = file_based
+
+    ensures: background conversion starts for chunks[current_chunk_index + 1]
+
+    @guidance
+        -- Prefetch runs in a background thread while the current
+        -- chunk is playing. The result is stored and checked
+        -- when the next chunk needs to play, avoiding conversion
+        -- latency for sequential reading.
+}
+
+-- ## Engine resolution
+
+rule DetermineEngineKind {
+    when: DetermineEngineKind(engine)
+
+    ensures:
+        if engine in ["edge-tts", "purr", "trans"]:
+            engine_kind = file_based
+        if engine contains "{}" and engine contains "{output}":
+            engine_kind = file_based
+        else:
+            engine_kind = inline
+}
+
+------------------------------------------------------------
+-- Invariants
+------------------------------------------------------------
+
+invariant SingleSession {
+    -- At most one TtsSession exists at any time.
+    -- Starting a new session stops the previous one.
+}
+
+invariant ChunkCoverage {
+    -- Every non-empty, non-image, non-chapter-break paragraph
+    -- in the text lines is covered by at least one TtsChunk.
+}
+
+invariant UnderlineAccuracy {
+    -- Each chunk's underline ranges correspond exactly to the
+    -- character positions of that chunk's text within the
+    -- rendered text lines.
+}
+
+invariant CleanShutdown {
+    -- When TtsSession transitions to idle, all spawned processes
+    -- (engine, player, prefetch) are terminated and all temporary
+    -- audio files are deleted.
+}
+
+------------------------------------------------------------
+-- Open Questions
+------------------------------------------------------------
+
+-- 1. Should TTS support pausing and resuming mid-chunk?
+-- 2. Should the sentence splitting algorithm be configurable
+--    (e.g. for languages with different punctuation rules)?
+-- 3. Should TTS speed/voice be configurable per-engine?
+-- 4. Should TTS continue across chapter boundaries automatically
+--    (currently chunks are built from the current chapter view)?

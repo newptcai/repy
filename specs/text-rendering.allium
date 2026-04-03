@@ -1,0 +1,284 @@
+-- allium: 3
+-- text-rendering.allium
+
+-- Scope: Text rendering pipeline for EPUB chapter content
+-- Includes: HTML-to-text conversion, text wrapping, hyphenation,
+--           inline formatting, link/section/image extraction, pagebreaks
+-- Excludes:
+--   - Terminal UI rendering (board.rs — presentation layer)
+--   - Reading state persistence (state.rs)
+--   - EPUB file parsing (ebook.rs — content extraction)
+--   - Search highlighting (UI concern)
+
+------------------------------------------------------------
+-- External Entities
+------------------------------------------------------------
+
+external entity Chapter {
+    html_content: String
+    content_index: Integer
+}
+
+------------------------------------------------------------
+-- Value Types
+------------------------------------------------------------
+
+value Position {
+    row: Integer
+    col: Integer
+}
+
+value InlineStyle {
+    position: Position
+    length: Integer
+    kind: bold | italic
+}
+
+value LinkEntry {
+    row: Integer
+    label: String
+    url: String
+    target_row: Integer?
+}
+
+value ImageEntry {
+    row: Integer
+    source_path: String
+}
+
+------------------------------------------------------------
+-- Entities and Variants
+------------------------------------------------------------
+
+entity TextStructure {
+    -- The rendered output of a single chapter
+    text_lines: List<String>
+    images: Set<ImageEntry>
+    sections: Set<SectionAnchor>
+    formatting: List<InlineStyle>
+    links: List<LinkEntry>
+    pagebreaks: Set<PagebreakEntry>
+}
+
+value SectionAnchor {
+    id: String
+    row: Integer
+}
+
+value PagebreakEntry {
+    row: Integer
+    label: String
+}
+
+------------------------------------------------------------
+-- Config
+------------------------------------------------------------
+
+config {
+    text_width: Integer = 80
+    -- Width in columns to wrap text to
+
+    hyphenation_language: String = "en-US"
+    -- Language dictionary for hyphenation
+}
+
+------------------------------------------------------------
+-- Rules
+------------------------------------------------------------
+
+-- ## Parsing pipeline
+--
+-- The pipeline transforms raw HTML into a TextStructure through
+-- a sequence of deterministic transformations.
+
+rule ParseChapter {
+    when: ParseChapter(chapter, text_width, section_ids, starting_line)
+
+    ensures: TextStructure.created(
+        text_lines: rendered_lines,
+        images: extracted_images,
+        sections: extracted_sections,
+        formatting: extracted_formatting,
+        links: extracted_links,
+        pagebreaks: extracted_pagebreaks
+    )
+
+    @guidance
+        -- The pipeline proceeds in this order:
+        -- 1. Preprocess: convert inline annotations (sup/sub),
+        --    images (to [Image: ...] placeholders), and
+        --    pagebreaks (to sentinels) in the raw HTML.
+        -- 2. Convert preprocessed HTML to plain text lines
+        --    (preserving paragraph structure).
+        -- 3. Normalize list markers ("* " to "- ").
+        -- 4. Renumber superscript footnote references sequentially.
+        -- 5. Extract formatting spans from the HTML DOM, then
+        --    strip inline markers (**, *) from text lines,
+        --    adjusting column offsets accordingly.
+        -- 6. Wrap text to text_width using hyphenation.
+        -- 7. Extract pagebreak map from sentinel markers.
+        -- 8. Extract images, sections, formatting, and links
+        --    by correlating DOM elements to wrapped text lines.
+}
+
+-- ## Preprocessing rules
+
+rule PreprocessImages {
+    when: PreprocessImages(html)
+
+    ensures: each <img> tag is replaced with a text placeholder
+
+    @guidance
+        -- Image placeholder text is derived from available metadata:
+        -- 1. title attribute: "[Image: {title}]"
+        -- 2. alt attribute (if non-empty and not "image"): "[Image: {alt}]"
+        -- 3. filename from src: "[Image: {filename}]"
+        -- The <img> tag is replaced with the placeholder text so
+        -- html2text preserves it in the plain-text output.
+}
+
+rule PreprocessPagebreaks {
+    when: PreprocessPagebreaks(html)
+
+    ensures: each epub:type="pagebreak" element is replaced with
+             a sentinel marker containing the page label
+
+    @guidance
+        -- Page label is resolved from (in priority order):
+        -- 1. title or aria-label attribute
+        -- 2. Inner text content
+        -- 3. Numeric suffix of the id attribute
+        -- 4. Fallback: "?"
+}
+
+rule PreprocessInlineAnnotations {
+    when: PreprocessInlineAnnotations(html)
+
+    ensures: <sup> tags become "^{...}" markers
+    ensures: <sub> tags become "_{...}" markers
+
+    @guidance
+        -- These markers survive the html2text conversion and are
+        -- later used to identify superscript footnote references.
+}
+
+-- ## Text wrapping
+
+rule WrapText {
+    when: WrapText(lines, width)
+
+    ensures: each line is wrapped to at most width columns
+    ensures: hyphenation is applied at word-break points
+    ensures: list items preserve indentation on continuation lines
+
+    @guidance
+        -- List continuation indentation rules:
+        -- - Bullet ("- "): 2-space indent
+        -- - Blockquote ("> "): 2-space indent
+        -- - Ordered ("N. "): indent matches marker width
+        -- Hyphenation uses the embedded en-US dictionary.
+}
+
+-- ## Extraction rules
+
+rule ExtractSections {
+    when: ExtractSections(html_dom, text_lines, starting_line)
+
+    ensures: every element with an id attribute is mapped to
+             the text line that best matches its content
+
+    @guidance
+        -- Text matching uses progressively shorter word-prefix
+        -- strategies to find the corresponding line. For <a>
+        -- elements with very short text, the algorithm climbs
+        -- to the nearest block-level ancestor for more context.
+        -- Empty anchors fall back to parent headings or next
+        -- siblings.
+}
+
+rule ExtractFormatting {
+    when: ExtractFormatting(html_dom, text_lines, starting_line)
+
+    ensures: bold spans (strong, b, h1-h6) produce InlineStyle
+             entries with kind = bold
+    ensures: italic spans (em, i) produce InlineStyle entries
+             with kind = italic
+
+    @guidance
+        -- Formatting extraction tracks a high-water mark and a
+        -- stack of ancestor elements to handle nested formatting
+        -- (e.g. bold text inside a heading). Text matching works
+        -- across line breaks using token-by-token alignment.
+}
+
+rule ExtractLinks {
+    when: ExtractLinks(html_dom, text_lines, starting_line)
+
+    ensures: each <a href="..."> produces a LinkEntry
+    ensures: backlinks inside footnote sections are filtered out
+
+    @guidance
+        -- Backlink filtering checks for:
+        -- - epub:type="footnote" on ancestors
+        -- - Common footnote CSS classes (fn, footnote, endnote, etc.)
+        -- Short internal links (label <= 4 chars) inside footnotes
+        -- are treated as backlinks and excluded.
+        -- Superscript links are renumbered sequentially as ^{N}.
+}
+
+rule ExtractImages {
+    when: ExtractImages(html_dom, text_lines, starting_line)
+
+    ensures: each [Image: ...] placeholder in text_lines is
+             mapped to its original image source path
+}
+
+rule StripInlineMarkers {
+    when: StripInlineMarkers(text_lines, formatting)
+
+    ensures: bold markers (**) and italic markers (*) are removed
+             from text_lines
+    ensures: formatting column offsets are adjusted to account
+             for removed characters
+
+    @guidance
+        -- Only markers at word boundaries are stripped.
+        -- This runs after formatting extraction so spans are
+        -- already recorded, then marker characters are removed
+        -- and column positions shifted left accordingly.
+}
+
+------------------------------------------------------------
+-- Invariants
+------------------------------------------------------------
+
+invariant DeterministicRendering {
+    -- The same (html, text_width, section_ids, starting_line)
+    -- input always produces the same TextStructure output.
+    -- The pipeline is pure: no side effects, no randomness.
+}
+
+invariant LineWidthBound {
+    -- After wrapping, no text line exceeds text_width columns
+    -- (excluding pre-existing long words that cannot be split).
+}
+
+invariant FormattingAlignment {
+    -- Every InlineStyle span references valid (row, col) coordinates
+    -- within text_lines and its length does not exceed the
+    -- remaining characters on that line.
+}
+
+invariant ImageSourcePreservation {
+    -- Every image in the source HTML that has a src attribute
+    -- appears exactly once in the images map, in document order.
+}
+
+------------------------------------------------------------
+-- Open Questions
+------------------------------------------------------------
+
+-- 1. Should hyphenation language be configurable per-book
+--    (based on EPUB metadata language field)?
+-- 2. Should the pipeline support right-to-left text?
+-- 3. Should nested list indentation be supported beyond one level?
