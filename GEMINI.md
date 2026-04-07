@@ -90,11 +90,11 @@ src/
 ├── models.rs            # Data models (ReadingState, SearchData, WindowType, etc.)
 ├── settings.rs          # User settings structure
 ├── logging.rs           # Debug logging utilities
+├── theme.rs             # Color theme definitions for the TUI
 ├── ui/
 │   ├── mod.rs           # UI module root
 │   ├── reader/
-│   │   ├── mod.rs       # Main reader application state and event handling
-│   │   └── tts.rs       # Text-to-speech engine abstraction
+│   │   └── mod.rs       # Main reader state, event handling, and TTS pipeline
 │   ├── board.rs         # Rendering logic for the reading view
 │   └── windows/
 │       ├── mod.rs       # Windows module root, shared helpers (centered_popup_area)
@@ -147,12 +147,7 @@ src/
 - Search navigation (n/p/N)
 - Width adjustment with database persistence
 - Wikipedia lookup for dictionary definitions
-
-**`src/ui/reader/tts.rs`** (~450 lines):
-- TTS engine abstraction (TtsEngine trait)
-- Preset engine support: edge-playback, espeak, say (macOS)
-- Custom engine templates with `{}` placeholder
-- Paragraph-by-paragraph reading with async child process management
+- TTS chunking, underline tracking, and background audio prefetch for file-based engines
 
 **`src/ui/board.rs`** (~400 lines):
 - Rendering the reading view with ratatui
@@ -236,13 +231,15 @@ When debugging or fixing HTML parsing bugs (links, footnotes, sections, formatti
 
 ### Text-to-Speech (TTS)
 - Press `!` to toggle TTS (read aloud) from the current paragraph
-- Default engine: `edge-playback` (requires [edge-tts](https://github.com/rany2/edge-tts))
-- Reads paragraph by paragraph; the active paragraph is underlined
+- Default file-based engine: `edge-tts` (requires [edge-tts](https://github.com/rany2/edge-tts))
+- Also supports `purr`, `trans`, and custom command templates
+- Reads sentence-sized chunks; the active chunk is underlined
 - Auto-scrolls to keep the current paragraph at the top of the page
 - Press `!` again to stop TTS
 - Configurable via `preferred_tts_engine` in settings (cycle through presets in Settings window)
-- Preset engines: `edge-playback`, `espeak`, `say` (macOS)
-- Custom engine: set `preferred_tts_engine` to a command template with `{}` placeholder for text (e.g., `espeak -s 150 "{}"`)
+- File-based engines are converted in the background with a bounded ready queue so playback can stay ahead
+- Temp audio files are deleted after playback ends or TTS is stopped
+- Custom engine: set `preferred_tts_engine` to a command template with `{}` for text, or with both `{}` and `{output}` for file-based playback
 
 ### Known Limitations
 - Only EPUB format supported (MOBI, AZW, FB2 not implemented)

@@ -383,6 +383,8 @@ enum EdgeTtsPlayer {
     Ffplay,
 }
 
+const TTS_PREFETCH_WINDOW: usize = 4;
+
 impl EdgeTtsPlayer {
     fn program(&self) -> &'static str {
         match self {
@@ -414,6 +416,21 @@ struct TtsChunk {
     underline: HashMap<usize, (usize, usize)>,
 }
 
+enum TtsWorkerCommand {
+    UpdatePlaybackIndex(usize),
+    Stop,
+}
+
+enum TtsWorkerEvent {
+    Ready {
+        index: usize,
+        path: std::path::PathBuf,
+    },
+    Failed {
+        index: usize,
+    },
+}
+
 /// Main reader application struct
 pub struct Reader {
     state: Rc<RefCell<ApplicationState>>,
@@ -440,16 +457,18 @@ pub struct Reader {
     tts_kill_pid: Option<u32>,
     /// Detected audio player for edge-tts pipeline (mpv or ffplay)
     tts_audio_player: Option<EdgeTtsPlayer>,
-    /// PID of the prefetch conversion process for killing
-    tts_prefetch_kill_pid: Option<u32>,
-    /// Channel delivering the prefetched audio path (Some(path)) or None on failure
-    tts_prefetch_done_rx: Option<std::sync::mpsc::Receiver<Option<std::path::PathBuf>>>,
     /// Path of the temp audio file currently being played
     tts_current_audio_path: Option<std::path::PathBuf>,
-    /// Channel delivering the current chunk's audio path once ready (async conversion)
-    tts_pending_audio_rx: Option<std::sync::mpsc::Receiver<Option<std::path::PathBuf>>>,
+    /// Converted audio chunks that are ready to play, keyed by chunk index.
+    tts_ready_audio: HashMap<usize, std::path::PathBuf>,
+    /// Background worker command channel for bounded chunk conversion.
+    tts_worker_tx: Option<std::sync::mpsc::Sender<TtsWorkerCommand>>,
+    /// Background worker event channel delivering ready/failed conversion results.
+    tts_worker_rx: Option<std::sync::mpsc::Receiver<TtsWorkerEvent>>,
     /// The TTS engine in use for the current session (needed for prefetch after async play)
     tts_current_engine: String,
+    /// Session-scoped temp dir for generated TTS audio files.
+    tts_temp_dir: Option<std::path::PathBuf>,
 }
 
 impl Reader {
@@ -835,11 +854,12 @@ impl Reader {
             tts_chunk_index: 0,
             tts_kill_pid: None,
             tts_audio_player: None,
-            tts_prefetch_kill_pid: None,
-            tts_prefetch_done_rx: None,
             tts_current_audio_path: None,
-            tts_pending_audio_rx: None,
+            tts_ready_audio: HashMap::new(),
+            tts_worker_tx: None,
+            tts_worker_rx: None,
             tts_current_engine: String::new(),
+            tts_temp_dir: None,
         })
     }
 
@@ -1022,34 +1042,7 @@ impl Reader {
                 }
             }
 
-            // Check for async TTS conversion completion → start playing
-            if self.tts_pending_audio_rx.is_some() {
-                let result = self.tts_pending_audio_rx.as_ref().unwrap().try_recv();
-                match result {
-                    Ok(Some(path)) => {
-                        self.tts_pending_audio_rx = None;
-                        self.state.borrow_mut().ui_state.tts_converting = false;
-                        self.tts_play_file(path)?;
-                    }
-                    Ok(None) => {
-                        self.tts_pending_audio_rx = None;
-                        self.stop_tts();
-                        self.state.borrow_mut().ui_state.set_message(
-                            "TTS conversion failed".to_string(),
-                            MessageType::Error,
-                        );
-                    }
-                    Err(std::sync::mpsc::TryRecvError::Empty) => {
-                        // Still converting — advance animation frame
-                        let next = self.state.borrow().ui_state.tts_anim_frame.wrapping_add(1);
-                        self.state.borrow_mut().ui_state.tts_anim_frame = next;
-                    }
-                    Err(_) => {
-                        self.tts_pending_audio_rx = None;
-                        self.stop_tts();
-                    }
-                }
-            }
+            self.tts_poll_worker()?;
 
             // Check for TTS paragraph completion → advance to next paragraph
             if self.state.borrow().ui_state.tts_active {
@@ -4494,10 +4487,23 @@ impl Reader {
     }
 
     /// Returns a temp path for edge-tts audio output at the given index.
-    fn tts_temp_path(index: usize) -> std::path::PathBuf {
-        let mut p = std::env::temp_dir();
+    fn tts_temp_path(dir: &std::path::Path, index: usize) -> std::path::PathBuf {
+        let mut p = dir.to_path_buf();
         p.push(format!("repy_tts_{}.mp3", index));
         p
+    }
+
+    fn tts_create_temp_dir() -> eyre::Result<std::path::PathBuf> {
+        let mut dir = std::env::temp_dir();
+        dir.push(format!(
+            "repy_tts_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)?
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir)?;
+        Ok(dir)
     }
 
     /// Detect and cache an audio player (mpv or ffplay) for the edge-tts pipeline.
@@ -4581,26 +4587,181 @@ impl Reader {
         Ok(())
     }
 
-    /// Spawn an async conversion for the chunk after the current one (prefetch).
-    fn tts_spawn_prefetch(&mut self, engine: String) {
-        let next_index = self.tts_chunk_index + 1;
-        let next_text = match self.tts_chunks.get(next_index) {
-            Some(c) => c.text.clone(),
-            None => return, // no next chunk
-        };
-        let path = Self::tts_temp_path(next_index);
+    fn tts_set_converting(&mut self, converting: bool) {
+        let mut state = self.state.borrow_mut();
+        let was_converting = state.ui_state.tts_converting;
+        state.ui_state.tts_converting = converting;
+        if converting && !was_converting {
+            state.ui_state.tts_anim_frame = 0;
+        }
+    }
 
-        let (tx, rx) = std::sync::mpsc::channel::<Option<std::path::PathBuf>>();
-        self.tts_prefetch_done_rx = Some(rx);
+    fn tts_prefetch_limit(playback_index: usize, total_chunks: usize) -> Option<usize> {
+        if total_chunks == 0 || playback_index >= total_chunks {
+            return None;
+        }
+        Some(
+            playback_index
+                .saturating_add(TTS_PREFETCH_WINDOW.saturating_sub(1))
+                .min(total_chunks - 1),
+        )
+    }
 
-        let path_clone = path.clone();
-        let handle = std::thread::spawn(move || {
-            match Self::tts_convert_with_engine(&engine, &next_text, &path_clone) {
-                Ok(()) => { let _ = tx.send(Some(path_clone)); }
-                Err(_) => { let _ = tx.send(None); }
-            }
+    fn tts_spawn_worker(
+        &mut self,
+        engine: String,
+        temp_dir: std::path::PathBuf,
+        start_index: usize,
+    ) {
+        let texts: Vec<String> = self.tts_chunks.iter().map(|chunk| chunk.text.clone()).collect();
+        let total_chunks = texts.len();
+        let (cmd_tx, cmd_rx) = std::sync::mpsc::channel::<TtsWorkerCommand>();
+        let (event_tx, event_rx) = std::sync::mpsc::channel::<TtsWorkerEvent>();
+
+        self.tts_worker_tx = Some(cmd_tx.clone());
+        self.tts_worker_rx = Some(event_rx);
+
+        std::thread::spawn(move || {
+            Self::tts_worker_loop(
+                engine,
+                temp_dir,
+                texts,
+                start_index,
+                total_chunks,
+                cmd_rx,
+                event_tx,
+            );
         });
-        drop(handle);
+
+        let _ = cmd_tx.send(TtsWorkerCommand::UpdatePlaybackIndex(start_index));
+    }
+
+    fn tts_worker_loop(
+        engine: String,
+        temp_dir: std::path::PathBuf,
+        texts: Vec<String>,
+        start_index: usize,
+        total_chunks: usize,
+        cmd_rx: std::sync::mpsc::Receiver<TtsWorkerCommand>,
+        event_tx: std::sync::mpsc::Sender<TtsWorkerEvent>,
+    ) {
+        let mut playback_index = start_index;
+        let mut next_to_convert = start_index;
+
+        loop {
+            while let Ok(cmd) = cmd_rx.try_recv() {
+                match cmd {
+                    TtsWorkerCommand::UpdatePlaybackIndex(index) => {
+                        playback_index = index.min(total_chunks);
+                        next_to_convert = next_to_convert.max(playback_index);
+                    }
+                    TtsWorkerCommand::Stop => return,
+                }
+            }
+
+            let Some(limit) = Self::tts_prefetch_limit(playback_index, total_chunks) else {
+                return;
+            };
+
+            if next_to_convert <= limit {
+                let Some(text) = texts.get(next_to_convert) else {
+                    return;
+                };
+                let path = Self::tts_temp_path(&temp_dir, next_to_convert);
+                let event = match Self::tts_convert_with_engine(&engine, text, &path) {
+                    Ok(()) => TtsWorkerEvent::Ready {
+                        index: next_to_convert,
+                        path,
+                    },
+                    Err(_) => TtsWorkerEvent::Failed {
+                        index: next_to_convert,
+                    },
+                };
+
+                if event_tx.send(event).is_err() {
+                    return;
+                }
+                next_to_convert += 1;
+                continue;
+            }
+
+            match cmd_rx.recv_timeout(Duration::from_millis(80)) {
+                Ok(TtsWorkerCommand::UpdatePlaybackIndex(index)) => {
+                    playback_index = index.min(total_chunks);
+                    next_to_convert = next_to_convert.max(playback_index);
+                }
+                Ok(TtsWorkerCommand::Stop) => return,
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return,
+            }
+        }
+    }
+
+    fn tts_notify_worker(&self) {
+        if let Some(tx) = &self.tts_worker_tx {
+            let _ = tx.send(TtsWorkerCommand::UpdatePlaybackIndex(self.tts_chunk_index));
+        }
+    }
+
+    fn tts_try_play_ready_chunk(&mut self) -> eyre::Result<bool> {
+        if let Some(path) = self.tts_ready_audio.remove(&self.tts_chunk_index) {
+            self.tts_set_converting(false);
+            self.tts_play_file(path)?;
+            return Ok(true);
+        }
+
+        self.tts_set_converting(true);
+        Ok(false)
+    }
+
+    fn tts_poll_worker(&mut self) -> eyre::Result<()> {
+        let mut events = Vec::new();
+        if let Some(rx) = &self.tts_worker_rx {
+            loop {
+                match rx.try_recv() {
+                    Ok(event) => events.push(event),
+                    Err(std::sync::mpsc::TryRecvError::Empty) => break,
+                    Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                        self.tts_worker_rx = None;
+                        self.tts_worker_tx = None;
+                        break;
+                    }
+                }
+            }
+        }
+
+        for event in events {
+            match event {
+                TtsWorkerEvent::Ready { index, path } => {
+                    self.tts_ready_audio.insert(index, path);
+                }
+                TtsWorkerEvent::Failed { index } => {
+                    if index == self.tts_chunk_index && self.state.borrow().ui_state.tts_active {
+                        self.stop_tts();
+                        self.state.borrow_mut().ui_state.set_message(
+                            "TTS conversion failed".to_string(),
+                            MessageType::Error,
+                        );
+                        return Ok(());
+                    }
+                }
+            }
+        }
+
+        let waiting_for_current = self.state.borrow().ui_state.tts_active
+            && self.tts_done_rx.is_none()
+            && self.tts_current_audio_path.is_none();
+
+        if waiting_for_current {
+            if self.tts_try_play_ready_chunk()? {
+                return Ok(());
+            }
+
+            let next = self.state.borrow().ui_state.tts_anim_frame.wrapping_add(1);
+            self.state.borrow_mut().ui_state.tts_anim_frame = next;
+        }
+
+        Ok(())
     }
 
     /// Toggle TTS: start if not active, stop if active.
@@ -4656,7 +4817,9 @@ impl Reader {
         }
 
         self.tts_chunks = self.build_tts_chunks();
+        self.tts_ready_audio.clear();
         self.tts_current_engine = engine.clone();
+        self.tts_temp_dir = None;
         let current_row = self.state.borrow().reading_state.row.saturating_sub(1);
         let idx = match self.find_chunk_at(current_row) {
             Some(i) => i,
@@ -4669,6 +4832,14 @@ impl Reader {
             }
         };
         self.tts_chunk_index = idx;
+        if Self::is_file_based_engine(&engine) {
+            self.tts_temp_dir = Some(Self::tts_create_temp_dir()?);
+            let temp_dir = self
+                .tts_temp_dir
+                .clone()
+                .ok_or_else(|| eyre::eyre!("missing TTS temp dir"))?;
+            self.tts_spawn_worker(engine, temp_dir, idx);
+        }
         self.tts_speak_current()?;
         Ok(())
     }
@@ -4730,33 +4901,11 @@ impl Reader {
 
         let engine = self.tts_current_engine.clone();
 
-        // --- File-based engines: async convert → play via mpv/ffplay ---
+        // --- File-based engines: background conversion queue → play via mpv/ffplay ---
         if Self::is_file_based_engine(&engine) {
-            // Check if the prefetch for this chunk is already ready
-            if let Some(prefetch_rx) = self.tts_prefetch_done_rx.take() {
-                match prefetch_rx.try_recv() {
-                    Ok(Some(path)) => {
-                        // Prefetch done — play immediately
-                        return self.tts_play_file(path);
-                    }
-                    Ok(None) => {
-                        // Prefetch failed — fall through to fresh async convert
-                    }
-                    Err(std::sync::mpsc::TryRecvError::Empty) => {
-                        // Prefetch still running — wait for it with a popup
-                        self.tts_pending_audio_rx = Some(prefetch_rx);
-                        let mut state = self.state.borrow_mut();
-                        state.ui_state.tts_converting = true;
-                        state.ui_state.tts_anim_frame = 0;
-                        return Ok(());
-                    }
-                    Err(_) => {
-                        // Channel disconnected — fall through to fresh async convert
-                    }
-                }
-            }
-            // No prefetch available or it failed — start async conversion
-            self.tts_start_async_convert(engine, text);
+            self.tts_notify_worker();
+            let _ = text;
+            self.tts_try_play_ready_chunk()?;
             return Ok(());
         }
 
@@ -4820,28 +4969,7 @@ impl Reader {
         Ok(())
     }
 
-    /// Spawn a background thread to convert text for the current chunk.
-    /// When done, the result is sent to `tts_pending_audio_rx`.
-    fn tts_start_async_convert(&mut self, engine: String, text: String) {
-        let index = self.tts_chunk_index;
-        let path = Self::tts_temp_path(index);
-        let (tx, rx) = std::sync::mpsc::channel::<Option<std::path::PathBuf>>();
-        self.tts_pending_audio_rx = Some(rx);
-
-        let path_clone = path.clone();
-        std::thread::spawn(move || {
-            match Self::tts_convert_with_engine(&engine, &text, &path_clone) {
-                Ok(()) => { let _ = tx.send(Some(path_clone)); }
-                Err(_) => { let _ = tx.send(None); }
-            }
-        });
-
-        let mut state = self.state.borrow_mut();
-        state.ui_state.tts_converting = true;
-        state.ui_state.tts_anim_frame = 0;
-    }
-
-    /// Spawn the audio player for `audio_path` and kick off the next prefetch.
+    /// Spawn the audio player for `audio_path`.
     fn tts_play_file(&mut self, audio_path: std::path::PathBuf) -> eyre::Result<()> {
         let player = match self.tts_detect_player() {
             Some(p) => p,
@@ -4857,6 +4985,7 @@ impl Reader {
         };
 
         self.tts_current_audio_path = Some(audio_path.clone());
+        self.tts_set_converting(false);
 
         let (tx, rx) = std::sync::mpsc::channel::<()>();
         self.tts_done_rx = Some(rx);
@@ -4898,10 +5027,6 @@ impl Reader {
                 return Ok(());
             }
         }
-
-        // Kick off prefetch for the next chunk while this one plays.
-        let engine = self.tts_current_engine.clone();
-        self.tts_spawn_prefetch(engine);
         Ok(())
     }
 
@@ -4920,6 +5045,7 @@ impl Reader {
                 .set_message("TTS finished".to_string(), MessageType::Info);
             return Ok(());
         }
+        self.tts_notify_worker();
         self.tts_speak_current()
     }
 
@@ -4943,21 +5069,20 @@ impl Reader {
         }
         self.tts_done_rx = None;
 
-        // Kill the prefetch conversion process (if any).
-        #[allow(unused_variables)]
-        if let Some(pid) = self.tts_prefetch_kill_pid.take() {
-            #[cfg(unix)]
-            unsafe {
-                libc::kill(-(pid as i32), libc::SIGKILL);
-            }
+        if let Some(tx) = self.tts_worker_tx.take() {
+            let _ = tx.send(TtsWorkerCommand::Stop);
         }
-        // Drop channels so any background threads unblock.
-        self.tts_prefetch_done_rx = None;
-        self.tts_pending_audio_rx = None;
+        self.tts_worker_rx = None;
 
         // Delete temp audio files.
         if let Some(path) = self.tts_current_audio_path.take() {
             let _ = std::fs::remove_file(&path);
+        }
+        for (_, path) in self.tts_ready_audio.drain() {
+            let _ = std::fs::remove_file(&path);
+        }
+        if let Some(dir) = self.tts_temp_dir.take() {
+            let _ = std::fs::remove_dir_all(dir);
         }
 
         self.tts_chunks.clear();
@@ -5048,11 +5173,12 @@ mod tests {
             tts_chunk_index: 0,
             tts_kill_pid: None,
             tts_audio_player: None,
-            tts_prefetch_kill_pid: None,
-            tts_prefetch_done_rx: None,
             tts_current_audio_path: None,
-            tts_pending_audio_rx: None,
+            tts_ready_audio: HashMap::new(),
+            tts_worker_tx: None,
+            tts_worker_rx: None,
             tts_current_engine: String::new(),
+            tts_temp_dir: None,
         }
     }
 
