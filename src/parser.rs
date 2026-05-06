@@ -42,6 +42,9 @@ static RE_PB_ID_ATTR: LazyLock<Regex> = LazyLock::new(|| {
 static RE_PB_INNER: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#">([^<]*)<"#).unwrap());
 static RE_PB_SENTINEL: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"@@PB:([^@]+)@@").unwrap());
+static HYPHENATION_DICTIONARY: LazyLock<Standard> =
+    LazyLock::new(|| Standard::from_embedded(Language::EnglishUS).unwrap());
+const MIN_DICTIONARY_HYPHENATION_CHARS: usize = 8;
 
 /// Simple HTML parser for ebook content
 /// This uses html2text for the heavy lifting and adds some basic structure tracking
@@ -99,9 +102,6 @@ pub fn parse_html(
 }
 
 fn wrap_text(lines: Vec<String>, width: usize) -> Vec<String> {
-    // Load English US dictionary for hyphenation
-    // This expects the feature "embed_en-us" to be enabled in hyphenation crate
-    let dictionary = Standard::from_embedded(Language::EnglishUS).unwrap();
     let mut wrapped = Vec::new();
     for line in lines {
         let line = line.trim_end();
@@ -124,7 +124,7 @@ fn wrap_text(lines: Vec<String>, width: usize) -> Vec<String> {
         }
 
         let options = Options::new(width)
-            .word_splitter(WordSplitter::Hyphenation(dictionary.clone()))
+            .word_splitter(WordSplitter::Custom(ebook_word_split_points))
             .subsequent_indent(&subsequent_indent);
 
         let lines_wrapped = textwrap::wrap(line, &options);
@@ -133,6 +133,18 @@ fn wrap_text(lines: Vec<String>, width: usize) -> Vec<String> {
         }
     }
     wrapped
+}
+
+fn ebook_word_split_points(word: &str) -> Vec<usize> {
+    if word.contains('-') {
+        return WordSplitter::HyphenSplitter.split_points(word);
+    }
+    if word.chars().filter(|ch| ch.is_alphabetic()).count() < MIN_DICTIONARY_HYPHENATION_CHARS {
+        return Vec::new();
+    }
+
+    use hyphenation::Hyphenator;
+    HYPHENATION_DICTIONARY.hyphenate(word).breaks
 }
 
 fn extract_page_label(element_str: &str) -> String {
@@ -939,6 +951,18 @@ mod tests {
         // Should wrap the text
         assert!(lines.len() > 1);
         assert!(lines[0].len() <= 30);
+    }
+
+    #[test]
+    fn test_wrap_text_only_splits_hyphenated_compounds_at_hyphens() {
+        let lines = wrap_text(vec!["see-hear-smell-taste-touch".to_string()], 12);
+
+        assert_eq!(lines, vec!["see-hear-", "smell-taste-", "touch"]);
+    }
+
+    #[test]
+    fn test_wrap_text_does_not_dictionary_hyphenate_short_words() {
+        assert!(ebook_word_split_points("smell").is_empty());
     }
 
     #[test]
