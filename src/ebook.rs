@@ -1,5 +1,6 @@
+use crate::css::{StyledClasses, collect_styled_classes};
 use crate::models::{BookMetadata, CHAPTER_BREAK_MARKER, TextStructure, TocEntry};
-use crate::parser::parse_html;
+use crate::parser::parse_html_with_styles;
 use epub::doc::{EpubDoc, NavPoint};
 use eyre::Result;
 use std::collections::{HashMap, HashSet};
@@ -36,6 +37,7 @@ pub struct Epub {
     toc: Vec<TocEntry>,
     metadata: BookMetadata,
     raw_text_cache: HashMap<String, String>,
+    styled_classes: StyledClasses,
 }
 
 impl Epub {
@@ -47,6 +49,7 @@ impl Epub {
             toc: Vec::new(),
             metadata: BookMetadata::default(),
             raw_text_cache: HashMap::new(),
+            styled_classes: StyledClasses::default(),
         }
     }
 
@@ -144,7 +147,7 @@ impl Ebook for Epub {
     }
 
     fn initialize(&mut self) -> Result<()> {
-        let doc = EpubDoc::new(&self.path)?;
+        let mut doc = EpubDoc::new(&self.path)?;
 
         self.contents = doc
             .spine
@@ -189,6 +192,27 @@ impl Ebook for Epub {
         load_mdata!(identifier);
         load_mdata!(source);
         self.metadata = metadata;
+
+        // Load every text/css resource and scan it for class-driven italic/bold
+        // styling. This lets parse_html treat e.g. <span class="x"> as italic
+        // when the EPUB's CSS sets `.x { font-style: italic; }`.
+        let css_paths: Vec<PathBuf> = doc
+            .resources
+            .values()
+            .filter(|r| r.mime == "text/css")
+            .map(|r| r.path.clone())
+            .collect();
+        let mut css_sources: Vec<String> = Vec::with_capacity(css_paths.len());
+        for path in css_paths {
+            if let Some(bytes) = doc.get_resource_by_path(&path) {
+                if let Ok(text) = String::from_utf8(bytes) {
+                    css_sources.push(text);
+                }
+            }
+        }
+        let refs: Vec<&str> = css_sources.iter().map(String::as_str).collect();
+        self.styled_classes = collect_styled_classes(&refs);
+
         self.doc = Some(doc);
         Ok(())
     }
@@ -242,11 +266,12 @@ impl Ebook for Epub {
             .filter_map(|entry| entry.section.clone())
             .collect();
 
-        parse_html(
+        parse_html_with_styles(
             &raw_html,
             Some(text_width),
             Some(section_ids),
             starting_line,
+            &self.styled_classes,
         )
     }
 

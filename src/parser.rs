@@ -1,3 +1,4 @@
+use crate::css::StyledClasses;
 use crate::models::{InlineStyle, LinkEntry, TextStructure};
 use eyre::Result;
 use html2text::config;
@@ -51,6 +52,24 @@ pub fn parse_html(
     section_ids: Option<HashSet<String>>,
     starting_line: usize,
 ) -> Result<TextStructure> {
+    parse_html_with_styles(
+        html_src,
+        text_width,
+        section_ids,
+        starting_line,
+        &StyledClasses::default(),
+    )
+}
+
+/// Like `parse_html`, but takes a CSS class → emphasis map so spans/paras
+/// styled italic/bold via class get marked accordingly.
+pub fn parse_html_with_styles(
+    html_src: &str,
+    text_width: Option<usize>,
+    section_ids: Option<HashSet<String>>,
+    starting_line: usize,
+    styled_classes: &StyledClasses,
+) -> Result<TextStructure> {
     let text_width = text_width.unwrap_or(80);
     let html_src = preprocess_inline_annotations(html_src);
     let html_src = preprocess_images(&html_src);
@@ -72,8 +91,18 @@ pub fn parse_html(
 
     replace_superscript_link_markers(&mut raw_lines);
     // Strip inline markers before wrapping so invisible chars don't affect line breaks.
-    let mut marker_formatting = extract_formatting(&fragment, starting_line, &raw_lines)?;
+    let mut marker_formatting =
+        extract_formatting(&fragment, starting_line, &raw_lines, styled_classes)?;
     strip_inline_markers(&mut raw_lines, &mut marker_formatting, starting_line);
+
+    // Tighten stanza-style runs of italic-class paragraphs (collapse blank
+    // separators between consecutive single-line paragraphs sharing an italic
+    // class) BEFORE wrapping, so the operation works on logical paragraphs.
+    tighten_italic_paragraph_runs(&fragment, &mut raw_lines, styled_classes);
+
+    // Indent <blockquote> content by 4 spaces.
+    indent_blockquote_lines(&fragment, &mut raw_lines);
+
     let mut plain_text = wrap_text(raw_lines, text_width);
     let pagebreak_map = extract_pagebreak_map(&mut plain_text, starting_line);
 
@@ -85,7 +114,7 @@ pub fn parse_html(
         starting_line,
         &plain_text,
     )?;
-    let formatting = extract_formatting(&fragment, starting_line, &plain_text)?;
+    let formatting = extract_formatting(&fragment, starting_line, &plain_text, styled_classes)?;
     let links = extract_links(&fragment, starting_line, &plain_text)?;
 
     Ok(TextStructure {
@@ -117,7 +146,11 @@ fn wrap_text(lines: Vec<String>, width: usize) -> Vec<String> {
             let len = mat.end();
             subsequent_indent = " ".repeat(len);
         } else {
-            subsequent_indent = "".to_string();
+            // Preserve any leading whitespace on continuation lines so that
+            // blockquote (and similarly indented) content stays aligned after
+            // wrapping.
+            let leading_spaces = line.chars().take_while(|c| *c == ' ').count();
+            subsequent_indent = " ".repeat(leading_spaces);
         }
 
         let options = Options::new(width)
@@ -130,6 +163,120 @@ fn wrap_text(lines: Vec<String>, width: usize) -> Vec<String> {
         }
     }
     wrapped
+}
+
+/// Collapse blank-line separators between consecutive paragraphs that are
+/// fully styled italic via a CSS class (e.g. a stanza of `<p><span
+/// class="italic-class">…</span></p>`). Operates on the post-html2text
+/// `raw_lines` (one long line per paragraph, blank lines between paragraphs).
+fn tighten_italic_paragraph_runs(
+    fragment: &Html,
+    raw_lines: &mut Vec<String>,
+    styled_classes: &StyledClasses,
+) {
+    if styled_classes.italic.is_empty() {
+        return;
+    }
+    let normalize = |s: &str| -> String { s.split_whitespace().collect::<Vec<_>>().join(" ") };
+    let p_sel = Selector::parse("p").unwrap();
+    let class_sel = Selector::parse("[class]").unwrap();
+
+    let has_italic_class = |class_attr: &str| -> bool {
+        class_attr
+            .split_whitespace()
+            .any(|tok| styled_classes.italic.contains(tok))
+    };
+
+    let mut italic_texts: HashSet<String> = HashSet::new();
+    for p in fragment.select(&p_sel) {
+        let p_text = normalize(&p.text().collect::<String>());
+        if p_text.is_empty() {
+            continue;
+        }
+        let p_italic = p
+            .value()
+            .attr("class")
+            .map(has_italic_class)
+            .unwrap_or(false);
+        let italic_covers = p_italic
+            || p.select(&class_sel).any(|sub| {
+                sub.value()
+                    .attr("class")
+                    .map(has_italic_class)
+                    .unwrap_or(false)
+                    && normalize(&sub.text().collect::<String>()) == p_text
+            });
+        if italic_covers {
+            italic_texts.insert(p_text);
+        }
+    }
+    if italic_texts.is_empty() {
+        return;
+    }
+
+    let mut i = 0;
+    while i + 2 < raw_lines.len() {
+        let prev_match = !raw_lines[i].trim().is_empty()
+            && italic_texts.contains(&normalize(&raw_lines[i]));
+        let blank = raw_lines[i + 1].trim().is_empty();
+        let next_match = !raw_lines[i + 2].trim().is_empty()
+            && italic_texts.contains(&normalize(&raw_lines[i + 2]));
+        if prev_match && blank && next_match {
+            raw_lines.remove(i + 1);
+            // Don't advance — the new pair starts at `i` and may extend the run.
+        } else {
+            i += 1;
+        }
+    }
+}
+
+/// Indent the visible content of every `<blockquote>` by 4 spaces. Walks the
+/// blockquote's child block elements (or the blockquote itself if it has no
+/// block-level children) and prefixes the matching `raw_lines` with spaces.
+fn indent_blockquote_lines(fragment: &Html, raw_lines: &mut Vec<String>) {
+    let bq_sel = Selector::parse("blockquote").unwrap();
+    let normalize = |s: &str| -> String { s.split_whitespace().collect::<Vec<_>>().join(" ") };
+
+    let mut bq_texts: HashSet<String> = HashSet::new();
+    for bq in fragment.select(&bq_sel) {
+        let mut had_block_child = false;
+        for child in bq.children() {
+            if let Some(elem) = scraper::ElementRef::wrap(child) {
+                if matches!(
+                    elem.value().name(),
+                    "p" | "div" | "blockquote" | "li" | "h1" | "h2" | "h3" | "h4" | "h5" | "h6"
+                ) {
+                    had_block_child = true;
+                    let t = normalize(&elem.text().collect::<String>());
+                    if !t.is_empty() {
+                        bq_texts.insert(t);
+                    }
+                }
+            }
+        }
+        if !had_block_child {
+            let t = normalize(&bq.text().collect::<String>());
+            if !t.is_empty() {
+                bq_texts.insert(t);
+            }
+        }
+    }
+    if bq_texts.is_empty() {
+        return;
+    }
+
+    for line in raw_lines.iter_mut() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        // html2text's plain renderer prefixes blockquote content with "> ".
+        // Strip that marker and replace it with a 4-space indent.
+        let stripped = line.trim_start();
+        let inner = stripped.strip_prefix("> ").unwrap_or(stripped);
+        if bq_texts.contains(&normalize(inner)) {
+            *line = format!("    {}", inner);
+        }
+    }
 }
 
 fn ebook_word_split_points(word: &str) -> Vec<usize> {
@@ -440,6 +587,7 @@ fn extract_formatting(
     fragment: &Html,
     starting_line: usize,
     text_lines: &[String],
+    styled_classes: &StyledClasses,
 ) -> Result<Vec<InlineStyle>> {
     let mut formatting = Vec::new();
 
@@ -447,7 +595,15 @@ fn extract_formatting(
     let normalize_text =
         |text: String| -> String { text.split_whitespace().collect::<Vec<_>>().join(" ") };
 
-    let selector = Selector::parse("h1, h2, h3, h4, h5, h6, strong, b, em, i").unwrap();
+    // Build a selector that picks the structural emphasis tags plus, when the
+    // book has any class-driven italic/bold rules, every element carrying a
+    // class. We filter by class membership inside the loop.
+    let selector_str = if styled_classes.is_empty() {
+        "h1, h2, h3, h4, h5, h6, strong, b, em, i".to_string()
+    } else {
+        "h1, h2, h3, h4, h5, h6, strong, b, em, i, [class]".to_string()
+    };
+    let selector = Selector::parse(&selector_str).unwrap();
 
     // Track cursor for siblings: (line_idx, char_idx)
     // Relative to text_lines (0-based)
@@ -463,11 +619,35 @@ fn extract_formatting(
         }
 
         let tag_name = element.value().name();
-        let attr = match tag_name {
-            "strong" | "b" | "h1" | "h2" | "h3" | "h4" | "h5" | "h6" => 1,
-            "em" | "i" => 2,
-            _ => 1,
+        let mut attrs: Vec<u32> = match tag_name {
+            "strong" | "b" | "h1" | "h2" | "h3" | "h4" | "h5" | "h6" => vec![1],
+            "em" | "i" => vec![2],
+            _ => Vec::new(),
         };
+        // CSS-class-driven emphasis (italic/bold via stylesheet).
+        if !styled_classes.is_empty() {
+            if let Some(class_attr) = element.value().attr("class") {
+                let mut italic = false;
+                let mut bold = false;
+                for class in class_attr.split_whitespace() {
+                    if !italic && styled_classes.italic.contains(class) {
+                        italic = true;
+                    }
+                    if !bold && styled_classes.bold.contains(class) {
+                        bold = true;
+                    }
+                }
+                if bold && !attrs.contains(&1) {
+                    attrs.push(1);
+                }
+                if italic && !attrs.contains(&2) {
+                    attrs.push(2);
+                }
+            }
+        }
+        if attrs.is_empty() {
+            continue;
+        }
 
         // Pop stack until we find a parent or stack empty
         // We walk up the current element's ancestors
@@ -510,12 +690,14 @@ fn extract_formatting(
             let mut last_end = None;
 
             for (line_idx, start, end) in segments {
-                formatting.push(InlineStyle {
-                    row: (starting_line + line_idx) as u16,
-                    col: start as u16,
-                    n_letters: (end - start) as u16,
-                    attr,
-                });
+                for &attr in &attrs {
+                    formatting.push(InlineStyle {
+                        row: (starting_line + line_idx) as u16,
+                        col: start as u16,
+                        n_letters: (end - start) as u16,
+                        attr,
+                    });
+                }
 
                 if first_start.is_none() {
                     first_start = Some((line_idx, start));
@@ -1131,7 +1313,7 @@ mod tests {
         let html = "<p>This is <strong>bold</strong> and <em>italic</em>.</p>";
         let fragment = Html::parse_fragment(html);
         let text_lines = vec!["This is **bold** and *italic*.".to_string()];
-        let formatting = extract_formatting(&fragment, 0, &text_lines).unwrap();
+        let formatting = extract_formatting(&fragment, 0, &text_lines, &StyledClasses::default()).unwrap();
         assert_eq!(formatting.len(), 2);
         assert!(formatting.iter().any(|s| s.n_letters == 4 && s.attr == 1)); // bold
         assert!(formatting.iter().any(|s| s.n_letters == 6 && s.attr == 2)); // italic
@@ -1150,7 +1332,7 @@ mod tests {
             "Paragraph content.".to_string(),
             "## Header 2".to_string(),
         ];
-        let formatting = extract_formatting(&fragment, 0, &text_lines).unwrap();
+        let formatting = extract_formatting(&fragment, 0, &text_lines, &StyledClasses::default()).unwrap();
         assert_eq!(formatting.len(), 2);
 
         // Check header 1 - html2text might format differently than expected
@@ -1171,7 +1353,7 @@ mod tests {
         let html = "<p>This has <strong>bold</strong> text.</p>";
         let fragment = Html::parse_fragment(html);
         let text_lines = vec!["Completely different text content.".to_string()];
-        let formatting = extract_formatting(&fragment, 0, &text_lines).unwrap();
+        let formatting = extract_formatting(&fragment, 0, &text_lines, &StyledClasses::default()).unwrap();
         assert_eq!(formatting.len(), 0);
     }
 
@@ -1180,7 +1362,7 @@ mod tests {
         let html = "";
         let fragment = Html::parse_fragment(html);
         let text_lines = vec!["Plain text content.".to_string()];
-        let formatting = extract_formatting(&fragment, 0, &text_lines).unwrap();
+        let formatting = extract_formatting(&fragment, 0, &text_lines, &StyledClasses::default()).unwrap();
         assert_eq!(formatting.len(), 0);
     }
 
@@ -1442,7 +1624,7 @@ mod tests {
         let html = "<p>This has <strong>nested <em>bold italic</em> text</strong>.</p>";
         let fragment = Html::parse_fragment(html);
         let text_lines = vec!["This has **nested *bold italic* text**.".to_string()];
-        let formatting = extract_formatting(&fragment, 0, &text_lines).unwrap();
+        let formatting = extract_formatting(&fragment, 0, &text_lines, &StyledClasses::default()).unwrap();
 
         // Should extract at least one formatting element (the parser might not handle nested well)
         assert!(!formatting.is_empty());
@@ -1652,6 +1834,142 @@ mod tests {
             fn8_22_line,
             text_lines.get(*fn8_22_line)
         );
+    }
+
+    fn make_styled(italic: &[&str], bold: &[&str]) -> StyledClasses {
+        let mut s = StyledClasses::default();
+        for c in italic {
+            s.italic.insert((*c).to_string());
+        }
+        for c in bold {
+            s.bold.insert((*c).to_string());
+        }
+        s
+    }
+
+    #[test]
+    fn test_class_driven_italic_via_span() {
+        // Mirrors the *What is this?* book: <p> with a class-styled <span>
+        // wrapping the entire visible text.
+        let html = r#"<p class="body"><span class="ital">Great perplexity, great awakening.</span></p>"#;
+        let styled = make_styled(&["ital"], &[]);
+        let result = parse_html_with_styles(html, Some(80), None, 0, &styled).unwrap();
+        let italic_styles: Vec<_> = result.formatting.iter().filter(|s| s.attr == 2).collect();
+        assert!(
+            !italic_styles.is_empty(),
+            "expected at least one italic style, got formatting = {:?}",
+            result.formatting
+        );
+        assert_eq!(italic_styles[0].n_letters, "Great perplexity, great awakening.".len() as u16);
+    }
+
+    #[test]
+    fn test_class_driven_bold_and_italic_combined() {
+        let html = r#"<p><span class="emph">word</span></p>"#;
+        let styled = make_styled(&["emph"], &["emph"]);
+        let result = parse_html_with_styles(html, Some(80), None, 0, &styled).unwrap();
+        let attrs: Vec<u32> = result.formatting.iter().map(|s| s.attr).collect();
+        assert!(attrs.contains(&1), "expected bold attr, got {:?}", attrs);
+        assert!(attrs.contains(&2), "expected italic attr, got {:?}", attrs);
+    }
+
+    #[test]
+    fn test_stanza_tightening_collapses_blank_separators() {
+        let html = r#"
+            <p>Intro paragraph.</p>
+            <p class="body"><span class="ital">Great perplexity, great awakening.</span></p>
+            <p class="body"><span class="ital">Little perplexity, little awakening.</span></p>
+            <p class="body"><span class="ital">No perplexity, no awakening.</span></p>
+            <p>Outro paragraph.</p>
+        "#;
+        let styled = make_styled(&["ital"], &[]);
+        let result = parse_html_with_styles(html, Some(120), None, 0, &styled).unwrap();
+        let lines = &result.text_lines;
+        // Locate the three verse lines.
+        let i_great = lines
+            .iter()
+            .position(|l| l.contains("Great perplexity"))
+            .expect("first verse line missing");
+        assert!(
+            lines[i_great + 1].contains("Little perplexity"),
+            "expected verse lines to be contiguous, got: {:?}, {:?}",
+            lines[i_great + 1],
+            lines.get(i_great + 2)
+        );
+        assert!(lines[i_great + 2].contains("No perplexity"));
+        // And there should still be a blank line between the stanza and Outro.
+        assert!(lines[i_great + 3].trim().is_empty());
+        assert!(lines[i_great + 4].contains("Outro"));
+    }
+
+    #[test]
+    fn test_stanza_tightening_does_not_collapse_unrelated_paragraphs() {
+        let html = r#"
+            <p>First normal paragraph with some <em>emphasis</em>.</p>
+            <p>Second normal paragraph.</p>
+        "#;
+        let styled = make_styled(&["ital"], &[]);
+        let result = parse_html_with_styles(html, Some(120), None, 0, &styled).unwrap();
+        // Paragraphs should remain separated by a blank line.
+        let i = result
+            .text_lines
+            .iter()
+            .position(|l| l.contains("First normal"))
+            .unwrap();
+        assert!(result.text_lines[i + 1].trim().is_empty());
+        assert!(result.text_lines[i + 2].contains("Second normal"));
+    }
+
+    #[test]
+    fn test_blockquote_lines_are_indented() {
+        let html = r#"
+            <p>Lead-in.</p>
+            <blockquote><p>Quoted paragraph one.</p><p>Quoted paragraph two.</p></blockquote>
+            <p>After.</p>
+        "#;
+        let result = parse_html(html, Some(120), None, 0).unwrap();
+        let q1 = result
+            .text_lines
+            .iter()
+            .find(|l| l.contains("Quoted paragraph one"))
+            .expect("first quoted line missing");
+        let q2 = result
+            .text_lines
+            .iter()
+            .find(|l| l.contains("Quoted paragraph two"))
+            .expect("second quoted line missing");
+        assert!(
+            q1.starts_with("    "),
+            "expected blockquote line to be indented, got {:?}",
+            q1
+        );
+        assert!(q2.starts_with("    "));
+        // Surrounding paragraphs must not be indented.
+        let lead = result
+            .text_lines
+            .iter()
+            .find(|l| l.contains("Lead-in"))
+            .unwrap();
+        assert!(!lead.starts_with(' '));
+    }
+
+    #[test]
+    fn test_blockquote_preserves_inner_bold() {
+        let html = r#"<blockquote><p>This has <strong>bold</strong> text inside.</p></blockquote>"#;
+        let result = parse_html(html, Some(120), None, 0).unwrap();
+        let line = result
+            .text_lines
+            .iter()
+            .find(|l| l.contains("bold"))
+            .expect("blockquote text missing");
+        assert!(line.starts_with("    "));
+        let bold = result.formatting.iter().find(|s| s.attr == 1);
+        assert!(bold.is_some(), "expected bold formatting inside blockquote");
+        let bold = bold.unwrap();
+        // The bold span should align with the position of "bold" in the indented line.
+        let col_of_bold = line.find("bold").unwrap();
+        assert_eq!(bold.col as usize, col_of_bold);
+        assert_eq!(bold.n_letters, "bold".len() as u16);
     }
 }
 
