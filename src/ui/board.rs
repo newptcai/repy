@@ -36,7 +36,14 @@ impl Board {
         theme: &Theme,
     ) {
         if let Some(ref text_structure) = self.text_structure {
-            self.render_content(frame, area, text_structure, state, content_start_rows, theme);
+            self.render_content(
+                frame,
+                area,
+                text_structure,
+                state,
+                content_start_rows,
+                theme,
+            );
         } else {
             self.render_empty(frame, area, theme);
         }
@@ -208,11 +215,8 @@ impl Board {
                         theme,
                     );
                     // Apply underline to the character range within the spans
-                    let underlined = Self::apply_underline_range(
-                        line_spans,
-                        tts_start_col,
-                        tts_end_col,
-                    );
+                    let underlined =
+                        Self::apply_underline_range(line_spans, tts_start_col, tts_end_col);
                     spans.extend(underlined);
                 } else {
                     let line_spans = self.build_line_spans(

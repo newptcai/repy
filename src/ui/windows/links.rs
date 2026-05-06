@@ -91,10 +91,7 @@ impl LinksWindow {
                 } else {
                     Line::from(vec![
                         Span::raw(display_text),
-                        Span::styled(
-                            " ↗",
-                            Style::default().fg(theme.external_link_fg),
-                        ),
+                        Span::styled(" ↗", Style::default().fg(theme.external_link_fg)),
                     ])
                 };
 

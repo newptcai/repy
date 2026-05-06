@@ -84,7 +84,12 @@ impl HelpWindow {
 
         let help_paragraph = Paragraph::new(help_content)
             .style(theme.base_style())
-            .block(Block::default().title("Help (?)").borders(Borders::ALL).style(theme.base_style()))
+            .block(
+                Block::default()
+                    .title("Help (?)")
+                    .borders(Borders::ALL)
+                    .style(theme.base_style()),
+            )
             .scroll((scroll_offset, 0));
 
         frame.render_widget(help_paragraph, popup_area);

@@ -1,12 +1,12 @@
 use arboard::Clipboard;
 use regex::Regex;
 use serde::Deserialize;
-use std::sync::LazyLock;
 use serde_json::Value;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::io;
 use std::rc::Rc;
+use std::sync::LazyLock;
 use std::time::{Duration, Instant};
 
 use chrono::Local;
@@ -953,7 +953,7 @@ impl Reader {
                 ReadingState::default()
             };
             reading_state.textwidth = textwidth;
-            
+
             let total_lines = self.board.total_lines();
             if total_lines > 0 && reading_state.row >= total_lines {
                 reading_state.row = total_lines - 1;
@@ -1595,12 +1595,17 @@ impl Reader {
     ) -> bool {
         match key.code {
             KeyCode::Esc | KeyCode::Char('q') => {
-                self.state.borrow_mut().ui_state.open_window(WindowType::Reader);
+                self.state
+                    .borrow_mut()
+                    .ui_state
+                    .open_window(WindowType::Reader);
                 true
             }
             KeyCode::Char('j') | KeyCode::Down => {
                 if list_len > 0 {
-                    *index = index.saturating_add(repeat_count as usize).min(list_len - 1);
+                    *index = index
+                        .saturating_add(repeat_count as usize)
+                        .min(list_len - 1);
                 }
                 true
             }
@@ -1619,7 +1624,9 @@ impl Reader {
         };
         if !self.handle_list_nav(&key, repeat_count, list_len, &mut index) {
             match key.code {
-                KeyCode::Enter => { self.jump_to_toc_entry()?; }
+                KeyCode::Enter => {
+                    self.jump_to_toc_entry()?;
+                }
                 _ => {}
             }
         } else {
@@ -1631,13 +1638,22 @@ impl Reader {
     fn handle_bookmarks_mode_keys(&mut self, key: KeyEvent, repeat_count: u32) -> eyre::Result<()> {
         let (list_len, mut index) = {
             let s = self.state.borrow();
-            (s.ui_state.bookmarks.len(), s.ui_state.bookmarks_selected_index)
+            (
+                s.ui_state.bookmarks.len(),
+                s.ui_state.bookmarks_selected_index,
+            )
         };
         if !self.handle_list_nav(&key, repeat_count, list_len, &mut index) {
             match key.code {
-                KeyCode::Char('a') => { self.add_bookmark()?; }
-                KeyCode::Char('d') => { self.delete_selected_bookmark()?; }
-                KeyCode::Enter => { self.jump_to_selected_bookmark()?; }
+                KeyCode::Char('a') => {
+                    self.add_bookmark()?;
+                }
+                KeyCode::Char('d') => {
+                    self.delete_selected_bookmark()?;
+                }
+                KeyCode::Enter => {
+                    self.jump_to_selected_bookmark()?;
+                }
                 _ => {}
             }
         } else {
@@ -1653,8 +1669,12 @@ impl Reader {
         };
         if !self.handle_list_nav(&key, repeat_count, list_len, &mut index) {
             match key.code {
-                KeyCode::Enter => { self.follow_selected_link()?; }
-                KeyCode::Char('y') => { self.copy_selected_link()?; }
+                KeyCode::Enter => {
+                    self.follow_selected_link()?;
+                }
+                KeyCode::Char('y') => {
+                    self.copy_selected_link()?;
+                }
                 _ => {}
             }
         } else {
@@ -1666,11 +1686,16 @@ impl Reader {
     fn handle_images_mode_keys(&mut self, key: KeyEvent, repeat_count: u32) -> eyre::Result<()> {
         let (list_len, mut index) = {
             let s = self.state.borrow();
-            (s.ui_state.images_list.len(), s.ui_state.images_selected_index)
+            (
+                s.ui_state.images_list.len(),
+                s.ui_state.images_selected_index,
+            )
         };
         if !self.handle_list_nav(&key, repeat_count, list_len, &mut index) {
             match key.code {
-                KeyCode::Enter => { self.open_selected_image()?; }
+                KeyCode::Enter => {
+                    self.open_selected_image()?;
+                }
                 _ => {}
             }
         } else {
@@ -1682,12 +1707,19 @@ impl Reader {
     fn handle_library_mode_keys(&mut self, key: KeyEvent, repeat_count: u32) -> eyre::Result<()> {
         let (list_len, mut index) = {
             let s = self.state.borrow();
-            (s.ui_state.library_items.len(), s.ui_state.library_selected_index)
+            (
+                s.ui_state.library_items.len(),
+                s.ui_state.library_selected_index,
+            )
         };
         if !self.handle_list_nav(&key, repeat_count, list_len, &mut index) {
             match key.code {
-                KeyCode::Char('d') => { self.delete_selected_library_item()?; }
-                KeyCode::Enter => { self.open_selected_library_item()?; }
+                KeyCode::Char('d') => {
+                    self.delete_selected_library_item()?;
+                }
+                KeyCode::Enter => {
+                    self.open_selected_library_item()?;
+                }
                 _ => {}
             }
         } else {
@@ -1905,7 +1937,12 @@ impl Reader {
 
         // Render overlays/modals if active
         if state.ui_state.show_help {
-            HelpWindow::render(frame, frame.area(), state.ui_state.help_scroll_offset, &theme);
+            HelpWindow::render(
+                frame,
+                frame.area(),
+                state.ui_state.help_scroll_offset,
+                &theme,
+            );
         } else if state.ui_state.show_toc {
             TocWindow::render(
                 frame,
@@ -2121,10 +2158,7 @@ impl Reader {
                     }
                 }
                 SettingItem::TtsEngine => {
-                    let engine = settings
-                        .preferred_tts_engine
-                        .as_deref()
-                        .unwrap_or("purr");
+                    let engine = settings.preferred_tts_engine.as_deref().unwrap_or("purr");
                     format!("TTS engine: {engine}")
                 }
                 SettingItem::Width => format!("Text width: {}", state.reading_state.textwidth),
@@ -2231,9 +2265,7 @@ impl Reader {
                 Some(format!("{} {} {}", mode, link_hint, progress_text))
             }
             (Some(mode), Some(link_hint), None) => Some(format!("{} {}", mode, link_hint)),
-            (Some(mode), None, Some(progress_text)) => {
-                Some(format!("{} {}", mode, progress_text))
-            }
+            (Some(mode), None, Some(progress_text)) => Some(format!("{} {}", mode, progress_text)),
             (Some(mode), None, None) => Some(mode),
             (None, Some(link_hint), Some(progress_text)) => {
                 Some(format!("{} {}", link_hint, progress_text))
@@ -2303,7 +2335,7 @@ impl Reader {
 
         let frame_area = frame.area();
         let max_width = frame_area.width.saturating_sub(4);
-        
+
         // Simple line wrapping calculation to estimate height
         let mut lines = 1;
         let mut current_line_len = 0;
@@ -2316,7 +2348,7 @@ impl Reader {
                 current_line_len += word_len + 1;
             }
         }
-        
+
         let height = (lines + 2).min(frame_area.height.saturating_sub(4)) as u16;
         let height = height.max(3);
 
@@ -3118,7 +3150,11 @@ impl Reader {
             && let Some(ts) = self.chapter_text_structures.get(content_index)
             && let Some(&section_row) = ts.section_rows.get(section_id)
         {
-            let ch_start = self.content_start_rows.get(content_index).copied().unwrap_or(0);
+            let ch_start = self
+                .content_start_rows
+                .get(content_index)
+                .copied()
+                .unwrap_or(0);
             let local_row = section_row.saturating_sub(ch_start);
             let meaningful_remaining = ts
                 .text_lines
@@ -3169,8 +3205,7 @@ impl Reader {
         let state = self.state.borrow();
         let mut rows = Vec::new();
         for entry in &state.ui_state.toc_entries {
-            if let Some(row) =
-                self.effective_toc_row(entry.content_index, entry.section.as_deref())
+            if let Some(row) = self.effective_toc_row(entry.content_index, entry.section.as_deref())
             {
                 rows.push(row);
             }
@@ -3615,17 +3650,12 @@ impl Reader {
                     .as_deref()
                     .unwrap_or("")
                     .to_string();
-                let current_ref = if current.is_empty() {
-                    "purr"
-                } else {
-                    &current
-                };
+                let current_ref = if current.is_empty() { "purr" } else { &current };
                 use crate::settings::TTS_PRESET_LIST;
                 let options: Vec<&str> = TTS_PRESET_LIST.to_vec();
                 let current_index = options.iter().position(|v| *v == current_ref).unwrap_or(0);
                 let next_index = (current_index + 1) % options.len();
-                state.config.settings.preferred_tts_engine =
-                    Some(options[next_index].to_string());
+                state.config.settings.preferred_tts_engine = Some(options[next_index].to_string());
             }
             SettingItem::Width => {
                 state.config.settings.width = if state.config.settings.width.is_some() {
@@ -4312,7 +4342,8 @@ impl Reader {
             offsets.push(pos); // end sentinel
 
             let (min_chunk, max_chunk) = (50, 100);
-            let sentence_chunks = Self::split_into_sentence_chunks(&full_text, min_chunk, max_chunk);
+            let sentence_chunks =
+                Self::split_into_sentence_chunks(&full_text, min_chunk, max_chunk);
 
             let mut byte_cursor = 0usize;
             for chunk_text in sentence_chunks {
@@ -4344,7 +4375,8 @@ impl Reader {
                     }
 
                     // Compute column range within this line (in characters)
-                    let overlap_byte_start = chunk_byte_start.max(line_byte_start) - line_byte_start;
+                    let overlap_byte_start =
+                        chunk_byte_start.max(line_byte_start) - line_byte_start;
                     let overlap_byte_end = chunk_byte_end.min(line_byte_end) - line_byte_start;
 
                     // Convert byte offsets to character offsets
@@ -4356,9 +4388,7 @@ impl Reader {
                     }
                 }
 
-                let tts_text = RE_TTS_HYPHEN
-                    .replace_all(&chunk_text, "$1$2")
-                    .into_owned();
+                let tts_text = RE_TTS_HYPHEN.replace_all(&chunk_text, "$1$2").into_owned();
                 chunks.push(TtsChunk {
                     text: tts_text,
                     first_line,
@@ -4421,10 +4451,9 @@ impl Reader {
         // Check for common abbreviations (case-insensitive)
         let word: String = chars[j..i].iter().collect::<String>().to_lowercase();
         let abbrevs = [
-            "mr", "mrs", "ms", "dr", "st", "sr", "jr", "prof", "gen", "gov",
-            "sgt", "cpl", "pvt", "lt", "col", "maj", "capt", "cmdr", "adm",
-            "rev", "hon", "pres", "vs", "etc", "approx", "dept", "est",
-            "vol", "fig", "inc", "corp", "ltd", "no",
+            "mr", "mrs", "ms", "dr", "st", "sr", "jr", "prof", "gen", "gov", "sgt", "cpl", "pvt",
+            "lt", "col", "maj", "capt", "cmdr", "adm", "rev", "hon", "pres", "vs", "etc", "approx",
+            "dept", "est", "vol", "fig", "inc", "corp", "ltd", "no",
         ];
         if abbrevs.contains(&word.as_str()) {
             return None;
@@ -4449,7 +4478,11 @@ impl Reader {
 
         while chunk_start < chars.len() {
             if chars.len() - chunk_start <= max_len {
-                let s: String = chars[chunk_start..].iter().collect::<String>().trim().to_string();
+                let s: String = chars[chunk_start..]
+                    .iter()
+                    .collect::<String>()
+                    .trim()
+                    .to_string();
                 if !s.is_empty() {
                     chunks.push(s);
                 }
@@ -4478,7 +4511,11 @@ impl Reader {
             }
 
             let end = split_at.unwrap_or(chars.len());
-            let chunk: String = chars[chunk_start..end].iter().collect::<String>().trim().to_string();
+            let chunk: String = chars[chunk_start..end]
+                .iter()
+                .collect::<String>()
+                .trim()
+                .to_string();
             if !chunk.is_empty() {
                 chunks.push(chunk);
             }
@@ -4548,15 +4585,14 @@ impl Reader {
 
     /// Synchronously convert `text` to an audio file at `path`.
     /// Handles both edge-tts and custom templates containing `{output}`.
-    fn tts_convert_with_engine(engine: &str, text: &str, path: &std::path::Path) -> eyre::Result<()> {
+    fn tts_convert_with_engine(
+        engine: &str,
+        text: &str,
+        path: &std::path::Path,
+    ) -> eyre::Result<()> {
         if engine == "edge-tts" {
             let status = std::process::Command::new("edge-tts")
-                .args([
-                    "--text",
-                    text,
-                    "--write-media",
-                    &path.to_string_lossy(),
-                ])
+                .args(["--text", text, "--write-media", &path.to_string_lossy()])
                 .stdout(std::process::Stdio::null())
                 .stderr(std::process::Stdio::null())
                 .status()?;
@@ -4580,7 +4616,14 @@ impl Reader {
         if engine == "trans" {
             let path_str = path.to_string_lossy();
             let status = std::process::Command::new("trans")
-                .args(["-brief", "-no-translate", "-download-audio-as", &path_str, "en:", text])
+                .args([
+                    "-brief",
+                    "-no-translate",
+                    "-download-audio-as",
+                    &path_str,
+                    "en:",
+                    text,
+                ])
                 .stdout(std::process::Stdio::null())
                 .stderr(std::process::Stdio::null())
                 .status()?;
@@ -4634,7 +4677,11 @@ impl Reader {
         temp_dir: std::path::PathBuf,
         start_index: usize,
     ) {
-        let texts: Vec<String> = self.tts_chunks.iter().map(|chunk| chunk.text.clone()).collect();
+        let texts: Vec<String> = self
+            .tts_chunks
+            .iter()
+            .map(|chunk| chunk.text.clone())
+            .collect();
         let total_chunks = texts.len();
         let (cmd_tx, cmd_rx) = std::sync::mpsc::channel::<TtsWorkerCommand>();
         let (event_tx, event_rx) = std::sync::mpsc::channel::<TtsWorkerEvent>();
@@ -4759,10 +4806,10 @@ impl Reader {
                 TtsWorkerEvent::Failed { index } => {
                     if index == self.tts_chunk_index && self.state.borrow().ui_state.tts_active {
                         self.stop_tts();
-                        self.state.borrow_mut().ui_state.set_message(
-                            "TTS conversion failed".to_string(),
-                            MessageType::Error,
-                        );
+                        self.state
+                            .borrow_mut()
+                            .ui_state
+                            .set_message("TTS conversion failed".to_string(), MessageType::Error);
                         return Ok(());
                     }
                 }
@@ -4877,12 +4924,7 @@ impl Reader {
 
         let text = chunk.text.clone();
         let first_line = chunk.first_line;
-        let last_line = chunk
-            .underline
-            .keys()
-            .max()
-            .copied()
-            .unwrap_or(first_line);
+        let last_line = chunk.underline.keys().max().copied().unwrap_or(first_line);
         let underline = chunk.underline.clone();
 
         // Update UI state: mark active, set underline ranges, scroll
@@ -4980,10 +5022,9 @@ impl Reader {
             Err(err) => {
                 self.stop_tts();
                 let mut state = self.state.borrow_mut();
-                state.ui_state.set_message(
-                    format!("TTS failed: {err}"),
-                    MessageType::Error,
-                );
+                state
+                    .ui_state
+                    .set_message(format!("TTS failed: {err}"), MessageType::Error);
             }
         }
 
@@ -5041,10 +5082,9 @@ impl Reader {
             Err(err) => {
                 self.stop_tts();
                 let mut state = self.state.borrow_mut();
-                state.ui_state.set_message(
-                    format!("TTS player failed: {err}"),
-                    MessageType::Error,
-                );
+                state
+                    .ui_state
+                    .set_message(format!("TTS player failed: {err}"), MessageType::Error);
                 return Ok(());
             }
         }
@@ -5147,15 +5187,15 @@ impl Reader {
 #[cfg(test)]
 mod tests {
     use super::{Reader, TtsChunk, WikipediaSearchResponse, WikipediaSummaryResponse};
-    use arboard::Clipboard;
-    use ratatui::Terminal;
-    use ratatui::backend::CrosstermBackend;
     use crate::config::Config;
     use crate::models::{TextStructure, TocEntry};
     use crate::settings::{CfgDefaultKeymaps, Settings};
     use crate::state::State;
     use crate::ui::board::Board;
     use crate::ui::reader::{ApplicationState, MessageType};
+    use arboard::Clipboard;
+    use ratatui::Terminal;
+    use ratatui::backend::CrosstermBackend;
     use std::cell::RefCell;
     use std::collections::HashMap;
     use std::io::{BufRead, BufReader, Write};
@@ -5543,7 +5583,8 @@ mod tests {
         // Set to a definitely missing program
         {
             let mut s = app_state.borrow_mut();
-            s.config.settings.preferred_tts_engine = Some("definitely-not-a-real-program-12345".to_string());
+            s.config.settings.preferred_tts_engine =
+                Some("definitely-not-a-real-program-12345".to_string());
         }
 
         reader.toggle_tts().unwrap();
@@ -5607,28 +5648,14 @@ mod tests {
 
     #[test]
     fn tts_target_row_turns_page_when_next_chunk_starts_new_chapter() {
-        let target_row = Reader::tts_target_row_for_chunk(
-            1,
-            10,
-            12,
-            20,
-            false,
-            &[0, 10],
-        );
+        let target_row = Reader::tts_target_row_for_chunk(1, 10, 12, 20, false, &[0, 10]);
 
         assert_eq!(target_row, 11);
     }
 
     #[test]
     fn tts_target_row_keeps_viewport_when_chunk_is_visible_in_same_chapter() {
-        let target_row = Reader::tts_target_row_for_chunk(
-            11,
-            12,
-            13,
-            20,
-            false,
-            &[0, 10],
-        );
+        let target_row = Reader::tts_target_row_for_chunk(11, 12, 13, 20, false, &[0, 10]);
 
         assert_eq!(target_row, 11);
     }

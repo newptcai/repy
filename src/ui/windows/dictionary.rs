@@ -59,7 +59,10 @@ impl DictionaryWindow {
             format!("{label}: {word}")
         };
 
-        let block = Block::default().title(title).borders(Borders::ALL).style(theme.base_style());
+        let block = Block::default()
+            .title(title)
+            .borders(Borders::ALL)
+            .style(theme.base_style());
 
         if loading {
             let loading_text = vec![

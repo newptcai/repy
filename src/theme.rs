@@ -112,17 +112,17 @@ impl Theme {
     /// Gruvbox Light — https://github.com/morhetz/gruvbox
     fn light_theme() -> Self {
         Self {
-            text_fg: Some(Color::Rgb(60, 56, 54)),      // #3c3836  fg1
-            text_bg: Some(Color::Rgb(251, 241, 199)),   // #fbf1c7  bg0
-            highlight_fg: Color::Rgb(251, 241, 199),    // #fbf1c7  bg0
-            highlight_bg: Color::Rgb(7, 102, 120),      // #076678  dark-aqua
-            search_fg: Color::Rgb(251, 241, 199),       // #fbf1c7
-            search_bg: Color::Rgb(181, 118, 20),        // #b57614  dark-yellow
-            info_fg: Color::Rgb(7, 102, 120),           // #076678  dark-aqua
-            warning_fg: Color::Rgb(181, 118, 20),       // #b57614  dark-yellow
-            error_fg: Color::Rgb(157, 0, 6),            // #9d0006  dark-red
-            muted_fg: Color::Rgb(124, 111, 100),        // #7c6f64  gray
-            external_link_fg: Color::Rgb(175, 58, 3),   // #af3a03  dark-orange
+            text_fg: Some(Color::Rgb(60, 56, 54)),    // #3c3836  fg1
+            text_bg: Some(Color::Rgb(251, 241, 199)), // #fbf1c7  bg0
+            highlight_fg: Color::Rgb(251, 241, 199),  // #fbf1c7  bg0
+            highlight_bg: Color::Rgb(7, 102, 120),    // #076678  dark-aqua
+            search_fg: Color::Rgb(251, 241, 199),     // #fbf1c7
+            search_bg: Color::Rgb(181, 118, 20),      // #b57614  dark-yellow
+            info_fg: Color::Rgb(7, 102, 120),         // #076678  dark-aqua
+            warning_fg: Color::Rgb(181, 118, 20),     // #b57614  dark-yellow
+            error_fg: Color::Rgb(157, 0, 6),          // #9d0006  dark-red
+            muted_fg: Color::Rgb(124, 111, 100),      // #7c6f64  gray
+            external_link_fg: Color::Rgb(175, 58, 3), // #af3a03  dark-orange
         }
     }
 }

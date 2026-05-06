@@ -33,15 +33,12 @@ static RE_PAGEBREAK_PAIR: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r#"(?is)<[a-z][a-z0-9]*[^>]*epub:type="pagebreak"[^>]*>[^<]*</[a-z][a-z0-9]*>"#)
         .unwrap()
 });
-static RE_PB_LABEL_ATTR: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#"(?i)(?:title|aria-label)="([^"]*)""#).unwrap()
-});
-static RE_PB_ID_ATTR: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#"(?i)id="([^"]*)""#).unwrap()
-});
+static RE_PB_LABEL_ATTR: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r#"(?i)(?:title|aria-label)="([^"]*)""#).unwrap());
+static RE_PB_ID_ATTR: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r#"(?i)id="([^"]*)""#).unwrap());
 static RE_PB_INNER: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#">([^<]*)<"#).unwrap());
-static RE_PB_SENTINEL: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"@@PB:([^@]+)@@").unwrap());
+static RE_PB_SENTINEL: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"@@PB:([^@]+)@@").unwrap());
 static HYPHENATION_DICTIONARY: LazyLock<Standard> =
     LazyLock::new(|| Standard::from_embedded(Language::EnglishUS).unwrap());
 const MIN_DICTIONARY_HYPHENATION_CHARS: usize = 8;
@@ -274,10 +271,7 @@ fn extract_images(
 
 /// Resolve the representative text for an element, falling back to child headings,
 /// parent headings, or next siblings for empty anchors.
-fn resolve_element_text(
-    element: &scraper::ElementRef,
-    heading_selector: &Selector,
-) -> String {
+fn resolve_element_text(element: &scraper::ElementRef, heading_selector: &Selector) -> String {
     let mut text = element.text().collect::<String>();
 
     // If the element itself isn't a heading, try its child headings
@@ -360,11 +354,7 @@ fn resolve_element_text(
 
 /// Search for the line matching a set of words using progressively shorter word-prefix strategies.
 /// Returns the matched line number (relative to `text_lines`), or None.
-fn find_line_by_words(
-    words: &[&str],
-    text_lines: &[String],
-    search_start: usize,
-) -> Option<usize> {
+fn find_line_by_words(words: &[&str], text_lines: &[String], search_start: usize) -> Option<usize> {
     let attempts = [
         (0, 32),
         (0, 10),
@@ -1641,7 +1631,9 @@ mod tests {
         ];
         let sections = extract_sections(&fragment, &section_ids, 0, &text_lines).unwrap();
         // fn8_11 should map to line 6 (the footnote definition), not line 0 or 2
-        let fn8_11_line = sections.get("fn8_11").expect("fn8_11 should be in sections");
+        let fn8_11_line = sections
+            .get("fn8_11")
+            .expect("fn8_11 should be in sections");
         assert!(
             text_lines[*fn8_11_line].contains("Gavampati"),
             "fn8_11 should point to the Gavampati footnote line (line {}), got line {} = {:?}",
@@ -1650,7 +1642,9 @@ mod tests {
             text_lines.get(*fn8_11_line)
         );
         // fn8_22 should map to line 8 (the second footnote definition)
-        let fn8_22_line = sections.get("fn8_22").expect("fn8_22 should be in sections");
+        let fn8_22_line = sections
+            .get("fn8_22")
+            .expect("fn8_22 should be in sections");
         assert!(
             text_lines[*fn8_22_line].contains("Dhammacakkappavattana"),
             "fn8_22 should point to the Dhammacakkappavattana footnote line (line {}), got line {} = {:?}",

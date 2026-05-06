@@ -31,7 +31,12 @@ impl BookmarksWindow {
         if entries.is_empty() {
             let paragraph = Paragraph::new("No bookmarks yet")
                 .style(theme.base_style().fg(theme.muted_fg))
-                .block(Block::default().title("Bookmarks").borders(Borders::ALL).style(theme.base_style()));
+                .block(
+                    Block::default()
+                        .title("Bookmarks")
+                        .borders(Borders::ALL)
+                        .style(theme.base_style()),
+                );
             frame.render_widget(paragraph, popup_area);
             return;
         }
@@ -67,8 +72,7 @@ impl BookmarksWindow {
                 popup_area.width - 2,
                 1,
             );
-            let status_line =
-                Paragraph::new(message).style(Style::default().fg(theme.warning_fg));
+            let status_line = Paragraph::new(message).style(Style::default().fg(theme.warning_fg));
             frame.render_widget(status_line, status_area);
         }
     }

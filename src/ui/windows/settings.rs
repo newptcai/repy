@@ -26,7 +26,10 @@ impl SettingsWindow {
         );
 
         frame.render_widget(Clear, popup_area);
-        let block = Block::default().title("Settings").borders(Borders::ALL).style(theme.base_style());
+        let block = Block::default()
+            .title("Settings")
+            .borders(Borders::ALL)
+            .style(theme.base_style());
         let inner = block.inner(popup_area);
         frame.render_widget(block, popup_area);
         let rows = Layout::default()

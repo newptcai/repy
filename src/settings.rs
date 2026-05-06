@@ -388,7 +388,7 @@ mod tests {
         assert_eq!(base_settings.tts_engine_args, vec!["--old".to_string()]);
     }
 
-#[test]
+    #[test]
     fn test_cfg_default_keymaps_default() {
         let keymaps = CfgDefaultKeymaps::default();
         assert_eq!(keymaps.scroll_up, "k");

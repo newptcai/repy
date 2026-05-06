@@ -30,12 +30,20 @@ impl LibraryWindow {
         if entries.is_empty() {
             let paragraph = Paragraph::new("No history yet")
                 .style(theme.base_style().fg(theme.muted_fg))
-                .block(Block::default().title("Library").borders(Borders::ALL).style(theme.base_style()));
+                .block(
+                    Block::default()
+                        .title("Library")
+                        .borders(Borders::ALL)
+                        .style(theme.base_style()),
+                );
             frame.render_widget(paragraph, popup_area);
             return;
         }
 
-        let border_block = Block::default().title("Library").borders(Borders::ALL).style(theme.base_style());
+        let border_block = Block::default()
+            .title("Library")
+            .borders(Borders::ALL)
+            .style(theme.base_style());
         frame.render_widget(border_block, popup_area);
 
         let inner_area = Rect {

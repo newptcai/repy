@@ -62,9 +62,12 @@ impl MetadataWindow {
                 )),
             ];
 
-            let paragraph = Paragraph::new(content)
-                .style(theme.base_style())
-                .block(Block::default().title("Metadata").borders(Borders::ALL).style(theme.base_style()));
+            let paragraph = Paragraph::new(content).style(theme.base_style()).block(
+                Block::default()
+                    .title("Metadata")
+                    .borders(Borders::ALL)
+                    .style(theme.base_style()),
+            );
 
             frame.render_widget(paragraph, popup_area);
         } else {
@@ -79,7 +82,12 @@ impl MetadataWindow {
 
             let paragraph = Paragraph::new(content)
                 .style(theme.base_style().fg(theme.muted_fg))
-                .block(Block::default().title("Metadata").borders(Borders::ALL).style(theme.base_style()));
+                .block(
+                    Block::default()
+                        .title("Metadata")
+                        .borders(Borders::ALL)
+                        .style(theme.base_style()),
+                );
 
             frame.render_widget(paragraph, popup_area);
         }
