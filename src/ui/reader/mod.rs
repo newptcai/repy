@@ -2376,9 +2376,8 @@ impl Reader {
         let current_row = self.state.borrow().reading_state.row;
         let mut selected_index = 0;
 
-        for (i, entry) in toc_entries.iter().enumerate() {
-            if let Some(row) =
-                self.effective_toc_row(entry.content_index, entry.section.as_deref())
+        for i in 0..toc_entries.len() {
+            if let Some(row) = self.toc_activation_row(&toc_entries, i)
                 && row <= current_row
             {
                 selected_index = i;
@@ -3142,6 +3141,28 @@ impl Reader {
         }
         // No section anchor (or lookup failed) – fall back to chapter start.
         self.content_start_rows.get(content_index).copied()
+    }
+
+    fn toc_activation_row(&self, toc_entries: &[TocEntry], index: usize) -> Option<usize> {
+        let entry = toc_entries.get(index)?;
+        let row = self.effective_toc_row(entry.content_index, entry.section.as_deref())?;
+        if index == 0 {
+            return Some(row);
+        }
+
+        let first_entry_for_content = toc_entries[..index]
+            .iter()
+            .all(|prev| prev.content_index != entry.content_index);
+
+        if first_entry_for_content
+            && let Some((content_start, content_end)) =
+                self.chapter_bounds_for_index(entry.content_index)
+            && (content_start..=content_end).contains(&row)
+        {
+            return Some(content_start);
+        }
+
+        Some(row)
     }
 
     fn chapter_rows(&self) -> Vec<usize> {
@@ -5130,7 +5151,7 @@ mod tests {
     use ratatui::Terminal;
     use ratatui::backend::CrosstermBackend;
     use crate::config::Config;
-    use crate::models::TextStructure;
+    use crate::models::{TextStructure, TocEntry};
     use crate::settings::{CfgDefaultKeymaps, Settings};
     use crate::state::State;
     use crate::ui::board::Board;
@@ -5197,6 +5218,94 @@ mod tests {
         );
         stream.write_all(response.as_bytes()).unwrap();
         stream.flush().unwrap();
+    }
+
+    #[test]
+    fn toc_activation_starts_first_entry_at_content_start() {
+        let mut reader = make_test_reader(vec![
+            "Saturday evening".to_string(),
+            "Entering the retreat".to_string(),
+            "Last line".to_string(),
+            "[[Image: Mu_by_Kusan.png]]".to_string(),
+            "Sunday morning".to_string(),
+            "The basis of meditation".to_string(),
+        ]);
+        reader.content_start_rows = vec![0, 3];
+        reader.chapter_text_structures = vec![
+            TextStructure {
+                text_lines: vec![
+                    "Saturday evening".to_string(),
+                    "Entering the retreat".to_string(),
+                    "Last line".to_string(),
+                ],
+                section_rows: HashMap::from([("sat".to_string(), 0)]),
+                ..Default::default()
+            },
+            TextStructure {
+                text_lines: vec![
+                    "[[Image: Mu_by_Kusan.png]]".to_string(),
+                    "Sunday morning".to_string(),
+                    "The basis of meditation".to_string(),
+                ],
+                section_rows: HashMap::from([("sun".to_string(), 4)]),
+                ..Default::default()
+            },
+        ];
+
+        let toc_entries = vec![
+            TocEntry {
+                label: "Sat p.m. Entering the retreat".to_string(),
+                content_index: 0,
+                section: Some("sat".to_string()),
+            },
+            TocEntry {
+                label: "Sun a.m. The basis of meditation".to_string(),
+                content_index: 1,
+                section: Some("sun".to_string()),
+            },
+        ];
+
+        assert_eq!(reader.effective_toc_row(1, Some("sun")), Some(4));
+        assert_eq!(reader.toc_activation_row(&toc_entries, 1), Some(3));
+
+        let current_row = 3;
+        let mut selected_index = 0;
+        for i in 0..toc_entries.len() {
+            if let Some(row) = reader.toc_activation_row(&toc_entries, i)
+                && row <= current_row
+            {
+                selected_index = i;
+            }
+        }
+
+        assert_eq!(selected_index, 1);
+    }
+
+    #[test]
+    fn toc_activation_does_not_shift_first_entry_in_single_content_file() {
+        let mut reader = make_test_reader(vec![
+            "Front matter".to_string(),
+            "Chapter one".to_string(),
+            "Chapter two".to_string(),
+        ]);
+        reader.content_start_rows = vec![0];
+        reader.chapter_text_structures = vec![TextStructure {
+            text_lines: vec![
+                "Front matter".to_string(),
+                "Chapter one".to_string(),
+                "Chapter two".to_string(),
+            ],
+            section_rows: HashMap::from([("chapter-one".to_string(), 1)]),
+            ..Default::default()
+        }];
+
+        let toc_entries = vec![TocEntry {
+            label: "Chapter one".to_string(),
+            content_index: 0,
+            section: Some("chapter-one".to_string()),
+        }];
+
+        assert_eq!(reader.toc_activation_row(&toc_entries, 0), Some(1));
     }
 
     #[test]
