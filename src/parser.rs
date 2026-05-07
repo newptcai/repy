@@ -613,7 +613,10 @@ fn extract_formatting(
     let mut stack: Vec<(_, (usize, usize), (usize, usize))> = Vec::new();
 
     for element in fragment.select(&selector) {
-        let text = normalize_text(element.text().collect::<String>());
+        // Join text nodes with whitespace so tokens at child boundaries don't
+        // fuse into a single token (e.g. trailing footnote markers stuck to
+        // the previous sentence).
+        let text = normalize_text(element.text().collect::<Vec<_>>().join(" "));
         if text.is_empty() {
             continue;
         }
@@ -1639,6 +1642,25 @@ mod tests {
         let result = html_to_plain_text(html, 80).unwrap();
         // Should handle empty elements gracefully
         assert!(result.is_empty() || result.iter().all(|s| s.trim().is_empty()));
+    }
+
+    #[test]
+    fn test_extract_formatting_with_trailing_footnote_span() {
+        // Italic <p> ends with a non-italic <span> containing an endnote
+        // marker. Without a separator the joined text would fuse "become.22"
+        // into one token and the search would fail.
+        let html = r#"<p class="quote">The quote ends here.<span class="num">22</span></p>"#;
+        let fragment = Html::parse_fragment(html);
+        let mut italic = std::collections::HashSet::new();
+        italic.insert("quote".to_string());
+        let styled = StyledClasses { italic, bold: std::collections::HashSet::new() };
+        let text_lines = vec![
+            "The quote ends here.".to_string(),
+            "[22]".to_string(),
+        ];
+        let formatting = extract_formatting(&fragment, 0, &text_lines, &styled).unwrap();
+        assert!(formatting.iter().any(|s| s.row == 0 && s.attr == 2),
+            "italic styling should land on row 0");
     }
 
     #[test]
