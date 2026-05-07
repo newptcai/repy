@@ -784,8 +784,30 @@ fn match_sequence(
         }
 
         // Not found on same line (or gap invalid).
-        // Check next line
+        // Handle hyphenation: line tail looks like " <prefix>-" where the
+        // token starts with `<prefix>`, and the next line begins with the
+        // remaining suffix.
         let remaining = &line[current_pos..];
+        let trimmed = remaining.trim_start();
+        let leading_ws_len = remaining.len() - trimmed.len();
+        if let Some(stripped) = trimmed.strip_suffix('-') {
+            if !stripped.is_empty() && token.starts_with(stripped) {
+                let suffix = &token[stripped.len()..];
+                if !suffix.is_empty() && current_line_idx + 1 < text_lines.len() {
+                    let next_line = &text_lines[current_line_idx + 1];
+                    if next_line.starts_with(suffix) {
+                        let line_end = current_pos + leading_ws_len + stripped.len() + 1;
+                        segments.push((current_line_idx, current_segment_start, line_end));
+                        current_line_idx += 1;
+                        current_segment_start = 0;
+                        current_pos = suffix.len();
+                        continue;
+                    }
+                }
+            }
+        }
+
+        // Check next line
         if is_valid_gap(remaining) {
             // Close current segment
             // Trim trailing markers/whitespace from segment end?
@@ -1617,6 +1639,21 @@ mod tests {
         let result = html_to_plain_text(html, 80).unwrap();
         // Should handle empty elements gracefully
         assert!(result.is_empty() || result.iter().all(|s| s.trim().is_empty()));
+    }
+
+    #[test]
+    fn test_extract_formatting_spans_hyphenated_word() {
+        let html = "<p><em>alpha beta entangled gamma</em></p>";
+        let fragment = Html::parse_fragment(html);
+        let text_lines = vec![
+            "alpha beta entan-".to_string(),
+            "gled gamma".to_string(),
+        ];
+        let formatting =
+            extract_formatting(&fragment, 0, &text_lines, &StyledClasses::default()).unwrap();
+        assert!(!formatting.is_empty(), "italic span across hyphen should be detected");
+        assert!(formatting.iter().any(|s| s.row == 0 && s.attr == 2));
+        assert!(formatting.iter().any(|s| s.row == 1 && s.attr == 2));
     }
 
     #[test]
