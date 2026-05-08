@@ -23,10 +23,10 @@ SQLite implementation.
 
 **Functional for daily use!** Core reading features are complete: TUI navigation, search, bookmarks,
 library management, two-phase cursor/selection modes, image viewing, link/footnote handling, dictionary lookup,
-Wikipedia lookup, and TTS (text-to-speech) all work. Text is intelligently wrapped and hyphenated.
+Wikipedia lookup, persistent highlights/comments, highlight export, and TTS (text-to-speech) all work. Text is intelligently wrapped and hyphenated.
 Reading state and preferences are persisted per-book.
 
-**Not yet implemented:** export functionality, advanced search features (history, fuzzy, incremental),
+**Not yet implemented:** advanced search features (history, fuzzy, incremental),
 mouse support, and additional ebook formats beyond EPUB.
 
 See [to-do.md](to-do.md) for detailed feature status and roadmap.
@@ -90,9 +90,11 @@ position. Otherwise, it starts in the reader UI without a book loaded.
 repy -c FILE     # Use a specific configuration file
 repy -v          # Increase verbosity (for debugging)
 repy --debug     # Enable debug output
+repy --export-highlights /path/to/book.epub
 ```
 
 Note: `-r` (history) and `--dump` options are defined but not yet implemented.
+`--export-highlights` writes JSON containing the book identity and all persisted highlights/comments for that EPUB.
 
 ### Search
 
@@ -135,6 +137,12 @@ Press `?` in the TUI to see the help window at any time (`Help (?)`).
 - `T` — Toggle Top Bar
 - `c` — Cycle Color Theme
 
+### Annotations
+- `A` — Highlights list
+- `Enter` in highlights list — Jump to selected highlight
+- `e` in highlights list — Edit comment
+- `d` in highlights list — Delete highlight
+
 ### Windows & Tools
 - `/` — Search
 - `!` — Text-to-Speech (Toggle)
@@ -160,12 +168,18 @@ The text-selection flow is two-phase:
 
 1. Press `v` in the reader to enter **Cursor Mode** (`-- CURSOR MODE --` appears in the header).
 2. In cursor mode, move with `h` `j` `k` `l` or word motions `w` `b` `e`.
+   - When the cursor is on a highlighted span, press `Enter` to edit that highlight's comment.
+   - Press `D` to delete the highlight under the cursor; if it has a non-empty comment a confirmation popup is shown (`y` deletes, `n`/`Esc` cancels).
 3. Press `v` again to set an anchor and enter **Selection Mode**.
 4. In selection mode, move with `h` `j` `k` `l` and word motions `w` `b` `e` to expand/shrink the character-level selection (selection can cross page boundaries).
 5. Press `y` to copy the selected text to clipboard.
-6. Press `d` to run dictionary lookup on the selection. By default it tries `sdcv`, `dict`, and `wkdict`. You can configure a custom command template in Settings (`s`).
-7. Press `p` to run Wikipedia lookup on the selection; the popup shows a link to the page plus the summary (10s timeout).
-8. Press `Esc` to leave selection mode back to cursor mode; press `Esc` again to return to reader mode.
+6. Press `a` to save a highlight for the selection.
+7. Press `c` to save a highlight and immediately edit its plain-text comment.
+8. Press `d` to run dictionary lookup on the selection. By default it tries `sdcv`, `dict`, and `wkdict`. You can configure a custom command template in Settings (`s`).
+9. Press `p` to run Wikipedia lookup on the selection; the popup shows a link to the page plus the summary (10s timeout).
+10. Press `Esc` to leave selection mode back to cursor mode; press `Esc` again to return to reader mode.
+
+Highlights are anchored to normalized chapter text with prefix/suffix context, so they survive text-width changes and small whitespace or formatting edits. Cross-chapter highlights are not supported yet.
 
 ## Text-to-Speech (TTS)
 
@@ -244,6 +258,9 @@ Example `configuration.json`:
     "scroll_down": "j",
     "page_up": "h",
     "page_down": "l",
+    "add_highlight": "a",
+    "add_highlight_comment": "c",
+    "show_highlights": "A",
     "quit": "q",
     "help": "?"
   }
@@ -255,7 +272,7 @@ on next restart.
 
 ## Database and Reading State
 
-`repy` stores reading history, last positions, and bookmarks in a SQLite database.
+`repy` stores reading history, last positions, bookmarks, and highlights in a SQLite database.
 The database file (`states.db`) is located in the same directory as your config file.
 
 ### Database schema
@@ -269,9 +286,15 @@ The database file (`states.db`) is located in the same directory as your config 
 - **`bookmarks`** — Named bookmarks per book
   - `id`, `filepath`, `name`, plus position fields
 
+- **`books`** and **`book_aliases`** — Stable EPUB identity and path aliases
+  - Book identity uses metadata plus spine href and content fingerprints, not just file path
+
+- **`highlights`** — Persistent highlight anchors and plain-text comments
+  - Stores exact text, prefix/suffix context, approximate normalized offset, color, comment, and resolution status
+
 When you quit (`q` from the reader window), `repy` saves your current position
 and updates the library entry. When you open a book, it restores your last position
-and any stored bookmarks.
+and any stored bookmarks/highlights.
 
 ## Contributing
 

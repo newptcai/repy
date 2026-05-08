@@ -1,4 +1,4 @@
-use crate::models::{LibraryItem, ReadingState};
+use crate::models::{BookIdentity, Highlight, LibraryItem, ReadingState};
 use eyre::Result;
 use rusqlite::{Connection, OptionalExtension, params};
 
@@ -20,6 +20,7 @@ impl State {
         }
 
         let conn = Connection::open(&filepath)?;
+        conn.pragma_update(None, "journal_mode", "WAL")?;
 
         // Always ensure the schema exists. Tables are created only if missing,
         // so this is safe to run on an existing database and also fixes
@@ -38,10 +39,36 @@ impl State {
     }
 
     fn init_db(conn: &Connection) -> Result<()> {
+        conn.execute_batch("PRAGMA foreign_keys = ON;")?;
+        let current_version: i64 = conn.query_row("PRAGMA user_version", [], |row| row.get(0))?;
+        if current_version < 1 {
+            conn.execute_batch("BEGIN IMMEDIATE TRANSACTION;")?;
+            if let Err(err) = Self::migrate_v1(conn).and_then(|_| {
+                conn.pragma_update(None, "user_version", 1)
+                    .map_err(Into::into)
+            }) {
+                let _ = conn.execute_batch("ROLLBACK;");
+                return Err(err);
+            }
+            conn.execute_batch("COMMIT;")?;
+        }
+        if current_version < 2 {
+            conn.execute_batch("BEGIN IMMEDIATE TRANSACTION;")?;
+            if let Err(err) = Self::migrate_v2(conn).and_then(|_| {
+                conn.pragma_update(None, "user_version", 2)
+                    .map_err(Into::into)
+            }) {
+                let _ = conn.execute_batch("ROLLBACK;");
+                return Err(err);
+            }
+            conn.execute_batch("COMMIT;")?;
+        }
+        Ok(())
+    }
+
+    fn migrate_v1(conn: &Connection) -> Result<()> {
         conn.execute_batch(
             "
-            PRAGMA foreign_keys = ON;
-
             CREATE TABLE IF NOT EXISTS reading_states (
                 filepath TEXT PRIMARY KEY,
                 content_index INTEGER,
@@ -84,7 +111,57 @@ impl State {
             "ALTER TABLE bookmarks ADD COLUMN textwidth INTEGER DEFAULT 80",
             [],
         );
+        Ok(())
+    }
 
+    fn migrate_v2(conn: &Connection) -> Result<()> {
+        conn.execute_batch(
+            "
+            CREATE TABLE IF NOT EXISTS books (
+                book_id TEXT PRIMARY KEY,
+                identifier TEXT,
+                title TEXT,
+                creator TEXT,
+                spine_hrefs_hash TEXT NOT NULL,
+                content_fingerprints_hash TEXT NOT NULL,
+                created_at DATETIME DEFAULT (datetime('now')),
+                updated_at DATETIME DEFAULT (datetime('now'))
+            );
+
+            CREATE TABLE IF NOT EXISTS book_aliases (
+                filepath TEXT PRIMARY KEY,
+                book_id TEXT NOT NULL,
+                spine_hrefs_hash TEXT NOT NULL,
+                content_fingerprints_hash TEXT NOT NULL,
+                updated_at DATETIME DEFAULT (datetime('now')),
+                FOREIGN KEY (book_id) REFERENCES books(book_id)
+                ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS highlights (
+                id TEXT PRIMARY KEY,
+                book_id TEXT NOT NULL,
+                content_index INTEGER NOT NULL,
+                spine_href TEXT NOT NULL,
+                exact TEXT NOT NULL,
+                prefix TEXT NOT NULL,
+                suffix TEXT NOT NULL,
+                approx_offset INTEGER NOT NULL,
+                normalization_version INTEGER NOT NULL,
+                color TEXT NOT NULL,
+                comment TEXT,
+                comment_format TEXT NOT NULL DEFAULT 'plain',
+                created_at DATETIME NOT NULL,
+                updated_at DATETIME NOT NULL,
+                resolution_status TEXT NOT NULL DEFAULT 'unresolved',
+                FOREIGN KEY (book_id) REFERENCES books(book_id)
+                ON DELETE CASCADE
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_highlights_book_content
+            ON highlights(book_id, content_index, created_at);
+            ",
+        )?;
         Ok(())
     }
 
@@ -348,6 +425,168 @@ impl State {
         )?;
         Ok(())
     }
+
+    pub fn upsert_book_record(&self, identity: &BookIdentity) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO books
+             (book_id, identifier, title, creator, spine_hrefs_hash, content_fingerprints_hash, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, datetime('now'))
+             ON CONFLICT(book_id) DO UPDATE SET
+                identifier=excluded.identifier,
+                title=excluded.title,
+                creator=excluded.creator,
+                spine_hrefs_hash=excluded.spine_hrefs_hash,
+                content_fingerprints_hash=excluded.content_fingerprints_hash,
+                updated_at=datetime('now')",
+            params![
+                identity.book_id,
+                identity.identifier,
+                identity.title,
+                identity.creator,
+                identity.spine_hrefs_hash,
+                identity.content_fingerprints_hash,
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn upsert_book_identity(&self, filepath: &str, identity: &BookIdentity) -> Result<()> {
+        self.upsert_book_record(identity)?;
+        self.conn.execute(
+            "INSERT INTO book_aliases
+             (filepath, book_id, spine_hrefs_hash, content_fingerprints_hash, updated_at)
+             VALUES (?, ?, ?, ?, datetime('now'))
+             ON CONFLICT(filepath) DO UPDATE SET
+                book_id=excluded.book_id,
+                spine_hrefs_hash=excluded.spine_hrefs_hash,
+                content_fingerprints_hash=excluded.content_fingerprints_hash,
+                updated_at=datetime('now')",
+            params![
+                filepath,
+                identity.book_id,
+                identity.spine_hrefs_hash,
+                identity.content_fingerprints_hash,
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn alias_conflict(
+        &self,
+        filepath: &str,
+        identity: &BookIdentity,
+    ) -> Result<Option<String>> {
+        let existing: Option<(String, String, String)> = self
+            .conn
+            .query_row(
+                "SELECT book_id, spine_hrefs_hash, content_fingerprints_hash
+                 FROM book_aliases WHERE filepath=?",
+                params![filepath],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .optional()?;
+        Ok(existing.and_then(|(book_id, spine_hash, content_hash)| {
+            (book_id != identity.book_id
+                && (spine_hash != identity.spine_hrefs_hash
+                    || content_hash != identity.content_fingerprints_hash))
+                .then_some(book_id)
+        }))
+    }
+
+    pub fn insert_highlight(&self, highlight: &Highlight) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO highlights
+             (id, book_id, content_index, spine_href, exact, prefix, suffix, approx_offset,
+              normalization_version, color, comment, comment_format, created_at, updated_at,
+              resolution_status)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             ON CONFLICT(id) DO UPDATE SET
+                exact=excluded.exact,
+                prefix=excluded.prefix,
+                suffix=excluded.suffix,
+                approx_offset=excluded.approx_offset,
+                color=excluded.color,
+                comment=excluded.comment,
+                comment_format=excluded.comment_format,
+                updated_at=excluded.updated_at,
+                resolution_status=excluded.resolution_status",
+            params![
+                highlight.id,
+                highlight.book_id,
+                highlight.content_index,
+                highlight.spine_href,
+                highlight.exact,
+                highlight.prefix,
+                highlight.suffix,
+                highlight.approx_offset,
+                highlight.normalization_version,
+                highlight.color,
+                highlight.comment,
+                highlight.comment_format,
+                highlight.created_at,
+                highlight.updated_at,
+                highlight.resolution_status,
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn list_highlights(&self, book_id: &str) -> Result<Vec<Highlight>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, book_id, content_index, spine_href, exact, prefix, suffix, approx_offset,
+                    normalization_version, color, comment, comment_format, created_at, updated_at,
+                    resolution_status
+             FROM highlights WHERE book_id=? ORDER BY content_index ASC, approx_offset ASC, created_at ASC",
+        )?;
+        let rows = stmt.query_map(params![book_id], |row| {
+            Ok(Highlight {
+                id: row.get(0)?,
+                book_id: row.get(1)?,
+                content_index: row.get(2)?,
+                spine_href: row.get(3)?,
+                exact: row.get(4)?,
+                prefix: row.get(5)?,
+                suffix: row.get(6)?,
+                approx_offset: row.get(7)?,
+                normalization_version: row.get(8)?,
+                color: row.get(9)?,
+                comment: row.get(10)?,
+                comment_format: row.get(11)?,
+                created_at: row.get(12)?,
+                updated_at: row.get(13)?,
+                resolution_status: row.get(14)?,
+            })
+        })?;
+        let mut highlights = Vec::new();
+        for row in rows {
+            highlights.push(row?);
+        }
+        Ok(highlights)
+    }
+
+    pub fn update_highlight_comment(&self, id: &str, comment: Option<&str>) -> Result<()> {
+        self.conn.execute(
+            "UPDATE highlights
+             SET comment=?, comment_format='plain', updated_at=datetime('now')
+             WHERE id=?",
+            params![comment, id],
+        )?;
+        Ok(())
+    }
+
+    pub fn update_highlight_status(&self, id: &str, status: &str) -> Result<()> {
+        self.conn.execute(
+            "UPDATE highlights SET resolution_status=?, updated_at=datetime('now') WHERE id=?",
+            params![status, id],
+        )?;
+        Ok(())
+    }
+
+    pub fn delete_highlight(&self, id: &str) -> Result<()> {
+        self.conn
+            .execute("DELETE FROM highlights WHERE id=?", params![id])?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -410,6 +649,10 @@ mod tests {
 
         fn get_meta(&self) -> &BookMetadata {
             &self.metadata
+        }
+
+        fn spine_href(&self, index: usize) -> Option<String> {
+            self.contents.get(index).cloned()
         }
 
         fn initialize(&mut self) -> Result<()> {
@@ -515,6 +758,164 @@ mod tests {
             .map(|r| r.unwrap())
             .collect();
         assert!(columns.contains(&"textwidth".to_string()));
+
+        let version: i64 = conn
+            .query_row("PRAGMA user_version", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(version, 2);
+    }
+
+    fn sample_identity(book_id: &str) -> BookIdentity {
+        BookIdentity {
+            book_id: book_id.to_string(),
+            identifier: Some("id".to_string()),
+            title: Some("Title".to_string()),
+            creator: Some("Author".to_string()),
+            spine_hrefs_hash: "spine".to_string(),
+            content_fingerprints_hash: "content".to_string(),
+        }
+    }
+
+    fn sample_highlight(id: &str, book_id: &str) -> Highlight {
+        let now = chrono::Utc::now();
+        Highlight {
+            id: id.to_string(),
+            book_id: book_id.to_string(),
+            content_index: 0,
+            spine_href: "chapter.xhtml".to_string(),
+            exact: "selected text".to_string(),
+            prefix: "before ".to_string(),
+            suffix: " after".to_string(),
+            approx_offset: 10,
+            normalization_version: crate::annotations::NORMALIZATION_VERSION,
+            color: "yellow".to_string(),
+            comment: None,
+            comment_format: "plain".to_string(),
+            created_at: now,
+            updated_at: now,
+            resolution_status: "resolved".to_string(),
+        }
+    }
+
+    #[test]
+    fn test_book_identity_alias_reuse_and_conflict() {
+        let state = State::new_for_test();
+        let identity = sample_identity("book-a");
+        state
+            .upsert_book_identity("/tmp/book.epub", &identity)
+            .unwrap();
+        assert_eq!(
+            state.alias_conflict("/tmp/book.epub", &identity).unwrap(),
+            None
+        );
+
+        let mut changed = sample_identity("book-b");
+        changed.content_fingerprints_hash = "different".to_string();
+        assert_eq!(
+            state.alias_conflict("/tmp/book.epub", &changed).unwrap(),
+            Some("book-a".to_string())
+        );
+    }
+
+    #[test]
+    fn test_highlight_crud() {
+        let state = State::new_for_test();
+        let identity = sample_identity("book-a");
+        state
+            .upsert_book_identity("/tmp/book.epub", &identity)
+            .unwrap();
+
+        let mut highlight = sample_highlight("h1", &identity.book_id);
+        state.insert_highlight(&highlight).unwrap();
+        let highlights = state.list_highlights(&identity.book_id).unwrap();
+        assert_eq!(highlights.len(), 1);
+        assert_eq!(highlights[0].exact, "selected text");
+
+        state
+            .update_highlight_comment("h1", Some("plain comment"))
+            .unwrap();
+        state.update_highlight_status("h1", "ambiguous").unwrap();
+        let updated = state.list_highlights(&identity.book_id).unwrap();
+        assert_eq!(updated[0].comment.as_deref(), Some("plain comment"));
+        assert_eq!(updated[0].resolution_status, "ambiguous");
+
+        highlight.exact = "changed text".to_string();
+        highlight.comment = Some("new comment".to_string());
+        state.insert_highlight(&highlight).unwrap();
+        let replaced = state.list_highlights(&identity.book_id).unwrap();
+        assert_eq!(replaced.len(), 1);
+        assert_eq!(replaced[0].exact, "changed text");
+
+        state.delete_highlight("h1").unwrap();
+        assert!(state.list_highlights(&identity.book_id).unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_migration_from_v1_preserves_existing_state() {
+        let conn = Connection::open_in_memory().unwrap();
+        State::migrate_v1(&conn).unwrap();
+        conn.pragma_update(None, "user_version", 1).unwrap();
+        conn.execute(
+            "INSERT INTO reading_states (filepath, content_index, textwidth, row, rel_pctg)
+             VALUES (?, ?, ?, ?, ?)",
+            params!["/legacy.epub", 0, 80, 5, 0.5],
+        )
+        .unwrap();
+
+        State::init_db(&conn).unwrap();
+
+        let version: i64 = conn
+            .query_row("PRAGMA user_version", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(version, 2);
+
+        let row: i64 = conn
+            .query_row(
+                "SELECT row FROM reading_states WHERE filepath=?",
+                params!["/legacy.epub"],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(row, 5);
+
+        let highlight_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM highlights", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(highlight_count, 0);
+
+        let state = State { conn };
+        let identity = sample_identity("legacy-book");
+        state
+            .upsert_book_identity("/legacy.epub", &identity)
+            .unwrap();
+        state
+            .insert_highlight(&sample_highlight("h-after-migrate", &identity.book_id))
+            .unwrap();
+        assert_eq!(state.list_highlights(&identity.book_id).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn test_alias_path_change_reuses_book_id() {
+        let state = State::new_for_test();
+        let identity = sample_identity("book-stable");
+        state
+            .upsert_book_identity("/old/path.epub", &identity)
+            .unwrap();
+        state
+            .insert_highlight(&sample_highlight("h-keep", &identity.book_id))
+            .unwrap();
+
+        // Same identity, new path — should not create a new book and highlights survive
+        state
+            .upsert_book_identity("/new/path.epub", &identity)
+            .unwrap();
+        assert_eq!(
+            state.alias_conflict("/new/path.epub", &identity).unwrap(),
+            None
+        );
+        let highlights = state.list_highlights(&identity.book_id).unwrap();
+        assert_eq!(highlights.len(), 1);
+        assert_eq!(highlights[0].id, "h-keep");
     }
 
     #[test]

@@ -1,3 +1,4 @@
+pub mod annotations;
 pub mod cli;
 pub mod config;
 pub mod css;

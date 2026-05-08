@@ -118,6 +118,9 @@ pub struct CfgDefaultKeymaps {
     pub jump_to_position: String,
     pub add_bookmark: String,
     pub show_bookmarks: String,
+    pub add_highlight: String,
+    pub add_highlight_comment: String,
+    pub show_highlights: String,
     pub quit: String,
     pub help: String,
     pub switch_color: String,
@@ -151,6 +154,9 @@ impl Default for CfgDefaultKeymaps {
             jump_to_position: "`".to_string(),
             add_bookmark: "b".to_string(),
             show_bookmarks: "B".to_string(),
+            add_highlight: "a".to_string(),
+            add_highlight_comment: "c".to_string(),
+            show_highlights: "A".to_string(),
             quit: "q".to_string(),
             help: "?".to_string(),
             switch_color: "c".to_string(),
@@ -185,6 +191,9 @@ impl CfgDefaultKeymaps {
         self.jump_to_position = other.jump_to_position;
         self.add_bookmark = other.add_bookmark;
         self.show_bookmarks = other.show_bookmarks;
+        self.add_highlight = other.add_highlight;
+        self.add_highlight_comment = other.add_highlight_comment;
+        self.show_highlights = other.show_highlights;
         self.quit = other.quit;
         self.help = other.help;
         self.switch_color = other.switch_color;

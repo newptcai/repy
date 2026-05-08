@@ -17,6 +17,10 @@ pub struct Cli {
     #[clap(short, long)]
     pub dump: bool,
 
+    /// Export persisted highlights for an ebook as JSON
+    #[clap(long, value_name = "BOOK")]
+    pub export_highlights: Option<PathBuf>,
+
     /// Use a specific configuration file
     #[clap(short = 'c', long, value_name = "FILE")]
     pub config: Option<PathBuf>,

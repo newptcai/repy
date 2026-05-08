@@ -11,6 +11,7 @@ pub trait Ebook {
     fn contents(&self) -> &Vec<String>; // Using String for content identifiers for now
     fn toc_entries(&self) -> &Vec<TocEntry>;
     fn get_meta(&self) -> &BookMetadata;
+    fn spine_href(&self, index: usize) -> Option<String>;
 
     fn initialize(&mut self) -> Result<()>;
     fn get_raw_text(&mut self, content_id: &str) -> Result<String>;
@@ -144,6 +145,10 @@ impl Ebook for Epub {
 
     fn get_meta(&self) -> &BookMetadata {
         &self.metadata
+    }
+
+    fn spine_href(&self, index: usize) -> Option<String> {
+        self.resource_path_for_content_index(index)
     }
 
     fn initialize(&mut self) -> Result<()> {

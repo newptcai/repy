@@ -1,4 +1,5 @@
 use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -34,6 +35,9 @@ pub enum WindowType {
     Images,
     Visual,
     DictionaryCommandInput,
+    Highlights,
+    HighlightCommentEditor,
+    ConfirmDeleteHighlight,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -132,6 +136,43 @@ impl TextMark {
 pub struct TextSpan {
     pub start: CharPos,
     pub n_letters: u16,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct BookIdentity {
+    pub book_id: String,
+    pub identifier: Option<String>,
+    pub title: Option<String>,
+    pub creator: Option<String>,
+    pub spine_hrefs_hash: String,
+    pub content_fingerprints_hash: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Highlight {
+    pub id: String,
+    pub book_id: String,
+    pub content_index: usize,
+    pub spine_href: String,
+    pub exact: String,
+    pub prefix: String,
+    pub suffix: String,
+    pub approx_offset: usize,
+    pub normalization_version: i64,
+    pub color: String,
+    pub comment: Option<String>,
+    pub comment_format: String,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    pub resolution_status: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HighlightRange {
+    pub highlight_index: usize,
+    pub row: usize,
+    pub start_col: usize,
+    pub end_col: usize,
 }
 
 #[derive(Debug, Clone, PartialEq)]

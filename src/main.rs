@@ -1,7 +1,10 @@
 use repy::{
+    annotations,
     cli::Cli,
     config::Config,
+    ebook::{Ebook, Epub},
     logging::{self, LogLevel},
+    state::State,
     ui::reader::Reader,
 };
 
@@ -26,7 +29,13 @@ fn main() -> Result<()> {
     if std::env::var_os("REPY_CLI_ECHO").is_some() {
         println!("history: {}", cli.history);
         println!("dump: {}", cli.dump);
+        println!("export_highlights: {:?}", cli.export_highlights);
         println!("ebook: {:?}", cli.ebook);
+    }
+
+    if let Some(book) = cli.export_highlights.as_ref() {
+        export_highlights(book)?;
+        return Ok(());
     }
 
     // Load configuration
@@ -98,6 +107,21 @@ fn run_tui_with_file(filepath: &str, config: Config) -> Result<()> {
 fn dump_content(_filepath: &str) -> Result<()> {
     // TODO: Implement content dumping
     println!("Content dumping not yet implemented");
+    Ok(())
+}
+
+fn export_highlights(filepath: &std::path::Path) -> Result<()> {
+    let path = filepath.to_string_lossy();
+    let mut epub = Epub::new(&path);
+    epub.initialize()?;
+    let identity = annotations::derive_book_identity(&mut epub)?;
+    let db = State::new()?;
+    let highlights = db.list_highlights(&identity.book_id)?;
+    let payload = serde_json::json!({
+        "book": identity,
+        "highlights": highlights,
+    });
+    println!("{}", serde_json::to_string_pretty(&payload)?);
     Ok(())
 }
 

@@ -20,12 +20,14 @@ use ratatui::{
     widgets::{Block, Borders, Clear, Paragraph, Wrap},
 };
 
+use crate::annotations::{self, COMMENT_MAX_CHARS, NORMALIZATION_VERSION};
 use crate::config::Config;
 use crate::ebook::{Ebook, Epub, build_chapter_break};
 use crate::logging;
 use crate::models::{
-    BookMetadata, CHAPTER_BREAK_MARKER, Direction as AppDirection, LibraryItem, LinkEntry,
-    ReadingState, SearchData, TextStructure, TocEntry, WindowType,
+    BookIdentity, BookMetadata, CHAPTER_BREAK_MARKER, Direction as AppDirection, Highlight,
+    HighlightRange, LibraryItem, LinkEntry, ReadingState, SearchData, TextStructure, TocEntry,
+    WindowType,
 };
 use crate::settings::DICT_PRESET_LIST;
 use crate::state::State;
@@ -41,6 +43,68 @@ use crate::ui::windows::{
 /// Matches letter + hyphen + whitespace + lowercase letter (e.g. "ex- ample").
 static RE_TTS_HYPHEN: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"([A-Za-z])-\s+([a-z])").unwrap());
+
+fn previous_grapheme_boundary(text: &str, cursor: usize) -> usize {
+    use unicode_segmentation::UnicodeSegmentation;
+    text[..cursor]
+        .grapheme_indices(true)
+        .last()
+        .map(|(idx, _)| idx)
+        .unwrap_or(0)
+}
+
+fn next_grapheme_boundary(text: &str, cursor: usize) -> usize {
+    use unicode_segmentation::UnicodeSegmentation;
+    text[cursor..]
+        .grapheme_indices(true)
+        .nth(1)
+        .map(|(idx, _)| cursor + idx)
+        .unwrap_or(text.len())
+}
+
+fn key_matches_binding(key: &KeyEvent, binding: &str) -> bool {
+    let mut chars = binding.chars();
+    let Some(expected) = chars.next() else {
+        return false;
+    };
+    if chars.next().is_some() {
+        return false;
+    }
+    matches!(key.code, KeyCode::Char(actual) if actual == expected)
+        && !key.modifiers.contains(KeyModifiers::CONTROL)
+        && !key.modifiers.contains(KeyModifiers::ALT)
+}
+
+fn wrapped_cursor_position(text: &str, cursor: usize, wrap_width: u16) -> (u16, u16) {
+    use unicode_segmentation::UnicodeSegmentation;
+    use unicode_width::UnicodeWidthStr;
+
+    let wrap_width = wrap_width.max(1) as usize;
+    let mut row = 0usize;
+    let mut col = 0usize;
+    let before = &text[..cursor.min(text.len())];
+    for grapheme in before.graphemes(true) {
+        if grapheme == "\n" {
+            row += 1;
+            col = 0;
+            continue;
+        }
+        let width = if grapheme == "\t" {
+            4
+        } else {
+            UnicodeWidthStr::width(grapheme).max(1)
+        };
+        if col > 0 && col + width > wrap_width {
+            row += 1;
+            col = 0;
+        }
+        col += width;
+    }
+    (
+        row.min(u16::MAX as usize) as u16,
+        col.min(u16::MAX as usize) as u16,
+    )
+}
 
 /// Application state that encompasses all UI and reading state
 #[derive(Debug, Clone)]
@@ -141,6 +205,7 @@ pub struct UiState {
     pub show_metadata: bool,
     pub show_dictionary: bool,
     pub show_settings: bool,
+    pub show_highlights: bool,
     pub search_query: String,
     pub search_results: Vec<SearchResult>,
     pub search_matches: HashMap<usize, Vec<(usize, usize)>>,
@@ -149,6 +214,14 @@ pub struct UiState {
     pub toc_selected_index: usize,
     pub bookmarks: Vec<(String, ReadingState)>,
     pub bookmarks_selected_index: usize,
+    pub book_identity: Option<BookIdentity>,
+    pub highlights: Vec<Highlight>,
+    pub highlights_selected_index: usize,
+    pub highlight_ranges: HashMap<usize, Vec<HighlightRange>>,
+    pub highlight_comment_buffer: String,
+    pub highlight_comment_cursor: usize,
+    pub highlight_comment_editing_id: Option<String>,
+    pub pending_delete_highlight: Option<Highlight>,
     pub links: Vec<LinkEntry>,
     pub links_selected_index: usize,
     pub images_list: Vec<(usize, String)>,
@@ -198,6 +271,7 @@ impl UiState {
             show_metadata: false,
             show_dictionary: false,
             show_settings: false,
+            show_highlights: false,
             search_query: String::new(),
             search_results: Vec::new(),
             search_matches: HashMap::new(),
@@ -206,6 +280,14 @@ impl UiState {
             toc_selected_index: 0,
             bookmarks: Vec::new(),
             bookmarks_selected_index: 0,
+            book_identity: None,
+            highlights: Vec::new(),
+            highlights_selected_index: 0,
+            highlight_ranges: HashMap::new(),
+            highlight_comment_buffer: String::new(),
+            highlight_comment_cursor: 0,
+            highlight_comment_editing_id: None,
+            pending_delete_highlight: None,
             links: Vec::new(),
             links_selected_index: 0,
             images_list: Vec::new(),
@@ -265,6 +347,7 @@ impl UiState {
                 self.show_metadata = false;
                 self.show_dictionary = false;
                 self.show_settings = false;
+                self.show_highlights = false;
                 self.visual_anchor = None;
                 self.visual_cursor = None;
             }
@@ -287,6 +370,13 @@ impl UiState {
             WindowType::Visual => {}
             WindowType::DictionaryCommandInput => {
                 self.show_settings = false;
+            }
+            WindowType::Highlights => self.show_highlights = true,
+            WindowType::HighlightCommentEditor => {
+                self.show_highlights = false;
+            }
+            WindowType::ConfirmDeleteHighlight => {
+                self.show_highlights = false;
             }
         }
     }
@@ -881,6 +971,17 @@ impl Reader {
 
         let mut epub = Epub::new(&normalized_path);
         epub.initialize()?;
+        let identity = annotations::derive_book_identity(&mut epub)?;
+        let alias_conflict = self
+            .db_state
+            .alias_conflict(&normalized_path, &identity)?
+            .is_some();
+        if alias_conflict {
+            self.db_state.upsert_book_record(&identity)?;
+        } else {
+            self.db_state
+                .upsert_book_identity(&normalized_path, &identity)?;
+        }
 
         // Load last reading state early to get preferred textwidth
         let db_state = self.db_state.get_last_reading_state(&epub).ok();
@@ -967,11 +1068,21 @@ impl Reader {
             let mut state = self.state.borrow_mut();
             state.reading_state = reading_state;
             state.ui_state.metadata = Some(epub.get_meta().clone());
+            state.ui_state.book_identity = Some(identity);
             state.ui_state.toc_entries = epub.toc_entries().clone();
             state.ui_state.toc_selected_index = 0;
             if let Ok(bookmarks) = self.db_state.get_bookmarks(epub) {
                 state.ui_state.bookmarks = bookmarks;
                 state.ui_state.bookmarks_selected_index = 0;
+            }
+            drop(state);
+            self.refresh_highlights()?;
+            if alias_conflict {
+                self.state.borrow_mut().ui_state.set_message(
+                    "This path previously pointed to a different EPUB identity; highlights were kept separate."
+                        .to_string(),
+                    MessageType::Warning,
+                );
             }
         }
 
@@ -1005,7 +1116,8 @@ impl Reader {
         crossterm::execute!(
             io::stdout(),
             crossterm::terminal::EnterAlternateScreen,
-            crossterm::event::EnableMouseCapture
+            crossterm::event::EnableMouseCapture,
+            crossterm::event::EnableBracketedPaste
         )?;
 
         self.terminal.clear()?;
@@ -1101,6 +1213,13 @@ impl Reader {
                             self.handle_key_event(key)?;
                         }
                     }
+                    Event::Paste(text) => {
+                        if self.state.borrow().ui_state.active_window
+                            == WindowType::HighlightCommentEditor
+                        {
+                            self.highlight_comment_insert(&text);
+                        }
+                    }
                     Event::Resize(_, _) => {
                         // Rebuild text structure on resize with current textwidth
                         let term_width = match crossterm::terminal::size() {
@@ -1141,7 +1260,8 @@ impl Reader {
         crossterm::execute!(
             io::stdout(),
             crossterm::terminal::LeaveAlternateScreen,
-            crossterm::event::DisableMouseCapture
+            crossterm::event::DisableMouseCapture,
+            crossterm::event::DisableBracketedPaste
         )?;
         crossterm::terminal::disable_raw_mode()?;
 
@@ -1194,6 +1314,11 @@ impl Reader {
             WindowType::Visual => self.handle_visual_mode_keys(key, repeat_count)?,
             WindowType::Toc => self.handle_toc_mode_keys(key, repeat_count)?,
             WindowType::Bookmarks => self.handle_bookmarks_mode_keys(key, repeat_count)?,
+            WindowType::Highlights => self.handle_highlights_mode_keys(key, repeat_count)?,
+            WindowType::HighlightCommentEditor => self.handle_highlight_comment_editor_keys(key)?,
+            WindowType::ConfirmDeleteHighlight => {
+                self.handle_confirm_delete_highlight_keys(key)?
+            }
             WindowType::Library => self.handle_library_mode_keys(key, repeat_count)?,
             WindowType::Settings => self.handle_settings_mode_keys(key, repeat_count)?,
             WindowType::Links => self.handle_links_mode_keys(key, repeat_count)?,
@@ -1309,6 +1434,20 @@ impl Reader {
             }
             KeyCode::Char('G') => {
                 self.goto_chapter_end();
+            }
+
+            KeyCode::Char(_)
+                if key_matches_binding(
+                    &key,
+                    &self
+                        .state
+                        .borrow()
+                        .config
+                        .keymap_user_dict()
+                        .show_highlights,
+                ) =>
+            {
+                self.open_highlights_window()?;
             }
 
             // Search
@@ -1504,6 +1643,51 @@ impl Reader {
         Ok(())
     }
 
+    /// Returns the `Highlight` whose resolved range contains `visual_cursor`, if any.
+    fn highlight_at_cursor(&self) -> Option<Highlight> {
+        let state = self.state.borrow();
+        let (row, col) = state.ui_state.visual_cursor?;
+        let ranges = state.ui_state.highlight_ranges.get(&row)?;
+        let range = ranges
+            .iter()
+            .find(|r| col >= r.start_col && col < r.end_col)?;
+        state.ui_state.highlights.get(range.highlight_index).cloned()
+    }
+
+    fn handle_confirm_delete_highlight_keys(&mut self, key: KeyEvent) -> eyre::Result<()> {
+        match key.code {
+            KeyCode::Char('y') | KeyCode::Char('Y') => {
+                let pending = self
+                    .state
+                    .borrow_mut()
+                    .ui_state
+                    .pending_delete_highlight
+                    .take();
+                if let Some(highlight) = pending {
+                    self.db_state.delete_highlight(&highlight.id)?;
+                    self.refresh_highlights()?;
+                    let mut state = self.state.borrow_mut();
+                    state
+                        .ui_state
+                        .set_message("Highlight deleted".to_string(), MessageType::Info);
+                    state.ui_state.open_window(WindowType::Visual);
+                } else {
+                    self.state
+                        .borrow_mut()
+                        .ui_state
+                        .open_window(WindowType::Visual);
+                }
+            }
+            KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
+                let mut state = self.state.borrow_mut();
+                state.ui_state.pending_delete_highlight = None;
+                state.ui_state.open_window(WindowType::Visual);
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
     /// Handle keys in two phases: cursor mode -> selection mode
     ///
     /// Phase 1 (cursor mode): visual_cursor is Some, visual_anchor is None.
@@ -1534,8 +1718,66 @@ impl Reader {
                     state.ui_state.visual_anchor = state.ui_state.visual_cursor;
                 }
             }
+            KeyCode::Enter if !has_anchor => {
+                if let Some(highlight) = self.highlight_at_cursor() {
+                    let mut state = self.state.borrow_mut();
+                    state.ui_state.highlight_comment_buffer =
+                        highlight.comment.clone().unwrap_or_default();
+                    state.ui_state.highlight_comment_cursor =
+                        state.ui_state.highlight_comment_buffer.len();
+                    state.ui_state.highlight_comment_editing_id = Some(highlight.id);
+                    state
+                        .ui_state
+                        .open_window(WindowType::HighlightCommentEditor);
+                }
+            }
+            KeyCode::Char('D') if !has_anchor => {
+                if let Some(highlight) = self.highlight_at_cursor() {
+                    let has_comment = highlight
+                        .comment
+                        .as_deref()
+                        .is_some_and(|c| !c.trim().is_empty());
+                    if has_comment {
+                        let mut state = self.state.borrow_mut();
+                        state.ui_state.pending_delete_highlight = Some(highlight);
+                        state
+                            .ui_state
+                            .open_window(WindowType::ConfirmDeleteHighlight);
+                    } else {
+                        self.db_state.delete_highlight(&highlight.id)?;
+                        self.refresh_highlights()?;
+                        self.state.borrow_mut().ui_state.set_message(
+                            "Highlight deleted".to_string(),
+                            MessageType::Info,
+                        );
+                    }
+                }
+            }
             KeyCode::Char('y') if has_anchor => {
                 self.yank_selection()?;
+            }
+            KeyCode::Char(_)
+                if has_anchor
+                    && key_matches_binding(
+                        &key,
+                        &self.state.borrow().config.keymap_user_dict().add_highlight,
+                    ) =>
+            {
+                self.create_highlight_from_selection(false)?;
+            }
+            KeyCode::Char(_)
+                if has_anchor
+                    && key_matches_binding(
+                        &key,
+                        &self
+                            .state
+                            .borrow()
+                            .config
+                            .keymap_user_dict()
+                            .add_highlight_comment,
+                    ) =>
+            {
+                self.create_highlight_from_selection(true)?;
             }
             KeyCode::Char('d') if has_anchor => {
                 self.dictionary_lookup()?;
@@ -1912,6 +2154,189 @@ impl Reader {
         Ok(())
     }
 
+    fn handle_highlight_comment_editor_keys(&mut self, key: KeyEvent) -> eyre::Result<()> {
+        match key.code {
+            KeyCode::Esc => {
+                let mut state = self.state.borrow_mut();
+                state.ui_state.highlight_comment_buffer.clear();
+                state.ui_state.highlight_comment_cursor = 0;
+                state.ui_state.highlight_comment_editing_id = None;
+                state.ui_state.open_window(WindowType::Highlights);
+            }
+            KeyCode::Char('s') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.save_highlight_comment()?;
+            }
+            KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                let mut state = self.state.borrow_mut();
+                let cursor = state.ui_state.highlight_comment_cursor;
+                let start = state.ui_state.highlight_comment_buffer[..cursor]
+                    .rfind('\n')
+                    .map(|idx| idx + 1)
+                    .unwrap_or(0);
+                state
+                    .ui_state
+                    .highlight_comment_buffer
+                    .replace_range(start..cursor, "");
+                state.ui_state.highlight_comment_cursor = start;
+            }
+            KeyCode::Char('w') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.highlight_comment_delete_word();
+            }
+            KeyCode::Enter => self.highlight_comment_insert("\n"),
+            KeyCode::Tab => self.highlight_comment_insert("\t"),
+            KeyCode::Backspace => self.highlight_comment_backspace(),
+            KeyCode::Delete => self.highlight_comment_delete(),
+            KeyCode::Left => self.highlight_comment_move_left(),
+            KeyCode::Right => self.highlight_comment_move_right(),
+            KeyCode::Home => {
+                let mut state = self.state.borrow_mut();
+                let cursor = state.ui_state.highlight_comment_cursor;
+                state.ui_state.highlight_comment_cursor = state.ui_state.highlight_comment_buffer
+                    [..cursor]
+                    .rfind('\n')
+                    .map(|idx| idx + 1)
+                    .unwrap_or(0);
+            }
+            KeyCode::End => {
+                let mut state = self.state.borrow_mut();
+                let cursor = state.ui_state.highlight_comment_cursor;
+                let tail = &state.ui_state.highlight_comment_buffer[cursor..];
+                state.ui_state.highlight_comment_cursor =
+                    cursor + tail.find('\n').unwrap_or(tail.len());
+            }
+            KeyCode::Char(c) => {
+                if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT {
+                    let mut s = String::new();
+                    s.push(c);
+                    self.highlight_comment_insert(&s);
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn highlight_comment_insert(&mut self, text: &str) {
+        let mut state = self.state.borrow_mut();
+        let current_len = state.ui_state.highlight_comment_buffer.chars().count();
+        let available = COMMENT_MAX_CHARS.saturating_sub(current_len);
+        if available == 0 {
+            state.ui_state.set_message(
+                "Comment length limit reached".to_string(),
+                MessageType::Warning,
+            );
+            return;
+        }
+        let insert: String = text.chars().take(available).collect();
+        let cursor = state.ui_state.highlight_comment_cursor;
+        state
+            .ui_state
+            .highlight_comment_buffer
+            .insert_str(cursor, &insert);
+        state.ui_state.highlight_comment_cursor = cursor + insert.len();
+        if insert.chars().count() < text.chars().count() {
+            state.ui_state.set_message(
+                "Comment length limit reached".to_string(),
+                MessageType::Warning,
+            );
+        }
+    }
+
+    fn highlight_comment_backspace(&mut self) {
+        let mut state = self.state.borrow_mut();
+        let cursor = state.ui_state.highlight_comment_cursor;
+        if cursor == 0 {
+            return;
+        }
+        let prev = previous_grapheme_boundary(&state.ui_state.highlight_comment_buffer, cursor);
+        state
+            .ui_state
+            .highlight_comment_buffer
+            .replace_range(prev..cursor, "");
+        state.ui_state.highlight_comment_cursor = prev;
+    }
+
+    fn highlight_comment_delete(&mut self) {
+        let mut state = self.state.borrow_mut();
+        let cursor = state.ui_state.highlight_comment_cursor;
+        if cursor >= state.ui_state.highlight_comment_buffer.len() {
+            return;
+        }
+        let next = next_grapheme_boundary(&state.ui_state.highlight_comment_buffer, cursor);
+        state
+            .ui_state
+            .highlight_comment_buffer
+            .replace_range(cursor..next, "");
+    }
+
+    fn highlight_comment_move_left(&mut self) {
+        let mut state = self.state.borrow_mut();
+        let cursor = state.ui_state.highlight_comment_cursor;
+        state.ui_state.highlight_comment_cursor =
+            previous_grapheme_boundary(&state.ui_state.highlight_comment_buffer, cursor);
+    }
+
+    fn highlight_comment_move_right(&mut self) {
+        let mut state = self.state.borrow_mut();
+        let cursor = state.ui_state.highlight_comment_cursor;
+        state.ui_state.highlight_comment_cursor =
+            next_grapheme_boundary(&state.ui_state.highlight_comment_buffer, cursor);
+    }
+
+    fn highlight_comment_delete_word(&mut self) {
+        let mut state = self.state.borrow_mut();
+        let cursor = state.ui_state.highlight_comment_cursor;
+        if cursor == 0 {
+            return;
+        }
+        let text = &state.ui_state.highlight_comment_buffer;
+        let mut start = cursor;
+        while start > 0 {
+            let prev = previous_grapheme_boundary(text, start);
+            if text[prev..start].chars().any(|c| !c.is_whitespace()) {
+                start = prev;
+                break;
+            }
+            start = prev;
+        }
+        while start > 0 {
+            let prev = previous_grapheme_boundary(text, start);
+            if text[prev..start].chars().all(|c| c.is_whitespace()) {
+                break;
+            }
+            start = prev;
+        }
+        state
+            .ui_state
+            .highlight_comment_buffer
+            .replace_range(start..cursor, "");
+        state.ui_state.highlight_comment_cursor = start;
+    }
+
+    fn save_highlight_comment(&mut self) -> eyre::Result<()> {
+        let (id, comment) = {
+            let state = self.state.borrow();
+            let Some(id) = state.ui_state.highlight_comment_editing_id.clone() else {
+                return Ok(());
+            };
+            let comment = state
+                .ui_state
+                .highlight_comment_buffer
+                .trim_end()
+                .to_string();
+            (id, comment)
+        };
+        let comment_opt = (!comment.trim().is_empty()).then_some(comment.as_str());
+        self.db_state.update_highlight_comment(&id, comment_opt)?;
+        self.refresh_highlights()?;
+        let mut state = self.state.borrow_mut();
+        state.ui_state.highlight_comment_buffer.clear();
+        state.ui_state.highlight_comment_cursor = 0;
+        state.ui_state.highlight_comment_editing_id = None;
+        state.ui_state.open_window(WindowType::Highlights);
+        Ok(())
+    }
+
     /// Static render method that can be called from a closure
     fn render_static(
         frame: &mut Frame,
@@ -1965,6 +2390,40 @@ impl Reader {
                 &entries,
                 state.ui_state.bookmarks_selected_index,
                 None,
+                &theme,
+            );
+        } else if state.ui_state.show_highlights {
+            let entries: Vec<String> = state
+                .ui_state
+                .highlights
+                .iter()
+                .map(|highlight| {
+                    let status = match highlight.resolution_status.as_str() {
+                        "resolved" => String::new(),
+                        status => format!(" [{status}]"),
+                    };
+                    let comment = highlight
+                        .comment
+                        .as_deref()
+                        .filter(|text| !text.trim().is_empty())
+                        .map(|text| format!(" - {}", text.lines().next().unwrap_or("")))
+                        .unwrap_or_default();
+                    format!(
+                        "{}:{}{} {}{}",
+                        highlight.content_index + 1,
+                        highlight.approx_offset,
+                        status,
+                        highlight.exact,
+                        comment
+                    )
+                })
+                .collect();
+            BookmarksWindow::render(
+                frame,
+                frame.area(),
+                &entries,
+                state.ui_state.highlights_selected_index,
+                Some("Highlights (Enter jump, e edit, d delete)"),
                 &theme,
             );
         } else if state.ui_state.show_library {
@@ -2034,6 +2493,10 @@ impl Reader {
             );
         } else if state.ui_state.active_window == WindowType::DictionaryCommandInput {
             Self::render_dictionary_command_input_static(frame, state, &theme);
+        } else if state.ui_state.active_window == WindowType::HighlightCommentEditor {
+            Self::render_highlight_comment_editor_static(frame, state, &theme);
+        } else if state.ui_state.active_window == WindowType::ConfirmDeleteHighlight {
+            Self::render_confirm_delete_highlight_static(frame, state, &theme);
         } else if state.ui_state.show_settings {
             let entries = Self::settings_entries(state);
             SettingsWindow::render(
@@ -2398,6 +2861,93 @@ impl Reader {
         ));
     }
 
+    fn render_highlight_comment_editor_static(
+        frame: &mut Frame,
+        state: &ApplicationState,
+        theme: &Theme,
+    ) {
+        let area = Rect::new(
+            frame.area().x + frame.area().width / 6,
+            frame.area().y + frame.area().height / 6,
+            frame.area().width * 2 / 3,
+            frame.area().height * 2 / 3,
+        );
+        let block = Block::default()
+            .title("Comment (Ctrl+s save, Esc cancel)")
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(theme.info_fg))
+            .style(theme.base_style());
+        let inner = block.inner(area);
+        let text = state.ui_state.highlight_comment_buffer.as_str();
+        let paragraph = Paragraph::new(text)
+            .block(block)
+            .wrap(Wrap { trim: false })
+            .style(theme.base_style());
+        frame.render_widget(Clear, area);
+        frame.render_widget(paragraph, area);
+
+        let (row, col) =
+            wrapped_cursor_position(text, state.ui_state.highlight_comment_cursor, inner.width);
+        if row < inner.height {
+            frame.set_cursor_position((
+                inner.x + col.min(inner.width.saturating_sub(1)),
+                inner.y + row,
+            ));
+        }
+    }
+
+    fn render_confirm_delete_highlight_static(
+        frame: &mut Frame,
+        state: &ApplicationState,
+        theme: &Theme,
+    ) {
+        let Some(highlight) = state.ui_state.pending_delete_highlight.as_ref() else {
+            return;
+        };
+        let area = frame.area();
+        let width = (area.width * 2 / 3).max(40).min(area.width);
+        let height = 10u16.min(area.height);
+        let x = area.x + (area.width.saturating_sub(width)) / 2;
+        let y = area.y + (area.height.saturating_sub(height)) / 2;
+        let popup_area = Rect::new(x, y, width, height);
+
+        let truncate = |s: &str, n: usize| -> String {
+            let collected: Vec<char> = s.chars().collect();
+            if collected.len() > n {
+                let head: String = collected.iter().take(n).collect();
+                format!("{head}…")
+            } else {
+                s.to_string()
+            }
+        };
+        let exact = truncate(&highlight.exact, 120);
+        let comment = highlight
+            .comment
+            .as_deref()
+            .map(|c| truncate(c, 200))
+            .unwrap_or_default();
+
+        let lines: Vec<Line> = vec![
+            Line::from(""),
+            Line::from(format!("  Highlight: {exact}")),
+            Line::from(format!("  Comment:   {comment}")),
+            Line::from(""),
+            Line::from("  Delete this highlight and its comment? (y/N)"),
+        ];
+
+        let block = Block::default()
+            .title("Confirm Delete")
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(theme.warning_fg))
+            .style(theme.base_style());
+        let paragraph = Paragraph::new(lines)
+            .block(block)
+            .wrap(Wrap { trim: false })
+            .style(theme.base_style());
+        frame.render_widget(Clear, popup_area);
+        frame.render_widget(paragraph, popup_area);
+    }
+
     fn open_toc_window(&mut self) -> eyre::Result<()> {
         let toc_entries = if let Some(epub) = self.ebook.as_ref() {
             epub.toc_entries().clone()
@@ -2433,6 +2983,191 @@ impl Reader {
         state.ui_state.bookmarks = bookmarks;
         state.ui_state.bookmarks_selected_index = 0;
         state.ui_state.open_window(WindowType::Bookmarks);
+        Ok(())
+    }
+
+    fn open_highlights_window(&mut self) -> eyre::Result<()> {
+        self.refresh_highlights()?;
+        let mut state = self.state.borrow_mut();
+        if state.ui_state.highlights_selected_index >= state.ui_state.highlights.len() {
+            state.ui_state.highlights_selected_index =
+                state.ui_state.highlights.len().saturating_sub(1);
+        }
+        state.ui_state.open_window(WindowType::Highlights);
+        Ok(())
+    }
+
+    fn refresh_highlights(&mut self) -> eyre::Result<()> {
+        let highlights = {
+            let state = self.state.borrow();
+            match state.ui_state.book_identity.as_ref() {
+                Some(identity) => self.db_state.list_highlights(&identity.book_id)?,
+                None => Vec::new(),
+            }
+        };
+        self.state.borrow_mut().ui_state.highlights = highlights;
+        self.refresh_highlight_ranges()
+    }
+
+    fn refresh_highlight_ranges(&mut self) -> eyre::Result<()> {
+        let highlights = self.state.borrow().ui_state.highlights.clone();
+        let mut all_ranges: HashMap<usize, Vec<HighlightRange>> = HashMap::new();
+        let mut statuses = Vec::new();
+        for content_index in 0..self.chapter_text_structures.len() {
+            let Some(global_start_row) = self.content_start_rows.get(content_index).copied() else {
+                continue;
+            };
+            for (idx, highlight) in highlights.iter().enumerate() {
+                if highlight.content_index != content_index {
+                    continue;
+                }
+                match annotations::resolve_highlight(
+                    idx,
+                    highlight,
+                    &self.chapter_text_structures[content_index].text_lines,
+                    global_start_row,
+                ) {
+                    annotations::Resolution::Resolved(ranges) => {
+                        statuses.push((highlight.id.clone(), "resolved".to_string()));
+                        for range in ranges {
+                            all_ranges.entry(range.row).or_default().push(range);
+                        }
+                    }
+                    annotations::Resolution::Ambiguous => {
+                        statuses.push((highlight.id.clone(), "ambiguous".to_string()))
+                    }
+                    annotations::Resolution::Unresolved => {
+                        statuses.push((highlight.id.clone(), "unresolved".to_string()))
+                    }
+                }
+            }
+        }
+        {
+            let mut state = self.state.borrow_mut();
+            state.ui_state.highlight_ranges = all_ranges;
+            for highlight in &mut state.ui_state.highlights {
+                if let Some((_, status)) = statuses.iter().find(|(id, _)| id == &highlight.id) {
+                    if highlight.resolution_status != *status {
+                        highlight.resolution_status = status.clone();
+                    }
+                }
+            }
+        }
+        for (id, status) in statuses {
+            if highlights
+                .iter()
+                .find(|highlight| highlight.id == id)
+                .is_some_and(|highlight| highlight.resolution_status != status)
+            {
+                self.db_state.update_highlight_status(&id, &status)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn handle_highlights_mode_keys(
+        &mut self,
+        key: KeyEvent,
+        repeat_count: u32,
+    ) -> eyre::Result<()> {
+        let (list_len, mut index) = {
+            let s = self.state.borrow();
+            (
+                s.ui_state.highlights.len(),
+                s.ui_state.highlights_selected_index,
+            )
+        };
+        if !self.handle_list_nav(&key, repeat_count, list_len, &mut index) {
+            match key.code {
+                KeyCode::Enter => self.jump_to_selected_highlight()?,
+                KeyCode::Char('e') => self.edit_selected_highlight_comment()?,
+                KeyCode::Char('d') => self.delete_selected_highlight()?,
+                _ => {}
+            }
+        } else {
+            self.state.borrow_mut().ui_state.highlights_selected_index = index;
+        }
+        Ok(())
+    }
+
+    fn jump_to_selected_highlight(&mut self) -> eyre::Result<()> {
+        let highlight = {
+            let state = self.state.borrow();
+            state
+                .ui_state
+                .highlights
+                .get(state.ui_state.highlights_selected_index)
+                .cloned()
+        };
+        let Some(highlight) = highlight else {
+            return Ok(());
+        };
+        let target_row = {
+            let state = self.state.borrow();
+            state
+                .ui_state
+                .highlight_ranges
+                .values()
+                .flat_map(|ranges| ranges.iter())
+                .filter(|range| {
+                    state
+                        .ui_state
+                        .highlights
+                        .get(range.highlight_index)
+                        .is_some_and(|h| h.id == highlight.id)
+                })
+                .min_by_key(|range| range.row)
+                .map(|range| range.row)
+        };
+        if let Some(target_row) = target_row {
+            self.record_jump_position();
+            let mut state = self.state.borrow_mut();
+            state.reading_state.row = target_row;
+            state.ui_state.open_window(WindowType::Reader);
+        } else {
+            self.state.borrow_mut().ui_state.set_message(
+                "Highlight is unresolved in this EPUB version".to_string(),
+                MessageType::Warning,
+            );
+        }
+        Ok(())
+    }
+
+    fn edit_selected_highlight_comment(&mut self) -> eyre::Result<()> {
+        let highlight = {
+            let state = self.state.borrow();
+            state
+                .ui_state
+                .highlights
+                .get(state.ui_state.highlights_selected_index)
+                .cloned()
+        };
+        let Some(highlight) = highlight else {
+            return Ok(());
+        };
+        let mut state = self.state.borrow_mut();
+        state.ui_state.highlight_comment_buffer = highlight.comment.unwrap_or_default();
+        state.ui_state.highlight_comment_cursor = state.ui_state.highlight_comment_buffer.len();
+        state.ui_state.highlight_comment_editing_id = Some(highlight.id);
+        state
+            .ui_state
+            .open_window(WindowType::HighlightCommentEditor);
+        Ok(())
+    }
+
+    fn delete_selected_highlight(&mut self) -> eyre::Result<()> {
+        let id = {
+            let state = self.state.borrow();
+            state
+                .ui_state
+                .highlights
+                .get(state.ui_state.highlights_selected_index)
+                .map(|highlight| highlight.id.clone())
+        };
+        if let Some(id) = id {
+            self.db_state.delete_highlight(&id)?;
+            self.refresh_highlights()?;
+        }
         Ok(())
     }
 
@@ -3850,6 +4585,7 @@ impl Reader {
         }
         self.board.update_text_structure(combined_text_structure);
         self.content_start_rows = content_start_rows;
+        self.refresh_highlight_ranges()?;
 
         let mut state = self.state.borrow_mut();
         state.reading_state.textwidth = textwidth;
@@ -3896,6 +4632,99 @@ impl Reader {
             .borrow_mut()
             .ui_state
             .open_window(WindowType::Reader);
+        Ok(())
+    }
+
+    fn create_highlight_from_selection(&mut self, edit_comment: bool) -> eyre::Result<()> {
+        let (anchor, cursor, book_identity) = {
+            let state = self.state.borrow();
+            let Some(book_identity) = state.ui_state.book_identity.clone() else {
+                return Ok(());
+            };
+            match (state.ui_state.visual_anchor, state.ui_state.visual_cursor) {
+                (Some(anchor), Some(cursor)) => (anchor, cursor, book_identity),
+                _ => return Ok(()),
+            }
+        };
+        let start_row = anchor.0.min(cursor.0);
+        let end_row = anchor.0.max(cursor.0);
+        let Some(start_index) = self.content_index_for_row(start_row) else {
+            return Ok(());
+        };
+        let Some(end_index) = self.content_index_for_row(end_row) else {
+            return Ok(());
+        };
+        if start_index != end_index {
+            self.state.borrow_mut().ui_state.set_message(
+                "Highlights cannot cross chapter boundaries yet".to_string(),
+                MessageType::Warning,
+            );
+            return Ok(());
+        }
+        let Some(global_start_row) = self.content_start_rows.get(start_index).copied() else {
+            return Ok(());
+        };
+        let Some((exact, prefix, suffix, approx_offset)) = annotations::anchor_from_selection(
+            &self.chapter_text_structures[start_index].text_lines,
+            global_start_row,
+            anchor,
+            cursor,
+        ) else {
+            return Ok(());
+        };
+        let now = chrono::Utc::now();
+        let id = {
+            use sha2::{Digest, Sha256};
+            let mut hasher = Sha256::new();
+            hasher.update(book_identity.book_id.as_bytes());
+            hasher.update(start_index.to_string().as_bytes());
+            hasher.update(approx_offset.to_string().as_bytes());
+            hasher.update(exact.as_bytes());
+            hasher.update(now.timestamp_micros().to_string().as_bytes());
+            hex::encode(hasher.finalize())
+        };
+        let spine_href = self
+            .ebook
+            .as_ref()
+            .and_then(|ebook| ebook.spine_href(start_index))
+            .unwrap_or_else(|| start_index.to_string());
+        let highlight = Highlight {
+            id: id.clone(),
+            book_id: book_identity.book_id,
+            content_index: start_index,
+            spine_href,
+            exact,
+            prefix,
+            suffix,
+            approx_offset,
+            normalization_version: NORMALIZATION_VERSION,
+            color: "yellow".to_string(),
+            comment: None,
+            comment_format: "plain".to_string(),
+            created_at: now,
+            updated_at: now,
+            resolution_status: "resolved".to_string(),
+        };
+        self.db_state.insert_highlight(&highlight)?;
+        self.refresh_highlights()?;
+        {
+            let mut state = self.state.borrow_mut();
+            state.ui_state.visual_anchor = None;
+            state.ui_state.visual_cursor = None;
+            if edit_comment {
+                state.ui_state.highlight_comment_buffer.clear();
+                state.ui_state.highlight_comment_cursor = 0;
+                state.ui_state.highlight_comment_editing_id = Some(id);
+                state
+                    .ui_state
+                    .open_window(WindowType::HighlightCommentEditor);
+            } else {
+                state.ui_state.open_window(WindowType::Reader);
+                state
+                    .ui_state
+                    .set_message("Highlight saved".to_string(), MessageType::Info);
+            }
+        }
         Ok(())
     }
 

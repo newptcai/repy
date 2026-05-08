@@ -6,7 +6,7 @@ use ratatui::{
     widgets::{Block, Paragraph, Wrap},
 };
 
-use crate::models::{CHAPTER_BREAK_MARKER, InlineStyle, LinkEntry, TextStructure};
+use crate::models::{CHAPTER_BREAK_MARKER, HighlightRange, InlineStyle, LinkEntry, TextStructure};
 use crate::theme::Theme;
 use crate::ui::reader::ApplicationState;
 
@@ -137,6 +137,52 @@ impl Board {
                     ));
                 }
 
+                // Check for TTS character-level underline on this line
+                let tts_col_range = state.ui_state.tts_underline_ranges.get(&line_num);
+                let line_spans = if let Some(&(tts_start_col, tts_end_col)) = tts_col_range {
+                    // Build spans with partial underline for the TTS range
+                    let line_spans = self.build_line_spans(
+                        line,
+                        line_num,
+                        Style::default(),
+                        formatting,
+                        state
+                            .ui_state
+                            .highlight_ranges
+                            .get(&line_num)
+                            .map(|ranges| ranges.as_slice()),
+                        state
+                            .ui_state
+                            .search_matches
+                            .get(&line_num)
+                            .map(|ranges| ranges.as_slice()),
+                        theme,
+                    );
+                    // Apply underline to the character range within the spans
+                    Self::apply_underline_range(line_spans, tts_start_col, tts_end_col)
+                } else {
+                    self.build_line_spans(
+                        line,
+                        line_num,
+                        Style::default(),
+                        formatting,
+                        state
+                            .ui_state
+                            .highlight_ranges
+                            .get(&line_num)
+                            .map(|ranges| ranges.as_slice()),
+                        state
+                            .ui_state
+                            .search_matches
+                            .get(&line_num)
+                            .map(|ranges| ranges.as_slice()),
+                        theme,
+                    )
+                    .into_iter()
+                    .map(|span| Span::styled(span.content.to_string(), span.style))
+                    .collect()
+                };
+
                 if let Some(((sel_start_row, sel_start_col), (sel_end_row, sel_end_col))) =
                     selection_range
                 {
@@ -152,87 +198,28 @@ impl Board {
                         } else {
                             line_len
                         };
-                        spans.extend(
-                            self.build_visual_selection_spans(
-                                line,
-                                sel_col_start,
-                                sel_col_end,
-                                cursor_pos
-                                    .filter(|(cursor_row, _)| *cursor_row == line_num)
-                                    .map(|(_, cursor_col)| cursor_col),
-                            ),
-                        );
+                        spans.extend(Self::apply_visual_selection_range(
+                            line_spans,
+                            sel_col_start,
+                            sel_col_end,
+                            cursor_pos
+                                .filter(|(cursor_row, _)| *cursor_row == line_num)
+                                .map(|(_, cursor_col)| cursor_col),
+                        ));
                         return Line::from(spans);
                     }
                 }
 
-                // Cursor-only mode: show block cursor on single character
-                // (visual_cursor is Some but visual_anchor is None)
-                if selection_range.is_none() {
-                    if let Some((cursor_row, cursor_col)) = cursor_pos {
-                        if state.ui_state.visual_anchor.is_none() && line_num == cursor_row {
-                            let chars: Vec<char> = line.chars().collect();
-                            let col = cursor_col.min(chars.len().saturating_sub(1));
-                            if col > 0 {
-                                spans.push(Span::raw(chars[..col].iter().collect::<String>()));
-                            }
-                            // Blinking block cursor character
-                            let cursor_style = Style::default()
-                                .add_modifier(Modifier::REVERSED)
-                                .add_modifier(Modifier::SLOW_BLINK);
-                            if !chars.is_empty() {
-                                spans.push(Span::styled(
-                                    chars[col..=col].iter().collect::<String>(),
-                                    cursor_style,
-                                ));
-                            } else {
-                                // Use non-breaking space so Wrap{trim:true} doesn't strip it
-                                spans.push(Span::styled("\u{00A0}".to_string(), cursor_style));
-                            }
-                            if col + 1 < chars.len() {
-                                spans.push(Span::raw(chars[col + 1..].iter().collect::<String>()));
-                            }
-                            return Line::from(spans);
-                        }
-                    }
+                if selection_range.is_none()
+                    && let Some((cursor_row, cursor_col)) = cursor_pos
+                    && state.ui_state.visual_anchor.is_none()
+                    && line_num == cursor_row
+                {
+                    spans.extend(Self::apply_cursor_range(line_spans, cursor_col));
+                    return Line::from(spans);
                 }
 
-                // Check for TTS character-level underline on this line
-                let tts_col_range = state.ui_state.tts_underline_ranges.get(&line_num);
-
-                if let Some(&(tts_start_col, tts_end_col)) = tts_col_range {
-                    // Build spans with partial underline for the TTS range
-                    let line_spans = self.build_line_spans(
-                        line,
-                        line_num,
-                        Style::default(),
-                        formatting,
-                        state
-                            .ui_state
-                            .search_matches
-                            .get(&line_num)
-                            .map(|ranges| ranges.as_slice()),
-                        theme,
-                    );
-                    // Apply underline to the character range within the spans
-                    let underlined =
-                        Self::apply_underline_range(line_spans, tts_start_col, tts_end_col);
-                    spans.extend(underlined);
-                } else {
-                    let line_spans = self.build_line_spans(
-                        line,
-                        line_num,
-                        Style::default(),
-                        formatting,
-                        state
-                            .ui_state
-                            .search_matches
-                            .get(&line_num)
-                            .map(|ranges| ranges.as_slice()),
-                        theme,
-                    );
-                    spans.extend(line_spans);
-                }
+                spans.extend(line_spans);
                 Line::from(spans)
             })
             .collect();
@@ -244,73 +231,71 @@ impl Board {
         frame.render_widget(paragraph, area);
     }
 
-    fn build_visual_selection_spans(
-        &self,
-        line: &str,
+    fn apply_visual_selection_range(
+        spans: Vec<Span<'static>>,
         sel_col_start: usize,
         sel_col_end: usize,
         cursor_col: Option<usize>,
     ) -> Vec<Span<'static>> {
-        let chars: Vec<char> = line.chars().collect();
-        let line_len = chars.len();
-        let start = sel_col_start.min(line_len);
-        let end = sel_col_end.min(line_len);
-        let mut spans = Vec::new();
-        let base_style = Style::default();
-        let selected_style = base_style.add_modifier(Modifier::REVERSED);
-
-        if start > 0 {
-            spans.push(Span::styled(
-                chars[..start].iter().collect::<String>(),
-                base_style,
-            ));
-        }
-
-        if start < end {
-            if let Some(cursor_col) = cursor_col {
-                if cursor_col >= start && cursor_col < end {
-                    if start < cursor_col {
-                        spans.push(Span::styled(
-                            chars[start..cursor_col].iter().collect::<String>(),
-                            selected_style,
-                        ));
-                    }
-                    spans.push(Span::styled(
-                        chars[cursor_col..=cursor_col].iter().collect::<String>(),
-                        selected_style.add_modifier(Modifier::UNDERLINED),
-                    ));
-                    if cursor_col + 1 < end {
-                        spans.push(Span::styled(
-                            chars[cursor_col + 1..end].iter().collect::<String>(),
-                            selected_style,
-                        ));
-                    }
-                } else {
-                    spans.push(Span::styled(
-                        chars[start..end].iter().collect::<String>(),
-                        selected_style,
-                    ));
-                }
-            } else {
-                spans.push(Span::styled(
-                    chars[start..end].iter().collect::<String>(),
-                    selected_style,
-                ));
+        Self::map_span_char_ranges(spans, |start, end, style| {
+            let mut style = style;
+            if start < sel_col_end && end > sel_col_start {
+                style = style.add_modifier(Modifier::REVERSED);
             }
-        }
+            if let Some(cursor_col) = cursor_col
+                && start <= cursor_col
+                && cursor_col < end
+            {
+                style = style.add_modifier(Modifier::UNDERLINED);
+            }
+            style
+        })
+    }
 
-        if end < line_len {
-            spans.push(Span::styled(
-                chars[end..].iter().collect::<String>(),
-                base_style,
-            ));
-        }
-
+    fn apply_cursor_range(spans: Vec<Span<'static>>, cursor_col: usize) -> Vec<Span<'static>> {
         if spans.is_empty() {
-            spans.push(Span::styled(String::new(), base_style));
+            return vec![Span::styled(
+                "\u{00A0}".to_string(),
+                Style::default()
+                    .add_modifier(Modifier::REVERSED)
+                    .add_modifier(Modifier::SLOW_BLINK),
+            )];
         }
 
-        spans
+        Self::map_span_char_ranges(spans, |start, end, style| {
+            if start <= cursor_col && cursor_col < end {
+                style
+                    .add_modifier(Modifier::REVERSED)
+                    .add_modifier(Modifier::SLOW_BLINK)
+            } else {
+                style
+            }
+        })
+    }
+
+    fn map_span_char_ranges<F>(spans: Vec<Span<'static>>, mut style_for: F) -> Vec<Span<'static>>
+    where
+        F: FnMut(usize, usize, Style) -> Style,
+    {
+        let mut result = Vec::new();
+        let mut char_pos = 0usize;
+        for span in spans {
+            let span_text = span.content.to_string();
+            let chars: Vec<char> = span_text.chars().collect();
+            let mut local_start = 0usize;
+            while local_start < chars.len() {
+                let start = char_pos + local_start;
+                let end = start + 1;
+                let style = style_for(start, end, span.style);
+                result.push(Span::styled(chars[local_start].to_string(), style));
+                local_start += 1;
+            }
+            if chars.is_empty() {
+                result.push(Span::styled(span_text, span.style));
+            }
+            char_pos += chars.len();
+        }
+        result
     }
 
     fn render_empty(&self, frame: &mut Frame, area: Rect, theme: &Theme) {
@@ -336,6 +321,7 @@ impl Board {
         line_num: usize,
         base_style: Style,
         formatting: &[InlineStyle],
+        highlight_ranges: Option<&[HighlightRange]>,
         search_ranges: Option<&[(usize, usize)]>,
         theme: &Theme,
     ) -> Vec<Span<'_>> {
@@ -343,7 +329,9 @@ impl Board {
             return vec![Span::styled(String::new(), base_style)];
         }
 
-        let mut points = vec![0, line.len()];
+        let chars: Vec<char> = line.chars().collect();
+        let line_len = chars.len();
+        let mut points = vec![0, line_len];
         let line_formatting: Vec<&InlineStyle> = formatting
             .iter()
             .filter(|style| style.row as usize == line_num)
@@ -354,14 +342,21 @@ impl Board {
             points.push((style.col + style.n_letters) as usize);
         }
 
-        if let Some(ranges) = search_ranges {
-            for (start, end) in ranges {
-                points.push(*start);
-                points.push(*end);
+        if let Some(ranges) = highlight_ranges {
+            for range in ranges {
+                points.push(range.start_col);
+                points.push(range.end_col);
             }
         }
 
-        points.retain(|pos| *pos <= line.len());
+        if let Some(ranges) = search_ranges {
+            for (start, end) in ranges {
+                points.push(byte_to_char_col(line, *start));
+                points.push(byte_to_char_col(line, *end));
+            }
+        }
+
+        points.retain(|pos| *pos <= line_len);
         points.sort_unstable();
         points.dedup();
 
@@ -372,15 +367,25 @@ impl Board {
             if start >= end {
                 continue;
             }
-            let Some(segment) = line.get(start..end) else {
-                continue;
-            };
+            let segment: String = chars[start..end].iter().collect();
 
             let mut style = base_style;
-            if let Some(ranges) = search_ranges
+            if let Some(ranges) = highlight_ranges
                 && ranges
                     .iter()
-                    .any(|(range_start, range_end)| start >= *range_start && end <= *range_end)
+                    .any(|range| start >= range.start_col && end <= range.end_col)
+            {
+                style = style
+                    .fg(theme.annotation_highlight_fg)
+                    .bg(theme.annotation_highlight_bg);
+            }
+
+            if let Some(ranges) = search_ranges
+                && ranges.iter().any(|(range_start, range_end)| {
+                    let range_start = byte_to_char_col(line, *range_start);
+                    let range_end = byte_to_char_col(line, *range_end);
+                    start >= range_start && end <= range_end
+                })
             {
                 style = style.fg(theme.search_fg).bg(theme.search_bg);
             }
@@ -401,7 +406,7 @@ impl Board {
                 }
             }
 
-            spans.push(Span::styled(segment.to_string(), style));
+            spans.push(Span::styled(segment, style));
         }
 
         spans
@@ -604,6 +609,12 @@ impl Board {
     }
 }
 
+fn byte_to_char_col(line: &str, byte_idx: usize) -> usize {
+    line.char_indices()
+        .take_while(|(idx, _)| *idx < byte_idx)
+        .count()
+}
+
 impl Default for Board {
     fn default() -> Self {
         Self::new()
@@ -613,7 +624,8 @@ impl Default for Board {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::TextStructure;
+    use crate::models::{HighlightRange, TextStructure};
+    use crate::theme::ColorTheme;
     use std::collections::HashMap;
 
     #[test]
@@ -721,5 +733,70 @@ mod tests {
     fn test_board_default() {
         let board = Board::default();
         assert!(board.text_structure.is_none());
+    }
+
+    #[test]
+    fn test_highlight_uses_annotation_colors() {
+        let board = Board::new();
+        let theme = Theme::for_color_theme(ColorTheme::Default);
+        let ranges = vec![HighlightRange {
+            highlight_index: 0,
+            row: 0,
+            start_col: 1,
+            end_col: 3,
+        }];
+
+        let spans = board.build_line_spans(
+            "abcd",
+            0,
+            Style::default(),
+            &[],
+            Some(&ranges),
+            None,
+            &theme,
+        );
+
+        let highlighted = spans
+            .iter()
+            .find(|span| span.content.as_ref() == "bc")
+            .expect("highlighted span should be split out");
+        assert_eq!(highlighted.style.fg, Some(theme.annotation_highlight_fg));
+        assert_eq!(highlighted.style.bg, Some(theme.annotation_highlight_bg));
+        assert_ne!(highlighted.style.bg, Some(theme.highlight_bg));
+    }
+
+    #[test]
+    fn test_visual_cursor_preserves_highlight_on_same_line() {
+        let board = Board::new();
+        let theme = Theme::for_color_theme(ColorTheme::Default);
+        let ranges = vec![HighlightRange {
+            highlight_index: 0,
+            row: 0,
+            start_col: 0,
+            end_col: 4,
+        }];
+        let spans = board.build_line_spans(
+            "abcd",
+            0,
+            Style::default(),
+            &[],
+            Some(&ranges),
+            None,
+            &theme,
+        );
+
+        let cursor_spans = Board::apply_cursor_range(
+            spans
+                .into_iter()
+                .map(|span| Span::styled(span.content.to_string(), span.style))
+                .collect(),
+            2,
+        );
+
+        assert_eq!(cursor_spans[0].style.bg, Some(theme.annotation_highlight_bg));
+        assert_eq!(cursor_spans[1].style.bg, Some(theme.annotation_highlight_bg));
+        assert_eq!(cursor_spans[2].style.bg, Some(theme.annotation_highlight_bg));
+        assert!(cursor_spans[2].style.add_modifier.contains(Modifier::REVERSED));
+        assert_eq!(cursor_spans[3].style.bg, Some(theme.annotation_highlight_bg));
     }
 }
