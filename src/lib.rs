@@ -5,6 +5,7 @@ pub mod css;
 pub mod ebook;
 pub mod logging;
 pub mod models;
+pub mod opds;
 pub mod parser;
 pub mod settings;
 pub mod state;

@@ -5,6 +5,7 @@ pub mod images;
 pub mod library;
 pub mod links;
 pub mod metadata;
+pub mod opds;
 pub mod search;
 pub mod settings;
 pub mod toc;

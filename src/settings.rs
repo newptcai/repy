@@ -1,6 +1,16 @@
 use crate::theme::ColorTheme;
 use serde::{Deserialize, Serialize};
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct OpdsCatalogConfig {
+    pub name: String,
+    pub url: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub username: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub password: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Copy, Serialize, Deserialize)]
 pub struct DoubleSpreadPadding {
     pub left: u16,
@@ -49,6 +59,10 @@ pub struct Settings {
     pub width: Option<usize>,
     pub show_line_numbers: bool,
     pub show_top_bar: bool,
+    #[serde(default)]
+    pub opds_catalogs: Vec<OpdsCatalogConfig>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub opds_download_dir: Option<String>,
 }
 
 impl Settings {
@@ -70,6 +84,12 @@ impl Settings {
         self.width = other.width;
         self.show_line_numbers = other.show_line_numbers;
         self.show_top_bar = other.show_top_bar;
+        if !other.opds_catalogs.is_empty() {
+            self.opds_catalogs = other.opds_catalogs;
+        }
+        if other.opds_download_dir.is_some() {
+            self.opds_download_dir = other.opds_download_dir;
+        }
     }
 }
 
@@ -89,6 +109,8 @@ impl Default for Settings {
             width: None,
             show_line_numbers: false,
             show_top_bar: true,
+            opds_catalogs: Vec::new(),
+            opds_download_dir: None,
         }
     }
 }

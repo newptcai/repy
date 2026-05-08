@@ -33,9 +33,13 @@ use crate::settings::DICT_PRESET_LIST;
 use crate::state::State;
 use crate::theme::Theme;
 use crate::ui::board::Board;
+use crate::opds::{
+    self as opds_client, OpdsAuth, find_epub_link, find_nav_link, resolve_url,
+};
 use crate::ui::windows::{
     bookmarks::BookmarksWindow, dictionary::DictionaryWindow, help::HelpWindow,
     images::ImagesWindow, library::LibraryWindow, links::LinksWindow, metadata::MetadataWindow,
+    opds::{OpdsWindow, OpdsWindowState},
     search::SearchWindow, settings::SettingsWindow, toc::TocWindow,
 };
 
@@ -249,6 +253,9 @@ pub struct UiState {
     pub tts_underline_ranges: HashMap<usize, (usize, usize)>,
     pub tts_converting: bool,
     pub tts_anim_frame: usize,
+    pub opds_state: Option<OpdsWindowState>,
+    /// Path of a freshly-downloaded EPUB awaiting "open now?" confirmation.
+    pub opds_pending_open: Option<std::path::PathBuf>,
 }
 
 impl Default for UiState {
@@ -313,6 +320,8 @@ impl UiState {
             tts_underline_ranges: HashMap::new(),
             tts_converting: false,
             tts_anim_frame: 0,
+            opds_state: None,
+            opds_pending_open: None,
         }
     }
 
@@ -378,6 +387,7 @@ impl UiState {
             WindowType::ConfirmDeleteHighlight => {
                 self.show_highlights = false;
             }
+            WindowType::Opds => {}
         }
     }
 }
@@ -1320,6 +1330,7 @@ impl Reader {
                 self.handle_confirm_delete_highlight_keys(key)?
             }
             WindowType::Library => self.handle_library_mode_keys(key, repeat_count)?,
+            WindowType::Opds => self.handle_opds_mode_keys(key)?,
             WindowType::Settings => self.handle_settings_mode_keys(key, repeat_count)?,
             WindowType::Links => self.handle_links_mode_keys(key, repeat_count)?,
             WindowType::Images => self.handle_images_mode_keys(key, repeat_count)?,
@@ -1516,6 +1527,9 @@ impl Reader {
             }
             KeyCode::Char('r') => {
                 self.open_library_window()?;
+            }
+            KeyCode::Char('O') => {
+                self.open_opds_window()?;
             }
             KeyCode::Char('s') => {
                 let mut state = self.state.borrow_mut();
@@ -2440,6 +2454,10 @@ impl Reader {
                 state.ui_state.library_selected_index,
                 &theme,
             );
+        } else if state.ui_state.active_window == WindowType::Opds {
+            if let Some(ref opds_state) = state.ui_state.opds_state {
+                OpdsWindow::render(frame, frame.area(), opds_state, &theme);
+            }
         } else if state.ui_state.show_search {
             let entries: Vec<String> = state
                 .ui_state
@@ -3232,6 +3250,452 @@ impl Reader {
         state.ui_state.library_items = library_items;
         state.ui_state.library_selected_index = 0;
         state.ui_state.open_window(WindowType::Library);
+        Ok(())
+    }
+
+    fn open_opds_window(&mut self) -> eyre::Result<()> {
+        let (catalogs, download_dir_cfg) = {
+            let state = self.state.borrow();
+            (
+                state.config.settings.opds_catalogs.clone(),
+                state.config.settings.opds_download_dir.clone(),
+            )
+        };
+
+        let download_dir = resolve_download_dir(download_dir_cfg.as_deref());
+        let opds_state = OpdsWindowState::new(catalogs, download_dir);
+
+        let mut state = self.state.borrow_mut();
+        state.ui_state.opds_state = Some(opds_state);
+        state.ui_state.open_window(WindowType::Opds);
+        Ok(())
+    }
+
+    fn handle_opds_mode_keys(&mut self, key: KeyEvent) -> eyre::Result<()> {
+        // Handle "open now?" confirmation first
+        let pending = {
+            let state = self.state.borrow();
+            state.ui_state.opds_pending_open.clone()
+        };
+        if let Some(ref path) = pending {
+            match key.code {
+                KeyCode::Char('y') | KeyCode::Char('Y') | KeyCode::Enter => {
+                    let path = path.clone();
+                    {
+                        let mut state = self.state.borrow_mut();
+                        state.ui_state.opds_pending_open = None;
+                        state.ui_state.open_window(WindowType::Reader);
+                    }
+                    self.load_ebook(&path.to_string_lossy())?;
+                }
+                _ => {
+                    let mut state = self.state.borrow_mut();
+                    state.ui_state.opds_pending_open = None;
+                    if let Some(ref mut opds) = state.ui_state.opds_state {
+                        opds.status = Some("Download saved. Press 'O' to reopen catalog.".to_string());
+                    }
+                    state.ui_state.open_window(WindowType::Reader);
+                }
+            }
+            return Ok(());
+        }
+
+        // Search input mode
+        let search_active = {
+            let state = self.state.borrow();
+            state
+                .ui_state
+                .opds_state
+                .as_ref()
+                .map(|s| s.search_input.is_some())
+                .unwrap_or(false)
+        };
+
+        if search_active {
+            return self.handle_opds_search_input(key);
+        }
+
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('q') => {
+                let mut state = self.state.borrow_mut();
+                state.ui_state.open_window(WindowType::Reader);
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                let mut state = self.state.borrow_mut();
+                if let Some(ref mut opds) = state.ui_state.opds_state {
+                    opds.move_up();
+                }
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                let mut state = self.state.borrow_mut();
+                if let Some(ref mut opds) = state.ui_state.opds_state {
+                    opds.move_down();
+                }
+            }
+            KeyCode::Backspace | KeyCode::Char('u') => {
+                let mut state = self.state.borrow_mut();
+                if let Some(ref mut opds) = state.ui_state.opds_state {
+                    opds.go_back();
+                }
+            }
+            KeyCode::Char('s') => {
+                let mut state = self.state.borrow_mut();
+                if let Some(ref mut opds) = state.ui_state.opds_state {
+                    if !opds.at_catalog_picker() {
+                        opds.search_input = Some(String::new());
+                    }
+                }
+            }
+            KeyCode::Char('n') => {
+                self.opds_paginate(true)?;
+            }
+            KeyCode::Char('p') => {
+                self.opds_paginate(false)?;
+            }
+            KeyCode::Enter => {
+                self.opds_activate()?;
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn handle_opds_search_input(&mut self, key: KeyEvent) -> eyre::Result<()> {
+        match key.code {
+            KeyCode::Esc => {
+                let mut state = self.state.borrow_mut();
+                if let Some(ref mut opds) = state.ui_state.opds_state {
+                    opds.search_input = None;
+                }
+            }
+            KeyCode::Enter => {
+                let (query, base_url, auth) = {
+                    let state = self.state.borrow();
+                    let opds = state.ui_state.opds_state.as_ref().unwrap();
+                    let query = opds.search_input.clone().unwrap_or_default();
+                    let base_url = opds.current_url().unwrap_or("").to_string();
+                    let catalog_idx = opds.catalogs.len().saturating_sub(opds.nav_stack.len());
+                    let auth = opds
+                        .catalogs
+                        .get(catalog_idx.saturating_sub(1))
+                        .and_then(|c| {
+                            c.username.as_ref().map(|u| OpdsAuth {
+                                username: u.clone(),
+                                password: c.password.clone().unwrap_or_default(),
+                            })
+                        });
+                    (query, base_url, auth)
+                };
+
+                if query.is_empty() {
+                    let mut state = self.state.borrow_mut();
+                    if let Some(ref mut opds) = state.ui_state.opds_state {
+                        opds.search_input = None;
+                    }
+                    return Ok(());
+                }
+
+                // Find search link from current feed
+                let search_link = {
+                    let state = self.state.borrow();
+                    let opds = state.ui_state.opds_state.as_ref().unwrap();
+                    opds.current_feed()
+                        .and_then(|f| f.search_link().cloned())
+                };
+
+                let Some(search_link) = search_link else {
+                    let mut state = self.state.borrow_mut();
+                    if let Some(ref mut opds) = state.ui_state.opds_state {
+                        opds.status = Some("No search endpoint available for this feed.".to_string());
+                        opds.search_input = None;
+                    }
+                    return Ok(());
+                };
+
+                {
+                    let mut state = self.state.borrow_mut();
+                    if let Some(ref mut opds) = state.ui_state.opds_state {
+                        opds.status = Some("Searching…".to_string());
+                        opds.search_input = None;
+                    }
+                }
+
+                let template_result =
+                    opds_client::fetch_search_template(&search_link, &base_url, auth.as_ref());
+
+                match template_result {
+                    Ok(template) => {
+                        let search_url =
+                            opds_client::build_search_url(&template, &query);
+                        let feed_result = opds_client::fetch_feed(&search_url, auth.as_ref());
+                        match feed_result {
+                            Ok(feed) => {
+                                let mut state = self.state.borrow_mut();
+                                if let Some(ref mut opds) = state.ui_state.opds_state {
+                                    opds.push_feed(search_url, feed);
+                                }
+                            }
+                            Err(e) => {
+                                let mut state = self.state.borrow_mut();
+                                if let Some(ref mut opds) = state.ui_state.opds_state {
+                                    opds.status = Some(format!("Error: {e}"));
+                                }
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        let mut state = self.state.borrow_mut();
+                        if let Some(ref mut opds) = state.ui_state.opds_state {
+                            opds.status = Some(format!("Error: {e}"));
+                        }
+                    }
+                }
+            }
+            KeyCode::Backspace => {
+                let mut state = self.state.borrow_mut();
+                if let Some(ref mut opds) = state.ui_state.opds_state {
+                    if let Some(ref mut q) = opds.search_input {
+                        q.pop();
+                    }
+                }
+            }
+            KeyCode::Char(c) => {
+                let mut state = self.state.borrow_mut();
+                if let Some(ref mut opds) = state.ui_state.opds_state {
+                    if let Some(ref mut q) = opds.search_input {
+                        q.push(c);
+                    }
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    /// Activate the selected item: open catalog, navigate into a feed, or download a book.
+    fn opds_activate(&mut self) -> eyre::Result<()> {
+        // Case 1: catalog picker
+        let at_picker = {
+            let state = self.state.borrow();
+            state
+                .ui_state
+                .opds_state
+                .as_ref()
+                .map(|s| s.at_catalog_picker())
+                .unwrap_or(false)
+        };
+
+        if at_picker {
+            return self.opds_open_catalog();
+        }
+
+        // Case 2: in a feed — check if selected entry has a nav link or epub link
+        let (entry_nav, entry_epub, _base_url, auth) = {
+            let state = self.state.borrow();
+            let opds = state.ui_state.opds_state.as_ref().unwrap();
+            let base_url = opds.current_url().unwrap_or("").to_string();
+            let catalog_idx = opds
+                .nav_stack
+                .len()
+                .min(opds.catalogs.len())
+                .saturating_sub(1);
+            let auth = opds.catalogs.get(catalog_idx).and_then(|c| {
+                c.username.as_ref().map(|u| OpdsAuth {
+                    username: u.clone(),
+                    password: c.password.clone().unwrap_or_default(),
+                })
+            });
+            let entry = opds.selected_entry();
+            let nav = entry.and_then(|e| find_nav_link(e)).map(|l| {
+                (
+                    resolve_url(&base_url, &l.href),
+                    l.type_.clone(),
+                )
+            });
+            let epub = entry.and_then(|e| find_epub_link(e)).map(|l| {
+                resolve_url(&base_url, &l.href)
+            });
+            (nav, epub, base_url, auth)
+        };
+
+        if let Some((nav_url, _nav_type)) = entry_nav {
+            // Navigate into the feed
+            {
+                let mut state = self.state.borrow_mut();
+                if let Some(ref mut opds) = state.ui_state.opds_state {
+                    opds.status = Some("Loading…".to_string());
+                }
+            }
+            let feed_result = opds_client::fetch_feed(&nav_url, auth.as_ref());
+            match feed_result {
+                Ok(feed) => {
+                    let mut state = self.state.borrow_mut();
+                    if let Some(ref mut opds) = state.ui_state.opds_state {
+                        opds.push_feed(nav_url, feed);
+                    }
+                }
+                Err(e) => {
+                    let mut state = self.state.borrow_mut();
+                    if let Some(ref mut opds) = state.ui_state.opds_state {
+                        opds.status = Some(format!("Error: {e}"));
+                    }
+                }
+            }
+        } else if let Some(epub_url) = entry_epub {
+            // Download the book
+            let (download_dir, title) = {
+                let state = self.state.borrow();
+                let opds = state.ui_state.opds_state.as_ref().unwrap();
+                let title = opds
+                    .selected_entry()
+                    .map(|e| sanitize_filename(&e.title))
+                    .unwrap_or_else(|| "book".to_string());
+                (opds.download_dir.clone(), title)
+            };
+
+            {
+                let mut state = self.state.borrow_mut();
+                if let Some(ref mut opds) = state.ui_state.opds_state {
+                    opds.status = Some("Downloading…".to_string());
+                }
+            }
+
+            let dest = download_dir.join(format!("{title}.epub"));
+            let result = opds_client::download_book(&epub_url, auth.as_ref(), &dest);
+            match result {
+                Ok(()) => {
+                    let msg = format!(
+                        "Downloaded to {}. Open now? [y/n]",
+                        dest.display()
+                    );
+                    let mut state = self.state.borrow_mut();
+                    if let Some(ref mut opds) = state.ui_state.opds_state {
+                        opds.status = Some(msg);
+                    }
+                    state.ui_state.opds_pending_open = Some(dest);
+                }
+                Err(e) => {
+                    let mut state = self.state.borrow_mut();
+                    if let Some(ref mut opds) = state.ui_state.opds_state {
+                        opds.status = Some(format!("Error: {e}"));
+                    }
+                }
+            }
+        } else {
+            let mut state = self.state.borrow_mut();
+            if let Some(ref mut opds) = state.ui_state.opds_state {
+                opds.status = Some("No downloadable EPUB or sub-catalog found for this entry.".to_string());
+            }
+        }
+
+        Ok(())
+    }
+
+    fn opds_open_catalog(&mut self) -> eyre::Result<()> {
+        let (url, auth) = {
+            let state = self.state.borrow();
+            let opds = state.ui_state.opds_state.as_ref().unwrap();
+            let idx = opds.catalog_selected;
+            let cat = opds.catalogs.get(idx).cloned();
+            match cat {
+                Some(c) => {
+                    let auth = c.username.as_ref().map(|u| OpdsAuth {
+                        username: u.clone(),
+                        password: c.password.clone().unwrap_or_default(),
+                    });
+                    (c.url.clone(), auth)
+                }
+                None => return Ok(()),
+            }
+        };
+
+        {
+            let mut state = self.state.borrow_mut();
+            if let Some(ref mut opds) = state.ui_state.opds_state {
+                opds.status = Some("Loading…".to_string());
+            }
+        }
+
+        let feed_result = opds_client::fetch_feed(&url, auth.as_ref());
+        match feed_result {
+            Ok(feed) => {
+                let mut state = self.state.borrow_mut();
+                if let Some(ref mut opds) = state.ui_state.opds_state {
+                    opds.push_feed(url, feed);
+                }
+            }
+            Err(e) => {
+                let mut state = self.state.borrow_mut();
+                if let Some(ref mut opds) = state.ui_state.opds_state {
+                    opds.status = Some(format!("Error: {e}"));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn opds_paginate(&mut self, next: bool) -> eyre::Result<()> {
+        let (link_href, auth) = {
+            let state = self.state.borrow();
+            let opds = state.ui_state.opds_state.as_ref().unwrap();
+            let feed = opds.current_feed();
+            let link = if next {
+                feed.and_then(|f| f.next_link().cloned())
+            } else {
+                feed.and_then(|f| f.prev_link().cloned())
+            };
+            let base_url = opds.current_url().unwrap_or("").to_string();
+            let href = link.map(|l| resolve_url(&base_url, &l.href));
+            let catalog_idx = opds
+                .nav_stack
+                .len()
+                .min(opds.catalogs.len())
+                .saturating_sub(1);
+            let auth = opds.catalogs.get(catalog_idx).and_then(|c| {
+                c.username.as_ref().map(|u| OpdsAuth {
+                    username: u.clone(),
+                    password: c.password.clone().unwrap_or_default(),
+                })
+            });
+            (href, auth)
+        };
+
+        let Some(url) = link_href else {
+            let mut state = self.state.borrow_mut();
+            if let Some(ref mut opds) = state.ui_state.opds_state {
+                opds.status = Some(if next {
+                    "No next page.".to_string()
+                } else {
+                    "No previous page.".to_string()
+                });
+            }
+            return Ok(());
+        };
+
+        {
+            let mut state = self.state.borrow_mut();
+            if let Some(ref mut opds) = state.ui_state.opds_state {
+                opds.status = Some("Loading…".to_string());
+            }
+        }
+
+        let feed_result = opds_client::fetch_feed(&url, auth.as_ref());
+        match feed_result {
+            Ok(feed) => {
+                let mut state = self.state.borrow_mut();
+                if let Some(ref mut opds) = state.ui_state.opds_state {
+                    // Replace the top of the stack with the new page
+                    opds.nav_stack.pop();
+                    opds.push_feed(url, feed);
+                }
+            }
+            Err(e) => {
+                let mut state = self.state.borrow_mut();
+                if let Some(ref mut opds) = state.ui_state.opds_state {
+                    opds.status = Some(format!("Error: {e}"));
+                }
+            }
+        }
         Ok(())
     }
 
@@ -6011,6 +6475,55 @@ impl Reader {
             }
         }
     }
+}
+
+/// Sanitize a book title for use as a filename.
+fn sanitize_filename(title: &str) -> String {
+    title
+        .chars()
+        .map(|c| {
+            if c.is_alphanumeric() || c == '-' || c == '_' || c == ' ' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>()
+        .trim()
+        .replace(' ', "_")
+        .chars()
+        .take(80)
+        .collect()
+}
+
+/// Resolve the download directory: config value → ~/Downloads → /tmp.
+fn resolve_download_dir(configured: Option<&str>) -> std::path::PathBuf {
+    if let Some(dir) = configured {
+        let expanded = if dir.starts_with("~/") {
+            if let Some(home) = dirs_home() {
+                home.join(&dir[2..])
+            } else {
+                std::path::PathBuf::from(dir)
+            }
+        } else {
+            std::path::PathBuf::from(dir)
+        };
+        if std::fs::create_dir_all(&expanded).is_ok() {
+            return expanded;
+        }
+    }
+    // Try ~/Downloads
+    if let Some(home) = dirs_home() {
+        let dl = home.join("Downloads");
+        if std::fs::create_dir_all(&dl).is_ok() {
+            return dl;
+        }
+    }
+    std::path::PathBuf::from("/tmp")
+}
+
+fn dirs_home() -> Option<std::path::PathBuf> {
+    std::env::var("HOME").ok().map(std::path::PathBuf::from)
 }
 
 #[cfg(test)]

@@ -38,6 +38,7 @@ pub enum WindowType {
     Highlights,
     HighlightCommentEditor,
     ConfirmDeleteHighlight,
+    Opds,
 }
 
 #[derive(Debug, Clone, PartialEq)]

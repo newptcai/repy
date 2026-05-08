@@ -47,6 +47,7 @@ const HELP_TEXT: &[&str] = &[
     "   o                 Images on Page",
     "   i                 Metadata",
     "   r                 Library (History)",
+    "   O                 OPDS Catalog Browser",
     "   s                 Settings",
     " Text-to-Speech:",
     "   !                 Toggle TTS (Read Aloud)",
