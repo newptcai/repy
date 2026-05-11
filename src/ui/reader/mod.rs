@@ -257,9 +257,10 @@ pub struct UiState {
     /// Each entry is `(start_line, start_col, end_line, end_col_exclusive)` with char-based columns.
     pub visual_search_matches: Vec<(usize, usize, usize, usize)>,
     pub visual_search_selected: usize,
-    /// Set after `f` or `F` in cursor/selection mode; the next char keypress
-    /// becomes the find target.
-    pub pending_visual_find: Option<VisualFindDirection>,
+    /// Set after `f`/`F`/`t`/`T` in cursor/selection mode; the next char
+    /// keypress becomes the find target. Stores the count typed before the
+    /// motion key (e.g. `2` in `2fa`) so it survives the intermediate key.
+    pub pending_visual_find: Option<(VisualFindDirection, u32)>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1761,12 +1762,14 @@ impl Reader {
             return Ok(());
         }
 
-        // Pending `f`/`F`: the next keypress is the find target.
+        // Pending `f`/`F`/`t`/`T`: the next keypress is the find target.
+        // The count typed before the motion key was stashed alongside the
+        // direction, since `count_prefix` is cleared between key events.
         let pending_find = self.state.borrow().ui_state.pending_visual_find;
-        if let Some(dir) = pending_find {
+        if let Some((dir, pending_count)) = pending_find {
             self.state.borrow_mut().ui_state.pending_visual_find = None;
             if let KeyCode::Char(c) = key.code {
-                self.move_visual_cursor_find_char(c, dir, repeat_count);
+                self.move_visual_cursor_find_char(c, dir, pending_count);
             }
             return Ok(());
         }
@@ -1938,19 +1941,19 @@ impl Reader {
             }
             KeyCode::Char('f') => {
                 self.state.borrow_mut().ui_state.pending_visual_find =
-                    Some(VisualFindDirection::Forward);
+                    Some((VisualFindDirection::Forward, repeat_count));
             }
             KeyCode::Char('F') => {
                 self.state.borrow_mut().ui_state.pending_visual_find =
-                    Some(VisualFindDirection::Backward);
+                    Some((VisualFindDirection::Backward, repeat_count));
             }
             KeyCode::Char('t') => {
                 self.state.borrow_mut().ui_state.pending_visual_find =
-                    Some(VisualFindDirection::TillForward);
+                    Some((VisualFindDirection::TillForward, repeat_count));
             }
             KeyCode::Char('T') => {
                 self.state.borrow_mut().ui_state.pending_visual_find =
-                    Some(VisualFindDirection::TillBackward);
+                    Some((VisualFindDirection::TillBackward, repeat_count));
             }
             _ => {}
         }
@@ -3818,15 +3821,19 @@ impl Reader {
         let chars: Vec<char> = line.chars().collect();
         let mut moved = false;
 
-        for _ in 0..repeat_count.max(1) {
-            // For repeated `t`/`T`, start the scan past the adjacent char so we
-            // don't get stuck on the same target.
+        for iter in 0..repeat_count.max(1) {
+            // For repeated `t`/`T`, after the first hit the cursor sits one
+            // position away from the previous target — skip past it so we
+            // don't immediately re-find the same char. On the first iteration
+            // we want a normal scan (col+1 / col), or `2tu` from just before a
+            // `u` would miss the adjacent target.
+            let repeating_till = iter > 0;
             let scan_from_forward = match dir {
-                VisualFindDirection::TillForward => col + 2,
+                VisualFindDirection::TillForward if repeating_till => col + 2,
                 _ => col + 1,
             };
             let scan_to_backward = match dir {
-                VisualFindDirection::TillBackward => col.saturating_sub(1),
+                VisualFindDirection::TillBackward if repeating_till => col.saturating_sub(1),
                 _ => col,
             };
             let hit = match dir {
