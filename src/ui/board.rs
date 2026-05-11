@@ -301,7 +301,7 @@ impl Board {
     }
 
     fn apply_cursor_range(spans: Vec<Span<'static>>, cursor_col: usize) -> Vec<Span<'static>> {
-        if spans.is_empty() {
+        if spans.iter().all(|s| s.content.is_empty()) {
             return vec![Span::styled(
                 "\u{00A0}".to_string(),
                 Style::default()

@@ -1896,6 +1896,22 @@ impl Reader {
                     self.move_visual_cursor_word_end();
                 }
             }
+            KeyCode::Char('$') => {
+                self.move_visual_cursor_line_end();
+            }
+            KeyCode::Char('^') => {
+                self.move_visual_cursor_line_first_non_blank();
+            }
+            KeyCode::Char(']') => {
+                for _ in 0..repeat_count {
+                    self.move_visual_cursor_paragraph_forward();
+                }
+            }
+            KeyCode::Char('[') => {
+                for _ in 0..repeat_count {
+                    self.move_visual_cursor_paragraph_backward();
+                }
+            }
             _ => {}
         }
         Ok(())
@@ -3663,6 +3679,85 @@ impl Reader {
         }
 
         self.set_visual_cursor_and_scroll(pos);
+    }
+
+    fn move_visual_cursor_line_end(&mut self) {
+        let Some((row, _)) = self.current_visual_cursor() else {
+            return;
+        };
+        let len = self.board.line_char_count(row);
+        let new_col = if len == 0 { 0 } else { len - 1 };
+        self.set_visual_cursor_and_scroll((row, new_col));
+    }
+
+    fn move_visual_cursor_line_first_non_blank(&mut self) {
+        let Some((row, _)) = self.current_visual_cursor() else {
+            return;
+        };
+        let new_col = self
+            .board
+            .get_line(row)
+            .and_then(|line| line.chars().position(|ch| !ch.is_whitespace()))
+            .unwrap_or(0);
+        self.set_visual_cursor_and_scroll((row, new_col));
+    }
+
+    fn is_blank_row(&self, row: usize) -> bool {
+        match self.board.get_line(row) {
+            Some(line) => line.chars().all(|ch| ch.is_whitespace()),
+            None => true,
+        }
+    }
+
+    fn move_visual_cursor_paragraph_forward(&mut self) {
+        let Some((row, _)) = self.current_visual_cursor() else {
+            return;
+        };
+        let total = self.board.total_lines();
+        if total == 0 {
+            return;
+        }
+
+        let mut r = row;
+        // Advance past current non-blank run until we hit a blank line.
+        while r < total && !self.is_blank_row(r) {
+            r += 1;
+        }
+        // Advance past blank lines until we hit a non-blank line.
+        while r < total && self.is_blank_row(r) {
+            r += 1;
+        }
+        if r >= total {
+            // No further paragraph: snap to last line.
+            r = total - 1;
+        }
+        self.set_visual_cursor_and_scroll((r, 0));
+    }
+
+    fn move_visual_cursor_paragraph_backward(&mut self) {
+        let Some((row, _)) = self.current_visual_cursor() else {
+            return;
+        };
+        if row == 0 {
+            self.set_visual_cursor_and_scroll((0, 0));
+            return;
+        }
+
+        let mut r = row - 1;
+        // Move up through blank lines above the current paragraph.
+        while r > 0 && self.is_blank_row(r) {
+            r -= 1;
+        }
+        // Move up through the previous paragraph's text.
+        while r > 0 && !self.is_blank_row(r - 1) {
+            r -= 1;
+        }
+        // r is now the first non-blank row of the previous paragraph (or 0).
+        if self.is_blank_row(r) {
+            // We landed on a blank line because the whole prefix was blank.
+            r = 0;
+        }
+        self.set_visual_cursor_and_scroll((r, 0));
     }
 
     fn current_visual_cursor(&self) -> Option<(usize, usize)> {
