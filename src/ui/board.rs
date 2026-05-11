@@ -231,6 +231,11 @@ impl Board {
                     .collect()
                 };
 
+                let line_is_empty = line.is_empty();
+                let cursor_on_line = cursor_pos
+                    .map(|(cursor_row, _)| cursor_row == line_num)
+                    .unwrap_or(false);
+
                 if let Some(((sel_start_row, sel_start_col), (sel_end_row, sel_end_col))) =
                     selection_range
                 {
@@ -246,14 +251,18 @@ impl Board {
                         } else {
                             line_len
                         };
-                        spans.extend(Self::apply_visual_selection_range(
-                            line_spans,
-                            sel_col_start,
-                            sel_col_end,
-                            cursor_pos
-                                .filter(|(cursor_row, _)| *cursor_row == line_num)
-                                .map(|(_, cursor_col)| cursor_col),
-                        ));
+                        if line_is_empty && cursor_on_line {
+                            spans.push(Self::empty_line_cursor_span());
+                        } else {
+                            spans.extend(Self::apply_visual_selection_range(
+                                line_spans,
+                                sel_col_start,
+                                sel_col_end,
+                                cursor_pos
+                                    .filter(|(cursor_row, _)| *cursor_row == line_num)
+                                    .map(|(_, cursor_col)| cursor_col),
+                            ));
+                        }
                         return Line::from(spans);
                     }
                 }
@@ -263,7 +272,11 @@ impl Board {
                     && state.ui_state.visual_anchor.is_none()
                     && line_num == cursor_row
                 {
-                    spans.extend(Self::apply_cursor_range(line_spans, cursor_col));
+                    if line_is_empty {
+                        spans.push(Self::empty_line_cursor_span());
+                    } else {
+                        spans.extend(Self::apply_cursor_range(line_spans, cursor_col));
+                    }
                     return Line::from(spans);
                 }
 
@@ -300,14 +313,18 @@ impl Board {
         })
     }
 
+    fn empty_line_cursor_span() -> Span<'static> {
+        Span::styled(
+            "\u{00A0}".to_string(),
+            Style::default()
+                .add_modifier(Modifier::REVERSED)
+                .add_modifier(Modifier::SLOW_BLINK),
+        )
+    }
+
     fn apply_cursor_range(spans: Vec<Span<'static>>, cursor_col: usize) -> Vec<Span<'static>> {
-        if spans.iter().all(|s| s.content.is_empty()) {
-            return vec![Span::styled(
-                "\u{00A0}".to_string(),
-                Style::default()
-                    .add_modifier(Modifier::REVERSED)
-                    .add_modifier(Modifier::SLOW_BLINK),
-            )];
+        if spans.is_empty() || spans.iter().all(|s| s.content.is_empty()) {
+            return vec![Self::empty_line_cursor_span()];
         }
 
         Self::map_span_char_ranges(spans, |start, end, style| {
