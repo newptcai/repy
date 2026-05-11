@@ -1788,6 +1788,7 @@ impl Reader {
             }
             KeyCode::Enter if !has_anchor => {
                 if let Some(highlight) = self.highlight_at_cursor() {
+                    self.clear_visual_search_state();
                     let mut state = self.state.borrow_mut();
                     state.ui_state.highlight_comment_buffer =
                         highlight.comment.clone().unwrap_or_default();
@@ -1801,6 +1802,7 @@ impl Reader {
             }
             KeyCode::Char('D') if !has_anchor => {
                 if let Some(highlight) = self.highlight_at_cursor() {
+                    self.clear_visual_search_state();
                     let has_comment = highlight
                         .comment
                         .as_deref()
@@ -1823,6 +1825,7 @@ impl Reader {
             }
             KeyCode::Char('y') if has_anchor => {
                 self.yank_selection()?;
+                self.clear_visual_search_state();
             }
             KeyCode::Char(_)
                 if has_anchor
@@ -1832,6 +1835,7 @@ impl Reader {
                     ) =>
             {
                 self.create_highlight_from_selection(false)?;
+                self.clear_visual_search_state();
             }
             KeyCode::Char(_)
                 if has_anchor
@@ -1846,12 +1850,15 @@ impl Reader {
                     ) =>
             {
                 self.create_highlight_from_selection(true)?;
+                self.clear_visual_search_state();
             }
             KeyCode::Char('d') if has_anchor => {
                 self.dictionary_lookup()?;
+                self.clear_visual_search_state();
             }
             KeyCode::Char('p') if has_anchor => {
                 self.wikipedia_lookup()?;
+                self.clear_visual_search_state();
             }
             // Navigation — works in both cursor and selection mode
             KeyCode::Char('j') | KeyCode::Down => {
@@ -4297,6 +4304,16 @@ impl Reader {
             state.ui_state.visual_search_selected = selected;
         }
         self.set_visual_cursor_and_scroll((sl, sc));
+    }
+
+    /// Drop the current visual-mode `/`-search matches so the yellow highlights
+    /// disappear after the user takes an action on the match (yank, dictionary,
+    /// wikipedia, highlight, etc.). The cursor itself is left alone so the
+    /// follow-up action keeps the position it just jumped to.
+    fn clear_visual_search_state(&mut self) {
+        let mut state = self.state.borrow_mut();
+        state.ui_state.visual_search_matches.clear();
+        state.ui_state.visual_search_selected = 0;
     }
 
     /// Move the visual cursor to the next or previous match in
