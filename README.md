@@ -179,6 +179,14 @@ The text-selection flow is two-phase:
 9. Press `p` to run Wikipedia lookup on the selection; the popup shows a link to the page plus the summary (10s timeout).
 10. Press `Esc` to leave selection mode back to cursor mode; press `Esc` again to return to reader mode.
 
+In both cursor and selection mode, press `/` to search within the currently
+visible screen and jump the cursor to the first match; `n` / `N` cycle through
+matches. The query is plain text (regex specials are escaped) with smartcase
+matching, and spaces in the query match across line wraps and soft hyphens, so
+`/example` will find `exam-` / `ple` even when the wrapper has split the word
+across two lines. In selection mode the anchor stays put, so each jump extends
+the selection.
+
 Highlights are anchored to normalized chapter text with prefix/suffix context, so they survive text-width changes and small whitespace or formatting edits. Cross-chapter highlights are not supported yet.
 
 ## Text-to-Speech (TTS)
