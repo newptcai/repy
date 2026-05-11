@@ -257,6 +257,17 @@ pub struct UiState {
     /// Each entry is `(start_line, start_col, end_line, end_col_exclusive)` with char-based columns.
     pub visual_search_matches: Vec<(usize, usize, usize, usize)>,
     pub visual_search_selected: usize,
+    /// Set after `f` or `F` in cursor/selection mode; the next char keypress
+    /// becomes the find target.
+    pub pending_visual_find: Option<VisualFindDirection>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum VisualFindDirection {
+    Forward,
+    Backward,
+    TillForward,
+    TillBackward,
 }
 
 impl Default for UiState {
@@ -325,6 +336,7 @@ impl UiState {
             visual_search_query: String::new(),
             visual_search_matches: Vec::new(),
             visual_search_selected: 0,
+            pending_visual_find: None,
         }
     }
 
@@ -362,6 +374,7 @@ impl UiState {
                 self.show_highlights = false;
                 self.visual_anchor = None;
                 self.visual_cursor = None;
+                self.pending_visual_find = None;
             }
             WindowType::Help => {
                 self.show_help = true;
@@ -1748,11 +1761,22 @@ impl Reader {
             return Ok(());
         }
 
+        // Pending `f`/`F`: the next keypress is the find target.
+        let pending_find = self.state.borrow().ui_state.pending_visual_find;
+        if let Some(dir) = pending_find {
+            self.state.borrow_mut().ui_state.pending_visual_find = None;
+            if let KeyCode::Char(c) = key.code {
+                self.move_visual_cursor_find_char(c, dir, repeat_count);
+            }
+            return Ok(());
+        }
+
         match key.code {
             KeyCode::Esc => {
                 let mut state = self.state.borrow_mut();
                 state.ui_state.visual_search_matches.clear();
                 state.ui_state.visual_search_selected = 0;
+                state.ui_state.pending_visual_find = None;
                 if has_anchor {
                     // In selection mode: go back to cursor mode
                     state.ui_state.visual_anchor = None;
@@ -1911,6 +1935,22 @@ impl Reader {
                 for _ in 0..repeat_count {
                     self.move_visual_cursor_paragraph_backward();
                 }
+            }
+            KeyCode::Char('f') => {
+                self.state.borrow_mut().ui_state.pending_visual_find =
+                    Some(VisualFindDirection::Forward);
+            }
+            KeyCode::Char('F') => {
+                self.state.borrow_mut().ui_state.pending_visual_find =
+                    Some(VisualFindDirection::Backward);
+            }
+            KeyCode::Char('t') => {
+                self.state.borrow_mut().ui_state.pending_visual_find =
+                    Some(VisualFindDirection::TillForward);
+            }
+            KeyCode::Char('T') => {
+                self.state.borrow_mut().ui_state.pending_visual_find =
+                    Some(VisualFindDirection::TillBackward);
             }
             _ => {}
         }
@@ -3758,6 +3798,65 @@ impl Reader {
             r = 0;
         }
         self.set_visual_cursor_and_scroll((r, 0));
+    }
+
+    /// Vim-style `f<char>` / `F<char>` motion: move the visual cursor to the
+    /// next or previous occurrence of `target` on the current line. Repeats
+    /// `repeat_count` times; stops where it is if a step has no match.
+    fn move_visual_cursor_find_char(
+        &mut self,
+        target: char,
+        dir: VisualFindDirection,
+        repeat_count: u32,
+    ) {
+        let Some((row, mut col)) = self.current_visual_cursor() else {
+            return;
+        };
+        let Some(line) = self.board.get_line(row) else {
+            return;
+        };
+        let chars: Vec<char> = line.chars().collect();
+        let mut moved = false;
+
+        for _ in 0..repeat_count.max(1) {
+            // For repeated `t`/`T`, start the scan past the adjacent char so we
+            // don't get stuck on the same target.
+            let scan_from_forward = match dir {
+                VisualFindDirection::TillForward => col + 2,
+                _ => col + 1,
+            };
+            let scan_to_backward = match dir {
+                VisualFindDirection::TillBackward => col.saturating_sub(1),
+                _ => col,
+            };
+            let hit = match dir {
+                VisualFindDirection::Forward | VisualFindDirection::TillForward => chars
+                    .iter()
+                    .enumerate()
+                    .skip(scan_from_forward)
+                    .find(|(_, c)| **c == target)
+                    .map(|(i, _)| i),
+                VisualFindDirection::Backward | VisualFindDirection::TillBackward => chars
+                    .iter()
+                    .enumerate()
+                    .take(scan_to_backward)
+                    .rev()
+                    .find(|(_, c)| **c == target)
+                    .map(|(i, _)| i),
+            };
+            let Some(i) = hit else { break };
+            let new_col = match dir {
+                VisualFindDirection::Forward | VisualFindDirection::Backward => i,
+                VisualFindDirection::TillForward => i.saturating_sub(1),
+                VisualFindDirection::TillBackward => i + 1,
+            };
+            col = new_col;
+            moved = true;
+        }
+
+        if moved {
+            self.set_visual_cursor_and_scroll((row, col));
+        }
     }
 
     fn current_visual_cursor(&self) -> Option<(usize, usize)> {
