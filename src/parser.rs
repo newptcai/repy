@@ -114,7 +114,8 @@ pub fn parse_html_with_styles(
         starting_line,
         &plain_text,
     )?;
-    let formatting = extract_formatting(&fragment, starting_line, &plain_text, styled_classes)?;
+    let mut formatting = extract_formatting(&fragment, starting_line, &plain_text, styled_classes)?;
+    convert_formatting_bytes_to_chars(&mut formatting, &plain_text, starting_line);
     let links = extract_links(&fragment, starting_line, &plain_text)?;
 
     Ok(TextStructure {
@@ -717,6 +718,38 @@ fn extract_formatting(
     Ok(formatting)
 }
 
+/// Word boundary exists if the char just before `pos` is not alphanumeric, or
+/// if the candidate text itself starts with a non-alphanumeric char (so the
+/// boundary is intrinsic). Used to keep `find_text_across_lines` from matching
+/// a styled token inside an unrelated longer word.
+fn has_word_boundary_before(line: &str, pos: usize) -> bool {
+    let after = match line[pos..].chars().next() {
+        Some(c) => c,
+        None => return true,
+    };
+    if !after.is_alphanumeric() {
+        return true;
+    }
+    match line[..pos].chars().next_back() {
+        Some(prev) => !prev.is_alphanumeric(),
+        None => true,
+    }
+}
+
+fn has_word_boundary_after(line: &str, pos: usize) -> bool {
+    let before = match line[..pos].chars().next_back() {
+        Some(c) => c,
+        None => return true,
+    };
+    if !before.is_alphanumeric() {
+        return true;
+    }
+    match line[pos..].chars().next() {
+        Some(next) => !next.is_alphanumeric(),
+        None => true,
+    }
+}
+
 fn find_text_across_lines(
     text_normalized: &str,
     text_lines: &[String],
@@ -743,12 +776,21 @@ fn find_text_across_lines(
         while let Some(pos) = line[start_search_pos..].find(first_token) {
             let abs_pos = start_search_pos + pos;
 
-            if let Some(segments) = match_sequence(&tokens, text_lines, line_idx, abs_pos) {
+            let advance = line[abs_pos..]
+                .chars()
+                .next()
+                .map(|c| abs_pos + c.len_utf8());
+
+            if has_word_boundary_before(line, abs_pos)
+                && let Some(segments) = match_sequence(&tokens, text_lines, line_idx, abs_pos)
+                && let Some((seg_line, _, seg_end)) = segments.last().copied()
+                && has_word_boundary_after(&text_lines[seg_line], seg_end)
+            {
                 return Some(segments);
             }
 
-            if let Some(c) = line[abs_pos..].chars().next() {
-                start_search_pos = abs_pos + c.len_utf8();
+            if let Some(next) = advance {
+                start_search_pos = next;
             } else {
                 break;
             }
@@ -976,6 +1018,47 @@ fn extract_links(
     }
 
     Ok(links)
+}
+
+/// Convert `col` and `n_letters` of every entry from byte offsets (as produced
+/// by `extract_formatting`, which works in byte positions internally) to char
+/// offsets, since the renderer indexes lines by char position.
+fn convert_formatting_bytes_to_chars(
+    formatting: &mut [InlineStyle],
+    text_lines: &[String],
+    starting_line: usize,
+) {
+    use std::collections::HashMap;
+    let mut cache: HashMap<usize, Vec<usize>> = HashMap::new();
+    for style in formatting.iter_mut() {
+        let row = style.row as usize;
+        if row < starting_line {
+            continue;
+        }
+        let line_idx = row - starting_line;
+        if line_idx >= text_lines.len() {
+            continue;
+        }
+        let map = cache.entry(line_idx).or_insert_with(|| {
+            let line = &text_lines[line_idx];
+            let mut byte_to_char = vec![0usize; line.len() + 1];
+            let mut char_idx = 0usize;
+            for (byte_i, c) in line.char_indices() {
+                for slot in &mut byte_to_char[byte_i..byte_i + c.len_utf8()] {
+                    *slot = char_idx;
+                }
+                char_idx += 1;
+            }
+            byte_to_char[line.len()] = char_idx;
+            byte_to_char
+        });
+        let start_byte = (style.col as usize).min(map.len() - 1);
+        let end_byte = ((style.col as usize) + (style.n_letters as usize)).min(map.len() - 1);
+        let start_char = map[start_byte];
+        let end_char = map[end_byte];
+        style.col = start_char as u16;
+        style.n_letters = end_char.saturating_sub(start_char) as u16;
+    }
 }
 
 fn strip_inline_markers(
@@ -2029,6 +2112,36 @@ mod tests {
         let col_of_bold = line.find("bold").unwrap();
         assert_eq!(bold.col as usize, col_of_bold);
         assert_eq!(bold.n_letters, "bold".len() as u16);
+    }
+
+    #[test]
+    fn test_class_italic_multibyte_char_positions() {
+        // Regression: the renderer indexes lines by char position, so
+        // `extract_formatting`'s byte offsets must be converted to char
+        // offsets before being returned. With multi-byte chars like `ā`,
+        // a byte-based span would land off by one (or more) chars.
+        // Mirrors the `What is this?` paragraph: `vipassanā` is plain text;
+        // only `passanā` and `passati` are wrapped in italic-class spans.
+        // The italic span text must not match a substring inside `vipassanā`.
+        let html = r#"<p class="body">Take the word vipassanā. The prefix vi- is an intensifier, while <span class="ital">passanā</span> comes from <span class="ital">passati</span> in Pali.</p>"#;
+        let styled = make_styled(&["ital"], &[]);
+        let result = parse_html_with_styles(html, Some(120), None, 0, &styled).unwrap();
+        let italics: Vec<_> = result.formatting.iter().filter(|s| s.attr == 2).collect();
+        assert_eq!(italics.len(), 2, "expected two italic spans");
+        let segments: Vec<String> = italics
+            .iter()
+            .map(|s| {
+                let line = &result.text_lines[s.row as usize];
+                let chars: Vec<char> = line.chars().collect();
+                let start = s.col as usize;
+                let end = start + s.n_letters as usize;
+                chars[start..end].iter().collect()
+            })
+            .collect();
+        assert_eq!(
+            segments,
+            vec!["passanā".to_string(), "passati".to_string()]
+        );
     }
 }
 
