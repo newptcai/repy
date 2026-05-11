@@ -249,6 +249,14 @@ pub struct UiState {
     pub tts_underline_ranges: HashMap<usize, (usize, usize)>,
     pub tts_converting: bool,
     pub tts_anim_frame: usize,
+    /// True while the user is typing a `/`-search query inside cursor/selection mode.
+    pub visual_search_input_active: bool,
+    /// Query last submitted (or being typed) for visual-mode `/`-search.
+    pub visual_search_query: String,
+    /// Matches found by the last visual-mode `/`-search, in absolute line coordinates.
+    /// Each entry is `(start_line, start_col, end_line, end_col_exclusive)` with char-based columns.
+    pub visual_search_matches: Vec<(usize, usize, usize, usize)>,
+    pub visual_search_selected: usize,
 }
 
 impl Default for UiState {
@@ -313,6 +321,10 @@ impl UiState {
             tts_underline_ranges: HashMap::new(),
             tts_converting: false,
             tts_anim_frame: 0,
+            visual_search_input_active: false,
+            visual_search_query: String::new(),
+            visual_search_matches: Vec::new(),
+            visual_search_selected: 0,
         }
     }
 
@@ -1696,16 +1708,72 @@ impl Reader {
     ///   - hjkl/wbe extend the selection. Press y to yank, d for dictionary, p for Wikipedia.
     fn handle_visual_mode_keys(&mut self, key: KeyEvent, repeat_count: u32) -> eyre::Result<()> {
         let has_anchor = self.state.borrow().ui_state.visual_anchor.is_some();
+        let search_input_active = self
+            .state
+            .borrow()
+            .ui_state
+            .visual_search_input_active;
+
+        // When the inline `/`-prompt is open, all keys go to the query editor.
+        if search_input_active {
+            match key.code {
+                KeyCode::Esc => {
+                    let mut state = self.state.borrow_mut();
+                    state.ui_state.visual_search_input_active = false;
+                    state.ui_state.visual_search_query.clear();
+                }
+                KeyCode::Enter => {
+                    self.state
+                        .borrow_mut()
+                        .ui_state
+                        .visual_search_input_active = false;
+                    self.execute_visual_search();
+                }
+                KeyCode::Backspace => {
+                    self.state
+                        .borrow_mut()
+                        .ui_state
+                        .visual_search_query
+                        .pop();
+                }
+                KeyCode::Char(c) => {
+                    self.state
+                        .borrow_mut()
+                        .ui_state
+                        .visual_search_query
+                        .push(c);
+                }
+                _ => {}
+            }
+            return Ok(());
+        }
 
         match key.code {
             KeyCode::Esc => {
                 let mut state = self.state.borrow_mut();
+                state.ui_state.visual_search_matches.clear();
+                state.ui_state.visual_search_selected = 0;
                 if has_anchor {
                     // In selection mode: go back to cursor mode
                     state.ui_state.visual_anchor = None;
                 } else {
                     // In cursor mode: exit to reader
                     state.ui_state.open_window(WindowType::Reader);
+                }
+            }
+            KeyCode::Char('/') => {
+                let mut state = self.state.borrow_mut();
+                state.ui_state.visual_search_input_active = true;
+                state.ui_state.visual_search_query.clear();
+            }
+            KeyCode::Char('n') => {
+                for _ in 0..repeat_count {
+                    self.visual_search_step(true);
+                }
+            }
+            KeyCode::Char('N') => {
+                for _ in 0..repeat_count {
+                    self.visual_search_step(false);
                 }
             }
             KeyCode::Char('v') => {
@@ -2537,6 +2605,28 @@ impl Reader {
         // Render message if present
         if let Some(ref message) = state.ui_state.message {
             Self::render_message_static(frame, message, &state.ui_state.message_type, &theme);
+        }
+
+        // Visual-mode `/`-search prompt: a single-line bar at the bottom of the
+        // screen showing what the user is typing. Drawn on top of everything
+        // else so it is always visible while editing the query.
+        if state.ui_state.visual_search_input_active {
+            let frame_area = frame.area();
+            if frame_area.height > 0 {
+                let bar = Rect {
+                    x: frame_area.x,
+                    y: frame_area.y + frame_area.height - 1,
+                    width: frame_area.width,
+                    height: 1,
+                };
+                let text = format!("/{}", state.ui_state.visual_search_query);
+                let bar_style = theme.base_style().fg(theme.info_fg);
+                frame.render_widget(Clear, bar);
+                frame.render_widget(
+                    Paragraph::new(text).style(bar_style),
+                    bar,
+                );
+            }
         }
     }
 
@@ -4058,6 +4148,187 @@ impl Reader {
         let line = state.ui_state.search_results.get(prev).map(|r| r.line);
         if let Some(line) = line {
             state.reading_state.row = line;
+        }
+    }
+
+    /// Build the regex used by visual-mode `/`-search. Spaces in the query are
+    /// matched against any whitespace run (including the `\n` we insert between
+    /// wrapped lines), and smartcase makes the match case-insensitive unless
+    /// the query already contains an uppercase character.
+    fn build_visual_search_regex(query: &str) -> Result<Regex, regex::Error> {
+        // Build the pattern character by character so we can handle two things
+        // that get inserted by the wrapper between query characters:
+        //   * spaces — widened to `\s+` so they span newlines between wrapped
+        //     lines;
+        //   * soft hyphens — the wrapper writes `-\n` when it splits a word at
+        //     the end of a line (see `parser.rs` around the
+        //     "Handle hyphenation" block). Allowing an optional `(?:-\n)?` at
+        //     every interior position means `/example` matches `exam-\nple`
+        //     across the wrap without matching plain "auto-mate" on one line.
+        let chars: Vec<char> = query.chars().collect();
+        let mut pattern = String::new();
+        for (idx, ch) in chars.iter().enumerate() {
+            if *ch == ' ' {
+                pattern.push_str(r"\s+");
+            } else {
+                pattern.push_str(&regex::escape(&ch.to_string()));
+            }
+            let is_last = idx + 1 == chars.len();
+            let next_is_space = chars.get(idx + 1).map(|c| *c == ' ').unwrap_or(false);
+            if !is_last && *ch != ' ' && !next_is_space {
+                pattern.push_str(r"(?:-\n)?");
+            }
+        }
+
+        let has_upper = query.chars().any(|c| c.is_uppercase());
+        if has_upper {
+            Regex::new(&pattern)
+        } else {
+            Regex::new(&format!("(?i){}", pattern))
+        }
+    }
+
+    /// Search the visible viewport for `query`, populating
+    /// `ui_state.visual_search_matches` and moving `visual_cursor` to the first
+    /// match at or after the current cursor position. Matches are returned in
+    /// absolute (line, char-col) coordinates.
+    fn execute_visual_search(&mut self) {
+        let query = self.state.borrow().ui_state.visual_search_query.clone();
+        if query.is_empty() {
+            let mut state = self.state.borrow_mut();
+            state
+                .ui_state
+                .set_message("Search query is empty".to_string(), MessageType::Warning);
+            return;
+        }
+
+        let re = match Self::build_visual_search_regex(&query) {
+            Ok(re) => re,
+            Err(err) => {
+                let mut state = self.state.borrow_mut();
+                state
+                    .ui_state
+                    .set_message(format!("Invalid pattern: {}", err), MessageType::Error);
+                return;
+            }
+        };
+
+        let page_size = self.page_size();
+        let start_line = self.state.borrow().reading_state.row.saturating_sub(1);
+        let total = self.board.total_lines();
+        let end_line = (start_line + page_size).min(total);
+
+        let Some(all_lines) = self.board.lines() else {
+            return;
+        };
+        let visible = &all_lines[start_line..end_line];
+        let haystack = visible.join("\n");
+
+        // Walk the haystack once, mapping byte offsets -> (line, char_col).
+        // We build a sorted list of (byte_offset, line_idx, char_col) snapshots
+        // at every char boundary AND right after each '\n'.
+        let mut snapshots: Vec<(usize, usize, usize)> = Vec::with_capacity(haystack.len() + 1);
+        let mut line_idx = 0usize;
+        let mut char_col = 0usize;
+        for (byte, ch) in haystack.char_indices() {
+            snapshots.push((byte, line_idx, char_col));
+            if ch == '\n' {
+                line_idx += 1;
+                char_col = 0;
+            } else {
+                char_col += 1;
+            }
+        }
+        snapshots.push((haystack.len(), line_idx, char_col));
+
+        let pos_at = |byte_idx: usize| -> (usize, usize) {
+            // snapshots is monotonically increasing in byte; binary_search by key
+            let idx = snapshots
+                .binary_search_by_key(&byte_idx, |(b, _, _)| *b)
+                .unwrap_or_else(|i| i.saturating_sub(1));
+            let (_, line, col) = snapshots[idx];
+            (line, col)
+        };
+
+        let mut matches: Vec<(usize, usize, usize, usize)> = Vec::new();
+        for mat in re.find_iter(&haystack) {
+            if mat.start() == mat.end() {
+                continue;
+            }
+            let (s_line, s_col) = pos_at(mat.start());
+            // For the end position, we want the (line, col) of the byte *after*
+            // the last matched char so that it represents an exclusive end.
+            let (e_line, e_col) = pos_at(mat.end());
+            matches.push((
+                start_line + s_line,
+                s_col,
+                start_line + e_line,
+                e_col,
+            ));
+        }
+
+        if matches.is_empty() {
+            let mut state = self.state.borrow_mut();
+            state.ui_state.visual_search_matches.clear();
+            state.ui_state.visual_search_selected = 0;
+            state
+                .ui_state
+                .set_message("Pattern not found".to_string(), MessageType::Warning);
+            return;
+        }
+
+        let cursor = self
+            .state
+            .borrow()
+            .ui_state
+            .visual_cursor
+            .unwrap_or((start_line, 0));
+
+        // Pick the first match starting at or after the current cursor; wrap to 0.
+        let selected = matches
+            .iter()
+            .position(|(sl, sc, _, _)| (*sl, *sc) >= cursor)
+            .unwrap_or(0);
+
+        let (sl, sc, _, _) = matches[selected];
+        {
+            let mut state = self.state.borrow_mut();
+            state.ui_state.visual_search_matches = matches;
+            state.ui_state.visual_search_selected = selected;
+        }
+        self.set_visual_cursor_and_scroll((sl, sc));
+    }
+
+    /// Move the visual cursor to the next or previous match in
+    /// `visual_search_matches`, wrapping around.
+    fn visual_search_step(&mut self, forward: bool) {
+        let (target, message) = {
+            let state = self.state.borrow();
+            let matches = &state.ui_state.visual_search_matches;
+            if matches.is_empty() {
+                (None, Some("No matches".to_string()))
+            } else {
+                let len = matches.len();
+                let cur = state.ui_state.visual_search_selected;
+                let next = if forward {
+                    (cur + 1) % len
+                } else {
+                    (cur + len - 1) % len
+                };
+                let (sl, sc, _, _) = matches[next];
+                (Some((next, sl, sc)), None)
+            }
+        };
+        if let Some(msg) = message {
+            self.state
+                .borrow_mut()
+                .ui_state
+                .set_message(msg, MessageType::Info);
+            return;
+        }
+        if let Some((next, sl, sc)) = target {
+            self.state.borrow_mut().ui_state.visual_search_selected = next;
+            self.set_visual_cursor_and_scroll((sl, sc));
         }
     }
 
@@ -6514,5 +6785,35 @@ mod tests {
         let current_row = 1usize.saturating_sub(1);
 
         assert_eq!(reader.find_chunk_at(current_row), Some(0));
+    }
+
+    #[test]
+    fn visual_search_regex_smartcase_and_escape() {
+        // All-lowercase query is case-insensitive (smartcase off).
+        let re = Reader::build_visual_search_regex("foo").unwrap();
+        assert!(re.is_match("FOO"));
+        assert!(re.is_match("foo"));
+
+        // Mixed/upper case forces case-sensitive (smartcase on).
+        let re = Reader::build_visual_search_regex("Foo").unwrap();
+        assert!(re.is_match("Foo"));
+        assert!(!re.is_match("foo"));
+
+        // Regex specials are treated literally.
+        let re = Reader::build_visual_search_regex("a.b").unwrap();
+        assert!(re.is_match("a.b"));
+        assert!(!re.is_match("axb"));
+
+        // Spaces match across newlines so wrapped-line queries work.
+        let re = Reader::build_visual_search_regex("foo bar").unwrap();
+        assert!(re.is_match("foo\nbar"));
+        assert!(re.is_match("foo  bar"));
+
+        // Soft hyphen wraps inserted by the line-wrapper match.
+        let re = Reader::build_visual_search_regex("example").unwrap();
+        assert!(re.is_match("example"));
+        assert!(re.is_match("exam-\nple"));
+        // But a plain in-line hyphen is not silently matched.
+        assert!(!re.is_match("exam-ple"));
     }
 }

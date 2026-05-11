@@ -112,6 +112,40 @@ impl Board {
         let cursor_pos = state.ui_state.visual_cursor;
         let formatting = &text_structure.formatting;
 
+        // Build per-line byte-range lists that overlay the visual-mode
+        // `/`-search matches on top of the existing reader-mode search matches.
+        // Visual-mode matches are stored in char coordinates and may span
+        // multiple lines, so we slice them down to each visible line.
+        let visual_match_ranges: Vec<Vec<(usize, usize)>> = (start_line..end_line)
+            .map(|line_num| {
+                let line_str = text_structure
+                    .text_lines
+                    .get(line_num)
+                    .map(String::as_str)
+                    .unwrap_or("");
+                let line_chars = line_str.chars().count();
+                let mut ranges: Vec<(usize, usize)> = Vec::new();
+                for (s_line, s_col, e_line, e_col) in
+                    state.ui_state.visual_search_matches.iter().copied()
+                {
+                    if line_num < s_line || line_num > e_line {
+                        continue;
+                    }
+                    let start_char = if line_num == s_line { s_col } else { 0 };
+                    let end_char = if line_num == e_line { e_col } else { line_chars };
+                    let start_char = start_char.min(line_chars);
+                    let end_char = end_char.min(line_chars);
+                    if start_char >= end_char {
+                        continue;
+                    }
+                    let start_byte = char_col_to_byte(line_str, start_char);
+                    let end_byte = char_col_to_byte(line_str, end_char);
+                    ranges.push((start_byte, end_byte));
+                }
+                ranges
+            })
+            .collect();
+
         let visible_lines: Vec<Line> = text_structure
             .text_lines
             .get(start_line..end_line)
@@ -137,6 +171,28 @@ impl Board {
                     ));
                 }
 
+                // Merge reader-mode search matches with visual-mode `/`-search
+                // matches for this line.
+                let combined_search_ranges: Vec<(usize, usize)> = {
+                    let mut merged: Vec<(usize, usize)> = state
+                        .ui_state
+                        .search_matches
+                        .get(&line_num)
+                        .map(|ranges| ranges.clone())
+                        .unwrap_or_default();
+                    if let Some(extra) = visual_match_ranges.get(line_num - start_line) {
+                        merged.extend(extra.iter().copied());
+                    }
+                    merged
+                };
+                let search_ranges_arg: Option<&[(usize, usize)]> = if combined_search_ranges
+                    .is_empty()
+                {
+                    None
+                } else {
+                    Some(combined_search_ranges.as_slice())
+                };
+
                 // Check for TTS character-level underline on this line
                 let tts_col_range = state.ui_state.tts_underline_ranges.get(&line_num);
                 let line_spans = if let Some(&(tts_start_col, tts_end_col)) = tts_col_range {
@@ -151,11 +207,7 @@ impl Board {
                             .highlight_ranges
                             .get(&line_num)
                             .map(|ranges| ranges.as_slice()),
-                        state
-                            .ui_state
-                            .search_matches
-                            .get(&line_num)
-                            .map(|ranges| ranges.as_slice()),
+                        search_ranges_arg,
                         theme,
                     );
                     // Apply underline to the character range within the spans
@@ -171,11 +223,7 @@ impl Board {
                             .highlight_ranges
                             .get(&line_num)
                             .map(|ranges| ranges.as_slice()),
-                        state
-                            .ui_state
-                            .search_matches
-                            .get(&line_num)
-                            .map(|ranges| ranges.as_slice()),
+                        search_ranges_arg,
                         theme,
                     )
                     .into_iter()
@@ -613,6 +661,13 @@ fn byte_to_char_col(line: &str, byte_idx: usize) -> usize {
     line.char_indices()
         .take_while(|(idx, _)| *idx < byte_idx)
         .count()
+}
+
+fn char_col_to_byte(line: &str, char_col: usize) -> usize {
+    line.char_indices()
+        .nth(char_col)
+        .map(|(b, _)| b)
+        .unwrap_or(line.len())
 }
 
 impl Default for Board {

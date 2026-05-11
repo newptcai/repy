@@ -89,7 +89,7 @@ impl Theme {
             annotation_highlight_fg: Color::Black,
             annotation_highlight_bg: Color::Rgb(242, 211, 135),
             search_fg: Color::Black,
-            search_bg: Color::Yellow,
+            search_bg: Color::Rgb(255, 245, 157), // light pastel yellow
             info_fg: Color::Blue,
             warning_fg: Color::Yellow,
             error_fg: Color::Red,
