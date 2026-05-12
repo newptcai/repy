@@ -142,6 +142,7 @@ Press `?` in the TUI to see the help window at any time (`Help (?)`).
 - `Enter` in highlights list — Jump to selected highlight
 - `e` in highlights list — Edit comment
 - `d` in highlights list — Delete highlight
+- `d` in cursor mode — Delete highlight under cursor
 
 ### Windows & Tools
 - `/` — Search
@@ -169,7 +170,7 @@ The text-selection flow is two-phase:
 1. Press `v` in the reader to enter **Cursor Mode** (`-- CURSOR MODE --` appears in the header).
 2. In cursor mode, move with `h` `j` `k` `l`, word motions `w` `b` `e`, line motions `^` (first non-blank) and `$` (end of line), paragraph motions `[` and `]`, `f<char>` / `F<char>` to jump to the next / previous occurrence of a literal character on the current line, or `t<char>` / `T<char>` to land just before / after it. All motions accept a numeric count prefix (e.g. `5j`, `3w`, `2]`, `3fa`).
    - When the cursor is on a highlighted span, press `Enter` to edit that highlight's comment.
-   - Press `D` to delete the highlight under the cursor; if it has a non-empty comment a confirmation popup is shown (`y` deletes, `n`/`Esc` cancels).
+   - Press `d` to delete the highlight under the cursor; if it has a non-empty comment a confirmation popup is shown (`y` deletes, `n`/`Esc` cancels).
 3. Press `v` again to set an anchor and enter **Selection Mode**.
 4. In selection mode, move with the same motions as cursor mode (`h` `j` `k` `l`, `w` `b` `e`, `^` `$`, `[` `]`, `f<char>` / `F<char>`, `t<char>` / `T<char>`, all with optional count prefix) to expand/shrink the character-level selection (selection can cross page boundaries).
 5. Press `y` to copy the selected text to clipboard.

@@ -1718,6 +1718,7 @@ impl Reader {
     ///
     /// Phase 1 (cursor mode): visual_cursor is Some, visual_anchor is None.
     ///   - hjkl/wbe move the cursor. Press v to anchor and start selecting.
+    ///   - Press d on a highlight to delete it.
     /// Phase 2 (selection mode): both visual_cursor and visual_anchor are Some.
     ///   - hjkl/wbe extend the selection. Press y to yank, d for dictionary, p for Wikipedia.
     fn handle_visual_mode_keys(&mut self, key: KeyEvent, repeat_count: u32) -> eyre::Result<()> {
@@ -1827,7 +1828,7 @@ impl Reader {
                         .open_window(WindowType::HighlightCommentEditor);
                 }
             }
-            KeyCode::Char('D') if !has_anchor => {
+            KeyCode::Char('d') if !has_anchor => {
                 if let Some(highlight) = self.highlight_at_cursor() {
                     self.clear_visual_search_state();
                     let has_comment = highlight
