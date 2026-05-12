@@ -1,9 +1,9 @@
 use ratatui::{
     Frame,
     layout::Rect,
-    style::Style,
+    style::{Modifier, Style},
     text::Line,
-    widgets::{Block, Borders, Clear, List, ListItem, Paragraph},
+    widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph},
 };
 
 use crate::theme::Theme;
@@ -41,29 +41,38 @@ impl BookmarksWindow {
             return;
         }
 
+        let block = Block::default()
+            .title("Bookmarks")
+            .borders(Borders::ALL)
+            .style(theme.base_style());
+        frame.render_widget(block, popup_area);
+
+        let mut list_area = Rect {
+            x: popup_area.x + 1,
+            y: popup_area.y + 1,
+            width: popup_area.width.saturating_sub(2),
+            height: popup_area.height.saturating_sub(2),
+        };
+        if status.is_some() {
+            list_area.height = list_area.height.saturating_sub(1);
+        }
+
         let items: Vec<ListItem> = entries
             .iter()
-            .enumerate()
-            .map(|(i, entry)| {
-                let style = if i == selected_index {
-                    Style::default()
-                        .bg(theme.highlight_bg)
-                        .fg(theme.highlight_fg)
-                } else {
-                    Style::default()
-                };
-                ListItem::new(Line::from(entry.clone())).style(style)
-            })
+            .map(|entry| ListItem::new(Line::from(entry.clone())))
             .collect();
 
-        let list = List::new(items).block(
-            Block::default()
-                .title("Bookmarks")
-                .borders(Borders::ALL)
-                .style(theme.base_style()),
+        let list = List::new(items).highlight_style(
+            Style::default()
+                .bg(theme.highlight_bg)
+                .fg(theme.highlight_fg)
+                .add_modifier(Modifier::BOLD),
         );
 
-        frame.render_widget(list, popup_area);
+        let mut state = ListState::default();
+        state.select(Some(selected_index));
+
+        frame.render_stateful_widget(list, list_area, &mut state);
 
         if let Some(message) = status {
             let status_area = Rect::new(
