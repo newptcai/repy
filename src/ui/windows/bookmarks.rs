@@ -14,6 +14,8 @@ impl BookmarksWindow {
     pub fn render(
         frame: &mut Frame,
         area: Rect,
+        title: &str,
+        empty_message: &str,
         entries: &[String],
         selected_index: usize,
         status: Option<&str>,
@@ -29,11 +31,11 @@ impl BookmarksWindow {
         frame.render_widget(Clear, popup_area);
 
         if entries.is_empty() {
-            let paragraph = Paragraph::new("No bookmarks yet")
+            let paragraph = Paragraph::new(empty_message)
                 .style(theme.base_style().fg(theme.muted_fg))
                 .block(
                     Block::default()
-                        .title("Bookmarks")
+                        .title(title)
                         .borders(Borders::ALL)
                         .style(theme.base_style()),
                 );
@@ -42,7 +44,7 @@ impl BookmarksWindow {
         }
 
         let block = Block::default()
-            .title("Bookmarks")
+            .title(title)
             .borders(Borders::ALL)
             .style(theme.base_style());
         frame.render_widget(block, popup_area);

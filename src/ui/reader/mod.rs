@@ -2522,6 +2522,8 @@ impl Reader {
             BookmarksWindow::render(
                 frame,
                 frame.area(),
+                "Bookmarks",
+                "No bookmarks yet",
                 &entries,
                 state.ui_state.bookmarks_selected_index,
                 None,
@@ -2556,6 +2558,8 @@ impl Reader {
             BookmarksWindow::render(
                 frame,
                 frame.area(),
+                "Highlights",
+                "No highlights yet",
                 &entries,
                 state.ui_state.highlights_selected_index,
                 Some("Highlights (Enter jump, e edit, d delete)"),
