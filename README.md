@@ -178,7 +178,8 @@ The text-selection flow is two-phase:
 7. Press `c` to save a highlight and immediately edit its plain-text comment.
 8. Press `d` to run dictionary lookup on the selection. By default it tries `sdcv`, `dict`, and `wkdict`. You can configure a custom command template in Settings (`s`).
 9. Press `p` to run Wikipedia lookup on the selection; the popup shows a link to the page plus the summary (10s timeout).
-10. Press `Esc` to leave selection mode back to cursor mode; press `Esc` again to return to reader mode.
+10. Press `s` to search the selection with Ecosia in your browser.
+11. Press `Esc` to leave selection mode back to cursor mode; press `Esc` again to return to reader mode.
 
 In both cursor and selection mode, press `/` to search within the currently
 visible screen and jump the cursor to the first match; `n` / `N` cycle through

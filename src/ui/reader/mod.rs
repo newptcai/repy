@@ -1720,7 +1720,8 @@ impl Reader {
     ///   - hjkl/wbe move the cursor. Press v to anchor and start selecting.
     ///   - Press d on a highlight to delete it.
     /// Phase 2 (selection mode): both visual_cursor and visual_anchor are Some.
-    ///   - hjkl/wbe extend the selection. Press y to yank, d for dictionary, p for Wikipedia.
+    ///   - hjkl/wbe extend the selection. Press y to yank, d for dictionary,
+    ///     p for Wikipedia, s to search the web.
     fn handle_visual_mode_keys(&mut self, key: KeyEvent, repeat_count: u32) -> eyre::Result<()> {
         let has_anchor = self.state.borrow().ui_state.visual_anchor.is_some();
         let search_input_active = self
@@ -1886,6 +1887,10 @@ impl Reader {
             }
             KeyCode::Char('p') if has_anchor => {
                 self.wikipedia_lookup()?;
+                self.clear_visual_search_state();
+            }
+            KeyCode::Char('s') if has_anchor => {
+                self.web_search_selection()?;
                 self.clear_visual_search_state();
             }
             // Navigation — works in both cursor and selection mode
@@ -5391,6 +5396,62 @@ impl Reader {
         Ok(())
     }
 
+    fn build_ecosia_search_url(query: &str) -> eyre::Result<String> {
+        let normalized_query = query.split_whitespace().collect::<Vec<_>>().join(" ");
+        let mut url = reqwest::Url::parse("https://www.ecosia.org/search")?;
+        url.query_pairs_mut().append_pair("q", &normalized_query);
+        Ok(url.to_string())
+    }
+
+    fn web_search_selection(&mut self) -> eyre::Result<()> {
+        let (anchor, cursor) = {
+            let state = self.state.borrow();
+            match (state.ui_state.visual_anchor, state.ui_state.visual_cursor) {
+                (Some(anchor), Some(cursor)) => (anchor, cursor),
+                _ => return Ok(()),
+            }
+        };
+
+        let selected_text = self.board.get_selected_text_range(anchor, cursor);
+        let query = selected_text
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+        if query.is_empty() {
+            self.state
+                .borrow_mut()
+                .ui_state
+                .open_window(WindowType::Reader);
+            return Ok(());
+        }
+
+        let url = Self::build_ecosia_search_url(&query)?;
+        match self.open_external_link(&url) {
+            Ok(true) => {
+                let mut state = self.state.borrow_mut();
+                state.ui_state.visual_anchor = None;
+                state.ui_state.visual_cursor = None;
+                state.ui_state.open_window(WindowType::Reader);
+                state
+                    .ui_state
+                    .set_message("Opened search in browser".to_string(), MessageType::Info);
+            }
+            Ok(false) | Err(_) => {
+                self.clipboard.set_text(url)?;
+                let mut state = self.state.borrow_mut();
+                state.ui_state.visual_anchor = None;
+                state.ui_state.visual_cursor = None;
+                state.ui_state.open_window(WindowType::Reader);
+                state.ui_state.set_message(
+                    "Failed to open; search URL copied".to_string(),
+                    MessageType::Warning,
+                );
+            }
+        }
+
+        Ok(())
+    }
+
     fn copy_selected_link(&mut self) -> eyre::Result<()> {
         let url = {
             let state = self.state.borrow();
@@ -6790,6 +6851,12 @@ mod tests {
                 "Rust_(fungus)".to_string()
             ]
         );
+    }
+
+    #[test]
+    fn build_ecosia_search_url_encodes_normalized_query() {
+        let url = Reader::build_ecosia_search_url("rust\nterminal  ui").unwrap();
+        assert_eq!(url, "https://www.ecosia.org/search?q=rust+terminal+ui");
     }
 
     #[test]

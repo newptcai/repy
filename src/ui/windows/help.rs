@@ -73,6 +73,7 @@ const HELP_TEXT: &[&str] = &[
     "   c                 Highlight and comment",
     "   d                 Dictionary Lookup",
     "   p                 Wikipedia Summary",
+    "   s                 Search with Ecosia",
     "   q                 Quit / Close Window",
 ];
 
