@@ -426,6 +426,31 @@ impl State {
         Ok(())
     }
 
+    /// Find the most-recently-read library filepath that holds the same book
+    /// (by `book_id` via `book_aliases`) but is stored under a path different
+    /// from `current_path`. Used to recognise that an ebook opened from a new
+    /// location is already in the library, so we can reconcile the existing
+    /// entry instead of adding a duplicate.
+    pub fn find_other_library_path_for_book(
+        &self,
+        book_id: &str,
+        current_path: &str,
+    ) -> Result<Option<String>> {
+        let result = self
+            .conn
+            .query_row(
+                "SELECT l.filepath FROM library l
+                 JOIN book_aliases a ON a.filepath = l.filepath
+                 WHERE a.book_id = ? AND l.filepath != ?
+                 ORDER BY l.last_read DESC
+                 LIMIT 1",
+                params![book_id, current_path],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?;
+        Ok(result)
+    }
+
     pub fn upsert_book_record(&self, identity: &BookIdentity) -> Result<()> {
         self.conn.execute(
             "INSERT INTO books
@@ -815,6 +840,52 @@ mod tests {
             state.alias_conflict("/tmp/book.epub", &changed).unwrap(),
             Some("book-a".to_string())
         );
+    }
+
+    #[test]
+    fn test_find_other_library_path_for_book_dedup() {
+        let mut state = State::new_for_test();
+        let identity = sample_identity("book-x");
+
+        // Book is already in the library under an old path.
+        let old_ebook = MockEbook::new("/old/path.epub", "Title", "Author");
+        state
+            .set_last_reading_state(&old_ebook, &ReadingState::default())
+            .unwrap();
+        state
+            .upsert_book_identity("/old/path.epub", &identity)
+            .unwrap();
+        state.update_library(&old_ebook, Some(0.42)).unwrap();
+
+        // Opening the same book from a new location registers the alias.
+        state
+            .upsert_book_identity("/new/path.epub", &identity)
+            .unwrap();
+
+        // The new path is recognised as the same book stored elsewhere.
+        assert_eq!(
+            state
+                .find_other_library_path_for_book(&identity.book_id, "/new/path.epub")
+                .unwrap(),
+            Some("/old/path.epub".to_string())
+        );
+        // The current path itself is never returned.
+        assert_eq!(
+            state
+                .find_other_library_path_for_book(&identity.book_id, "/old/path.epub")
+                .unwrap(),
+            None
+        );
+
+        // Reconciling migrates the entry instead of leaving a duplicate, and
+        // preserves the reading progress.
+        state
+            .reconcile_filepath("/old/path.epub", "/new/path.epub")
+            .unwrap();
+        let history = state.get_from_history().unwrap();
+        assert_eq!(history.len(), 1);
+        assert_eq!(history[0].filepath, "/new/path.epub");
+        assert_eq!(history[0].reading_progress, Some(0.42));
     }
 
     #[test]

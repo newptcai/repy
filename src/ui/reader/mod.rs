@@ -1009,6 +1009,20 @@ impl Reader {
                 .upsert_book_identity(&normalized_path, &identity)?;
         }
 
+        // If this same book is already in the library under a different path
+        // (e.g. opened from a new location), migrate the existing entry to the
+        // current path instead of adding a duplicate. This preserves reading
+        // progress, position, and bookmarks.
+        if !alias_conflict {
+            if let Some(existing_path) = self
+                .db_state
+                .find_other_library_path_for_book(&identity.book_id, &normalized_path)?
+            {
+                self.db_state
+                    .reconcile_filepath(&existing_path, &normalized_path)?;
+            }
+        }
+
         // Load last reading state early to get preferred textwidth
         let db_state = self.db_state.get_last_reading_state(&epub).ok();
 
@@ -1088,7 +1102,10 @@ impl Reader {
 
             // Persist the reading state first (required for foreign key constraint)
             self.db_state.set_last_reading_state(epub, &reading_state)?;
-            self.db_state.update_library(epub, Some(0.0))?;
+            // Preserve any existing reading progress rather than resetting it to
+            // 0% on open; only a brand-new book starts at 0.0.
+            self.db_state
+                .update_library(epub, reading_state.rel_pctg.or(Some(0.0)))?;
 
             // Now update the UI state
             let mut state = self.state.borrow_mut();
