@@ -1632,7 +1632,7 @@ impl Reader {
                 state.ui_state.search_results.clear();
                 state.ui_state.search_matches.clear();
             }
-            KeyCode::Char('j') | KeyCode::Down => {
+            KeyCode::Down => {
                 let mut state = self.state.borrow_mut();
                 if !state.ui_state.search_results.is_empty() {
                     let next = (state.ui_state.selected_search_result + 1)
@@ -1644,7 +1644,7 @@ impl Reader {
                     }
                 }
             }
-            KeyCode::Char('k') | KeyCode::Up => {
+            KeyCode::Up => {
                 let mut state = self.state.borrow_mut();
                 if !state.ui_state.search_results.is_empty() {
                     let current = state.ui_state.selected_search_result;
@@ -1654,6 +1654,32 @@ impl Reader {
                     if let Some(line) = line {
                         state.reading_state.row = line;
                     }
+                }
+            }
+            // `j`/`k` navigate results only once a search has been run; while
+            // typing the query (no results yet) they are entered as text.
+            KeyCode::Char('j')
+                if !self.state.borrow().ui_state.search_results.is_empty() =>
+            {
+                let mut state = self.state.borrow_mut();
+                let next = (state.ui_state.selected_search_result + 1)
+                    .min(state.ui_state.search_results.len() - 1);
+                state.ui_state.selected_search_result = next;
+                let line = state.ui_state.search_results.get(next).map(|r| r.line);
+                if let Some(line) = line {
+                    state.reading_state.row = line;
+                }
+            }
+            KeyCode::Char('k')
+                if !self.state.borrow().ui_state.search_results.is_empty() =>
+            {
+                let mut state = self.state.borrow_mut();
+                let current = state.ui_state.selected_search_result;
+                state.ui_state.selected_search_result = current.saturating_sub(1);
+                let idx = state.ui_state.selected_search_result;
+                let line = state.ui_state.search_results.get(idx).map(|r| r.line);
+                if let Some(line) = line {
+                    state.reading_state.row = line;
                 }
             }
             KeyCode::Char(c) => {
