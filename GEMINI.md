@@ -56,6 +56,7 @@ Example
 
 ## Development Guidelines
 - AGENTS.md, GEMINI.md, and CLAUDE.md are the same file; changing one updates the other two automatically.
+- When changing shortcuts or keybindings, always update the in-app help window and README.md in the same change.
 - Commit frequently with small, focused changes.
 - Test-driven development for complex components.
 - Cross-platform mindset (Linux/macOS/Windows).
