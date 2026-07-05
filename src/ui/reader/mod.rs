@@ -2904,11 +2904,19 @@ impl Reader {
 
         // Main content area with centered margins
         // Calculate padding from stored textwidth (minimum 5 on each side, unless window ≤ 20)
+        // The line-number gutter ("9999 ") occupies 5 extra columns on top of
+        // the wrapped text width, so reserve room for it to avoid visual wrap.
+        let gutter_width = if state.config.settings.show_line_numbers {
+            5
+        } else {
+            0
+        };
         let available_width = chunks[2].width as usize;
         let padding = if available_width <= 20 {
             0
         } else {
-            (available_width.saturating_sub(state.reading_state.textwidth) / 2).max(5)
+            (available_width.saturating_sub(state.reading_state.textwidth + gutter_width) / 2)
+                .max(5)
         };
         let desired_width = available_width.saturating_sub(padding * 2).max(20) as u16;
 
