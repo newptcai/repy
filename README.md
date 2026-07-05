@@ -84,16 +84,28 @@ repy
 If there is a reading history, `repy` reopens the last-read book at the last saved
 position. Otherwise, it starts in the reader UI without a book loaded.
 
+### Opening books from the reading history
+
+The `EBOOK` argument can be a file path, a reading-history number, or a
+pattern matched case-insensitively against the title, author, and path of
+history entries (the most recently read match wins):
+
+```sh
+repy -r          # Print the reading history with numbers and progress
+repy 3           # Open the 3rd book in the reading history
+repy dorian      # Open the most recent history entry matching "dorian"
+```
+
 ### Other options
 
 ```sh
+repy -d BOOK     # Dump the parsed text of an ebook to stdout (pipe to less/grep)
 repy -c FILE     # Use a specific configuration file
 repy -v          # Increase verbosity (for debugging)
 repy --debug     # Enable debug output
 repy --export-highlights /path/to/book.epub
 ```
 
-Note: `-r` (history) and `--dump` options are defined but not yet implemented.
 `--export-highlights` writes JSON containing the book identity and all persisted highlights/comments for that EPUB.
 
 ### Search

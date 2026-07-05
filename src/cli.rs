@@ -9,11 +9,11 @@ use std::path::PathBuf;
     long_about = None
 )]
 pub struct Cli {
-    /// Print reading history
+    /// Print reading history and exit
     #[clap(short = 'r', long)]
     pub history: bool,
 
-    /// Dump the content of the ebook
+    /// Dump the parsed text content of the ebook to stdout
     #[clap(short, long)]
     pub dump: bool,
 
