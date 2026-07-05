@@ -57,9 +57,21 @@ impl SearchWindow {
             return;
         }
 
+        // Keep the selected result visible by windowing the list around it.
+        let visible = list_area.height.saturating_sub(2) as usize;
+        let offset = if visible == 0 {
+            0
+        } else {
+            selected_index
+                .saturating_sub(visible / 2)
+                .min(results.len().saturating_sub(visible))
+        };
+
         let items: Vec<ListItem> = results
             .iter()
             .enumerate()
+            .skip(offset)
+            .take(visible.max(1))
             .map(|(i, entry)| {
                 let style = if i == selected_index {
                     Style::default()

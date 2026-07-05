@@ -63,6 +63,17 @@ impl State {
             }
             conn.execute_batch("COMMIT;")?;
         }
+        if current_version < 3 {
+            conn.execute_batch("BEGIN IMMEDIATE TRANSACTION;")?;
+            if let Err(err) = Self::migrate_v3(conn).and_then(|_| {
+                conn.pragma_update(None, "user_version", 3)
+                    .map_err(Into::into)
+            }) {
+                let _ = conn.execute_batch("ROLLBACK;");
+                return Err(err);
+            }
+            conn.execute_batch("COMMIT;")?;
+        }
         Ok(())
     }
 
@@ -165,7 +176,54 @@ impl State {
         Ok(())
     }
 
-    // Other methods will go here
+    fn migrate_v3(conn: &Connection) -> Result<()> {
+        // `seq` is a monotonically increasing recency counter; timestamps
+        // only have second resolution, which makes ordering ambiguous.
+        conn.execute_batch(
+            "
+            CREATE TABLE IF NOT EXISTS search_history (
+                query TEXT PRIMARY KEY,
+                seq INTEGER NOT NULL
+            );
+            ",
+        )?;
+        Ok(())
+    }
+
+    /// Record a search query, refreshing its recency. History is capped at
+    /// the 100 most recently used queries.
+    pub fn add_search_history(&self, query: &str) -> Result<()> {
+        let query = query.trim();
+        if query.is_empty() {
+            return Ok(());
+        }
+        self.conn.execute(
+            "INSERT INTO search_history (query, seq)
+             VALUES (?, (SELECT COALESCE(MAX(seq), 0) + 1 FROM search_history))
+             ON CONFLICT(query) DO UPDATE
+             SET seq=(SELECT COALESCE(MAX(seq), 0) + 1 FROM search_history)",
+            params![query],
+        )?;
+        self.conn.execute(
+            "DELETE FROM search_history WHERE query NOT IN
+             (SELECT query FROM search_history ORDER BY seq DESC LIMIT 100)",
+            [],
+        )?;
+        Ok(())
+    }
+
+    /// Return search queries, most recently used first.
+    pub fn get_search_history(&self) -> Result<Vec<String>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT query FROM search_history ORDER BY seq DESC LIMIT 100")?;
+        let rows = stmt.query_map([], |row| row.get(0))?;
+        let mut queries = Vec::new();
+        for row in rows {
+            queries.push(row?);
+        }
+        Ok(queries)
+    }
 
     pub fn get_from_history(&self) -> Result<Vec<LibraryItem>> {
         let mut stmt = self.conn.prepare(
@@ -631,6 +689,32 @@ mod tests {
     use crate::models::{BookMetadata, TextStructure, TocEntry};
     use tempfile::TempDir;
 
+    #[test]
+    fn test_search_history_recency_and_dedup() {
+        let state = State::new_for_test();
+        state.add_search_history("foo").unwrap();
+        state.add_search_history("bar").unwrap();
+        // Re-adding an existing query moves it to the front.
+        state.add_search_history("foo").unwrap();
+        let history = state.get_search_history().unwrap();
+        assert_eq!(history, vec!["foo".to_string(), "bar".to_string()]);
+        // Blank queries are ignored.
+        state.add_search_history("   ").unwrap();
+        assert_eq!(state.get_search_history().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn test_search_history_capped_at_100() {
+        let state = State::new_for_test();
+        for i in 0..120 {
+            state.add_search_history(&format!("query-{}", i)).unwrap();
+        }
+        let history = state.get_search_history().unwrap();
+        assert_eq!(history.len(), 100);
+        assert_eq!(history[0], "query-119");
+        assert_eq!(history[99], "query-20");
+    }
+
     // Mock Ebook implementation for testing
     #[derive(Debug)]
     struct MockEbook {
@@ -797,7 +881,7 @@ mod tests {
         let version: i64 = conn
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .unwrap();
-        assert_eq!(version, 2);
+        assert_eq!(version, 3);
     }
 
     fn sample_identity(book_id: &str) -> BookIdentity {
@@ -948,7 +1032,7 @@ mod tests {
         let version: i64 = conn
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .unwrap();
-        assert_eq!(version, 2);
+        assert_eq!(version, 3);
 
         let row: i64 = conn
             .query_row(

@@ -14,13 +14,13 @@ Effort estimates: S = small, M = medium, L = large.
 
 ## Phase 1 — Finish half-wired features + daily-use polish
 
-1. **CLI completion** (S) — implement `-r` (print library + progress, exit), `-d` (dump parsed text to stdout, bypass TUI), and positional `EBOOK` as history-number or fuzzy pattern (epy's signature launch UX). Files: `src/main.rs`, `src/cli.rs`; reuse `State` library queries in `src/state.rs`.
-2. **Fix image MIME + cover extraction** (S) — `get_img_bytestr` (`src/ebook.rs`) hardcodes `image/jpeg`; real MIME is already in `doc.resources`. Add `cover()` to the `Ebook` trait (epub crate has `get_cover()`). Prerequisite for Phase 3.
-3. **User-definable themes** (M) — replace closed `ColorTheme` enum (`src/theme.rs`) with named themes: config JSON maps the semantic slots to color strings (ratatui `Color: FromStr` handles `#hex`/names). Ship more built-ins: Solarized, Nord, Catppuccin, and a **sepia/paper** theme (flagship reading mode of Apple Books/KOReader). Files: `src/theme.rs`, `src/config.rs`, `src/settings.rs`.
-4. **Search upgrades** (M) — distinct current-hit style (new theme slots), match counter "14/87" in status bar, search history (persisted, arrows in prompt), incremental search (re-run regex per keystroke over in-memory lines, ~50ms debounce). Files: `src/ui/reader/mod.rs`, `src/ui/board.rs`, `src/state.rs` (migration).
+1. **CLI completion** (S) — ✅ done: `-r`, `-d`, and history-number/pattern launch.
+2. **Fix image MIME + cover extraction** (S) — ✅ done: manifest-based MIME with extension fallback; `get_cover()` on the `Ebook` trait. Prerequisite for Phase 3.
+3. ~~**User-definable themes**~~ — dropped by decision (2026-07): built-in themes only. A sepia/paper theme was added to the built-in cycle instead. More built-ins (Solarized, Nord, Catppuccin) remain possible as S-effort additions to `src/theme.rs`.
+4. **Search upgrades** (M) — ✅ done: distinct current-hit style, `match N/M` counter, persisted search history (Up/Down in prompt, capped at 100), incremental search with Esc-restore.
 5. **Fuzzy filtering in TOC/library/bookmarks/highlights windows** (S-M) — `/` to filter, crate `nucleo-matcher`. Shared widget in `src/ui/windows/mod.rs`.
-6. **Highlight colors, Markdown export, margin indicators** (M) — schema already has `highlights.color`; add color cycle on create/edit (KOReader's 5-color set, per-theme tuned RGB); `--export-highlights --format md|json` grouped by chapter; 1-col gutter with colored `▎` on highlighted rows. Files: `src/ui/reader/mod.rs`, `src/ui/board.rs`, `src/main.rs`.
-7. **Mouse + line-number wiring** (S-M) — honor `mouse_support` (wheel scroll, click-to-follow/select; only enable capture when the setting is on so native terminal copy still works); fix `show_line_numbers` gutter not being subtracted from text width (`src/ui/board.rs`).
+6. **Highlight colors, Markdown export, margin indicators** (M) — mostly done: five-color highlights with `C` cycling ✅, `--export-highlights --format md` ✅. Remaining: 1-col margin gutter with colored `▎` on highlighted rows (`src/ui/board.rs`).
+7. **Mouse + line-number wiring** (S-M) — gutter width fix ✅. Remaining: honor `mouse_support` (wheel scroll, click-to-follow/select; only enable capture when the setting is on so native terminal copy still works).
 8. **Double-spread: implement minimally or delete** (M) — two columns at wide terminals (left = rows `k..k+h`, right = `k+h..k+2h`); visual mode/TTS temporarily drop to single column. If the compromise proves ugly, delete the settings instead of leaving them half-wired.
 
 ## Phase 2 — Data layer: statistics, persistence, library

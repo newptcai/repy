@@ -207,6 +207,16 @@ pub struct UiState {
     pub show_settings: bool,
     pub show_highlights: bool,
     pub search_query: String,
+    /// True once Enter confirmed the query (j/k then navigate results).
+    pub search_committed: bool,
+    /// Reader row when the search window opened; restored on Esc while typing.
+    pub search_origin_row: usize,
+    /// Persisted search history, most recent first (loaded when `/` opens).
+    pub search_history: Vec<String>,
+    /// Position while browsing history with Up/Down (None = editing draft).
+    pub search_history_index: Option<usize>,
+    /// The query being typed before history browsing started.
+    pub search_history_draft: String,
     pub search_results: Vec<SearchResult>,
     pub search_matches: HashMap<usize, Vec<(usize, usize)>>,
     pub selected_search_result: usize,
@@ -295,6 +305,11 @@ impl UiState {
             show_settings: false,
             show_highlights: false,
             search_query: String::new(),
+            search_committed: false,
+            search_origin_row: 0,
+            search_history: Vec::new(),
+            search_history_index: None,
+            search_history_draft: String::new(),
             search_results: Vec::new(),
             search_matches: HashMap::new(),
             selected_search_result: 0,
@@ -1498,11 +1513,17 @@ impl Reader {
 
             // Search
             KeyCode::Char('/') => {
+                let history = self.db_state.get_search_history().unwrap_or_default();
                 let mut state = self.state.borrow_mut();
                 state.search_data = Some(SearchData::default());
                 state.ui_state.search_query.clear();
                 state.ui_state.search_results.clear();
                 state.ui_state.search_matches.clear();
+                state.ui_state.search_committed = false;
+                state.ui_state.search_origin_row = state.reading_state.row;
+                state.ui_state.search_history = history;
+                state.ui_state.search_history_index = None;
+                state.ui_state.search_history_draft.clear();
                 state.ui_state.open_window(WindowType::Search);
             }
 
@@ -1623,34 +1644,47 @@ impl Reader {
         state.jump_forward();
     }
 
-    /// Handle keys in search mode
+    /// Handle keys in search mode.
+    ///
+    /// While the query is being typed (`search_committed == false`), matches
+    /// update incrementally, Up/Down browse the persisted search history, and
+    /// j/k are entered as text. After Enter commits the query, Up/Down and
+    /// j/k navigate results and a second Enter jumps and closes the window.
     fn handle_search_mode_keys(&mut self, key: KeyEvent, _repeat_count: u32) -> eyre::Result<()> {
+        let committed = self.state.borrow().ui_state.search_committed;
         match key.code {
             KeyCode::Enter => {
-                let has_results = {
-                    let state = self.state.borrow();
-                    !state.ui_state.search_results.is_empty()
-                };
-                if has_results {
+                if committed {
                     self.jump_to_selected_search_result();
                 } else {
-                    self.execute_search();
+                    self.commit_search();
                 }
             }
             KeyCode::Esc => {
-                // Cancel search
-                {
-                    let mut state = self.state.borrow_mut();
-                    state.search_data = None;
-                    state.ui_state.open_window(WindowType::Reader);
+                // Cancel search; while still typing, restore the original view.
+                let mut state = self.state.borrow_mut();
+                state.search_data = None;
+                if !state.ui_state.search_committed {
+                    state.reading_state.row = state.ui_state.search_origin_row;
+                    state.ui_state.search_results.clear();
+                    state.ui_state.search_matches.clear();
                 }
+                state.ui_state.open_window(WindowType::Reader);
             }
             KeyCode::Backspace => {
-                // Remove last character from search query
-                let mut state = self.state.borrow_mut();
-                state.ui_state.search_query.pop();
-                state.ui_state.search_results.clear();
-                state.ui_state.search_matches.clear();
+                {
+                    let mut state = self.state.borrow_mut();
+                    state.ui_state.search_query.pop();
+                    state.ui_state.search_committed = false;
+                    state.ui_state.search_history_index = None;
+                }
+                self.update_incremental_search();
+            }
+            KeyCode::Up if !committed => {
+                self.search_history_older();
+            }
+            KeyCode::Down if !committed => {
+                self.search_history_newer();
             }
             KeyCode::Down => {
                 let mut state = self.state.borrow_mut();
@@ -1676,43 +1710,86 @@ impl Reader {
                     }
                 }
             }
-            // `j`/`k` navigate results only once a search has been run; while
-            // typing the query (no results yet) they are entered as text.
-            KeyCode::Char('j')
-                if !self.state.borrow().ui_state.search_results.is_empty() =>
-            {
+            // `j`/`k` navigate results only once the query is committed; while
+            // typing they are entered as text.
+            KeyCode::Char('j') if committed => {
                 let mut state = self.state.borrow_mut();
-                let next = (state.ui_state.selected_search_result + 1)
-                    .min(state.ui_state.search_results.len() - 1);
-                state.ui_state.selected_search_result = next;
-                let line = state.ui_state.search_results.get(next).map(|r| r.line);
-                if let Some(line) = line {
-                    state.reading_state.row = line;
+                if !state.ui_state.search_results.is_empty() {
+                    let next = (state.ui_state.selected_search_result + 1)
+                        .min(state.ui_state.search_results.len() - 1);
+                    state.ui_state.selected_search_result = next;
+                    let line = state.ui_state.search_results.get(next).map(|r| r.line);
+                    if let Some(line) = line {
+                        state.reading_state.row = line;
+                    }
                 }
             }
-            KeyCode::Char('k')
-                if !self.state.borrow().ui_state.search_results.is_empty() =>
-            {
+            KeyCode::Char('k') if committed => {
                 let mut state = self.state.borrow_mut();
-                let current = state.ui_state.selected_search_result;
-                state.ui_state.selected_search_result = current.saturating_sub(1);
-                let idx = state.ui_state.selected_search_result;
-                let line = state.ui_state.search_results.get(idx).map(|r| r.line);
-                if let Some(line) = line {
-                    state.reading_state.row = line;
+                if !state.ui_state.search_results.is_empty() {
+                    let current = state.ui_state.selected_search_result;
+                    state.ui_state.selected_search_result = current.saturating_sub(1);
+                    let idx = state.ui_state.selected_search_result;
+                    let line = state.ui_state.search_results.get(idx).map(|r| r.line);
+                    if let Some(line) = line {
+                        state.reading_state.row = line;
+                    }
                 }
             }
             KeyCode::Char(c) => {
-                // Add character to search query
-                let mut state = self.state.borrow_mut();
-                state.ui_state.search_query.push(c);
-                state.ui_state.search_results.clear();
-                state.ui_state.search_matches.clear();
+                {
+                    let mut state = self.state.borrow_mut();
+                    state.ui_state.search_query.push(c);
+                    state.ui_state.search_committed = false;
+                    state.ui_state.search_history_index = None;
+                }
+                self.update_incremental_search();
             }
             _ => {}
         }
 
         Ok(())
+    }
+
+    /// Up in the search prompt: recall the next-older history entry.
+    fn search_history_older(&mut self) {
+        {
+            let mut state = self.state.borrow_mut();
+            if state.ui_state.search_history.is_empty() {
+                return;
+            }
+            let next_index = match state.ui_state.search_history_index {
+                None => {
+                    state.ui_state.search_history_draft = state.ui_state.search_query.clone();
+                    0
+                }
+                Some(index) if index + 1 < state.ui_state.search_history.len() => index + 1,
+                Some(index) => index,
+            };
+            state.ui_state.search_history_index = Some(next_index);
+            state.ui_state.search_query = state.ui_state.search_history[next_index].clone();
+        }
+        self.update_incremental_search();
+    }
+
+    /// Down in the search prompt: recall the next-newer entry, or restore the
+    /// query that was being typed before history browsing started.
+    fn search_history_newer(&mut self) {
+        {
+            let mut state = self.state.borrow_mut();
+            match state.ui_state.search_history_index {
+                None => return,
+                Some(0) => {
+                    state.ui_state.search_history_index = None;
+                    state.ui_state.search_query = state.ui_state.search_history_draft.clone();
+                }
+                Some(index) => {
+                    state.ui_state.search_history_index = Some(index - 1);
+                    state.ui_state.search_query = state.ui_state.search_history[index - 1].clone();
+                }
+            }
+        }
+        self.update_incremental_search();
     }
 
     /// Returns the `Highlight` whose resolved range contains `visual_cursor`, if any.
@@ -4367,43 +4444,131 @@ impl Reader {
             }
         };
 
+        let (results, matches_map) = self.scan_search_matches(&regex);
+
+        let mut state = self.state.borrow_mut();
+        state.ui_state.search_results = results;
+        state.ui_state.search_matches = matches_map;
+        // Start from the first match at or after the pre-search position.
+        let origin = state.ui_state.search_origin_row;
+        let selected = state
+            .ui_state
+            .search_results
+            .iter()
+            .position(|result| result.line >= origin)
+            .unwrap_or(0);
+        state.ui_state.selected_search_result = selected;
+
+        let line = state.ui_state.search_results.get(selected).map(|r| r.line);
+        if let Some(line) = line {
+            state.reading_state.row = line;
+            let total = state.ui_state.search_results.len();
+            state
+                .ui_state
+                .set_message(format!("Match {}/{}", selected + 1, total), MessageType::Info);
+        } else {
+            state
+                .ui_state
+                .set_message("No matches found".to_string(), MessageType::Info);
+        }
+    }
+
+    /// Scan all loaded lines for `regex`, returning results and per-line
+    /// byte-range matches.
+    fn scan_search_matches(
+        &self,
+        regex: &Regex,
+    ) -> (Vec<SearchResult>, HashMap<usize, Vec<(usize, usize)>>) {
         let mut results = Vec::new();
         let mut matches_map: HashMap<usize, Vec<(usize, usize)>> = HashMap::new();
-
         if let Some(lines) = self.board.lines() {
             for (line_index, line) in lines.iter().enumerate() {
-                let mut ranges = Vec::new();
-                for mat in regex.find_iter(line) {
-                    ranges.push((mat.start(), mat.end()));
-                }
+                let ranges: Vec<(usize, usize)> = regex
+                    .find_iter(line)
+                    .map(|mat| (mat.start(), mat.end()))
+                    .collect();
                 if !ranges.is_empty() {
-                    let preview = line.trim().to_string();
                     results.push(SearchResult {
                         line: line_index,
                         ranges: ranges.clone(),
-                        preview,
+                        preview: line.trim().to_string(),
                     });
                     matches_map.insert(line_index, ranges);
                 }
             }
         }
+        (results, matches_map)
+    }
 
+    /// Re-run the search as the query is typed. Invalid (possibly partial)
+    /// regexes clear the matches without an error message; an empty query
+    /// restores the pre-search view.
+    fn update_incremental_search(&mut self) {
+        let query = {
+            let state = self.state.borrow();
+            state.ui_state.search_query.trim().to_string()
+        };
+
+        if query.is_empty() {
+            let mut state = self.state.borrow_mut();
+            state.ui_state.search_results.clear();
+            state.ui_state.search_matches.clear();
+            state.reading_state.row = state.ui_state.search_origin_row;
+            return;
+        }
+
+        let Ok(regex) = Regex::new(&query) else {
+            let mut state = self.state.borrow_mut();
+            state.ui_state.search_results.clear();
+            state.ui_state.search_matches.clear();
+            return;
+        };
+
+        let (results, matches_map) = self.scan_search_matches(&regex);
         let mut state = self.state.borrow_mut();
         state.ui_state.search_results = results;
         state.ui_state.search_matches = matches_map;
-        state.ui_state.selected_search_result = 0;
-
-        let first_line = state.ui_state.search_results.first().map(|r| r.line);
-        if let Some(line) = first_line {
-            state.reading_state.row = line;
-            let total = state.ui_state.search_results.len();
-            state
-                .ui_state
-                .set_message(format!("Match 1/{}", total), MessageType::Info);
+        let origin = state.ui_state.search_origin_row;
+        let selected = state
+            .ui_state
+            .search_results
+            .iter()
+            .position(|result| result.line >= origin)
+            .unwrap_or(0);
+        state.ui_state.selected_search_result = selected;
+        // Preview the first match; Esc restores the original position.
+        if let Some(result) = state.ui_state.search_results.get(selected) {
+            state.reading_state.row = result.line;
         } else {
-            state
-                .ui_state
-                .set_message("No matches found".to_string(), MessageType::Info);
+            state.reading_state.row = origin;
+        }
+    }
+
+    /// First Enter in the search prompt: record the pre-search position in
+    /// the jump list, run the full search, and persist the query to history.
+    fn commit_search(&mut self) {
+        {
+            // Jump history should point back to where the search started,
+            // not to the incrementally previewed match.
+            let mut state = self.state.borrow_mut();
+            state.reading_state.row = state.ui_state.search_origin_row;
+        }
+        self.record_jump_position();
+        self.execute_search();
+
+        let query = {
+            let state = self.state.borrow();
+            if state.ui_state.search_results.is_empty() {
+                None
+            } else {
+                Some(state.ui_state.search_query.trim().to_string())
+            }
+        };
+        if let Some(query) = query {
+            if let Err(err) = self.db_state.add_search_history(&query) {
+                logging::warn(format!("Could not save search history: {}", err));
+            }
+            self.state.borrow_mut().ui_state.search_committed = true;
         }
     }
 

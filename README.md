@@ -26,8 +26,8 @@ library management, two-phase cursor/selection modes, image viewing, link/footno
 Wikipedia lookup, persistent highlights/comments, highlight export, and TTS (text-to-speech) all work. Text is intelligently wrapped and hyphenated.
 Reading state and preferences are persisted per-book.
 
-**Not yet implemented:** advanced search features (history, fuzzy, incremental),
-mouse support, and additional ebook formats beyond EPUB.
+**Not yet implemented:** fuzzy search, mouse support, and additional ebook
+formats beyond EPUB.
 
 See [to-do.md](to-do.md) for detailed feature status and roadmap.
 
@@ -119,8 +119,17 @@ repy --export-highlights book.epub --format md > notes.md
 Search functionality supports regular expressions.
 
 - **Start Search**: Press `/` to open the search input.
+- **Incremental**: Matches update live as you type, and the view previews the
+  first match at or after your current position. `Esc` while typing cancels
+  and restores the original position. Invalid partial regexes simply show no
+  matches.
+- **History**: `Up` / `Down` while typing recall previous queries (persisted
+  across sessions, most recent first, capped at 100). `Down` past the newest
+  entry restores the query you were typing.
 - **Navigation**:
-  - `Enter`: Jump to the selected result (or the first one if freshly searching).
+  - `Enter`: Confirm the query (recorded in history). Then `j`/`k` or
+    `Up`/`Down` browse results, and a second `Enter` jumps and closes the
+    window.
   - `n`: Jump to the next search hit.
   - `p` / `N`: Jump to the previous search hit.
 - **Clear Highlights**: There is no dedicated key to clear highlights. A workaround is to press `/` to start a new search (which clears existing highlights) and then `Esc` to cancel.
