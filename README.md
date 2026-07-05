@@ -242,11 +242,12 @@ The configuration file is automatically created on first run with sensible defau
 
 ### Color Themes
 
-`repy` supports three built-in color themes:
+`repy` supports four built-in color themes:
 
 - **Default**: Uses terminal colors
 - **Dark**: Gruvbox Dark theme
 - **Light**: Gruvbox Light theme
+- **Sepia**: Warm paper-like palette (classic e-reader sepia mode)
 
 Press `c` in the reader to cycle through themes. The selected theme is saved in `configuration.json` under `Settings.color_theme`.
 

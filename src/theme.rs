@@ -8,15 +8,17 @@ pub enum ColorTheme {
     Default,
     Dark,
     Light,
+    Sepia,
 }
 
 impl ColorTheme {
-    /// Cycle to the next theme: Default -> Dark -> Light -> Default
+    /// Cycle to the next theme: Default -> Dark -> Light -> Sepia -> Default
     pub fn next(self) -> Self {
         match self {
             ColorTheme::Default => ColorTheme::Dark,
             ColorTheme::Dark => ColorTheme::Light,
-            ColorTheme::Light => ColorTheme::Default,
+            ColorTheme::Light => ColorTheme::Sepia,
+            ColorTheme::Sepia => ColorTheme::Default,
         }
     }
 
@@ -25,6 +27,7 @@ impl ColorTheme {
             ColorTheme::Default => "default (terminal)",
             ColorTheme::Dark => "dark (Gruvbox)",
             ColorTheme::Light => "light (Gruvbox)",
+            ColorTheme::Sepia => "sepia (paper)",
         }
     }
 }
@@ -98,6 +101,7 @@ impl Theme {
             ColorTheme::Default => Self::default_theme(),
             ColorTheme::Dark => Self::dark_theme(),
             ColorTheme::Light => Self::light_theme(),
+            ColorTheme::Sepia => Self::sepia_theme(),
         }
     }
 
@@ -122,6 +126,31 @@ impl Theme {
             error_fg: Color::Red,
             muted_fg: Color::DarkGray,
             external_link_fg: Color::Yellow,
+        }
+    }
+
+    /// Warm paper-like palette, the classic e-reader "sepia" mode.
+    fn sepia_theme() -> Self {
+        Self {
+            text_fg: Some(Color::Rgb(91, 70, 54)),     // #5b4636  warm brown
+            text_bg: Some(Color::Rgb(244, 236, 216)),  // #f4ecd8  paper
+            highlight_fg: Color::Rgb(244, 236, 216),   // #f4ecd8
+            highlight_bg: Color::Rgb(139, 111, 71),    // #8b6f47  tan
+            annotation_highlight_fg: Color::Rgb(91, 70, 54),
+            annotation_highlight_bg: Color::Rgb(232, 213, 163), // warm yellow
+            annotation_green_bg: Color::Rgb(207, 217, 168),
+            annotation_blue_bg: Color::Rgb(194, 212, 216),
+            annotation_pink_bg: Color::Rgb(232, 196, 196),
+            annotation_purple_bg: Color::Rgb(216, 200, 220),
+            search_fg: Color::Rgb(91, 70, 54),
+            search_bg: Color::Rgb(227, 197, 101), // muted gold
+            search_current_fg: Color::Rgb(244, 236, 216),
+            search_current_bg: Color::Rgb(191, 116, 46), // burnt orange
+            info_fg: Color::Rgb(74, 108, 140),           // muted blue
+            warning_fg: Color::Rgb(181, 137, 0),         // #b58900
+            error_fg: Color::Rgb(157, 0, 6),             // #9d0006
+            muted_fg: Color::Rgb(161, 145, 124),         // faded brown-gray
+            external_link_fg: Color::Rgb(181, 137, 0),   // #b58900
         }
     }
 
