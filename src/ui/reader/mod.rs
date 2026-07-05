@@ -2932,19 +2932,23 @@ impl Reader {
             (None, Some(pct)) => Some(pct),
             (None, None) => None,
         };
-        let right_text = match (mode_hint, link_hint, progress_text) {
-            (Some(mode), Some(link_hint), Some(progress_text)) => {
-                Some(format!("{} {} {}", mode, link_hint, progress_text))
-            }
-            (Some(mode), Some(link_hint), None) => Some(format!("{} {}", mode, link_hint)),
-            (Some(mode), None, Some(progress_text)) => Some(format!("{} {}", mode, progress_text)),
-            (Some(mode), None, None) => Some(mode),
-            (None, Some(link_hint), Some(progress_text)) => {
-                Some(format!("{} {}", link_hint, progress_text))
-            }
-            (None, Some(link_hint), None) => Some(link_hint),
-            (None, None, Some(progress_text)) => Some(progress_text),
-            (None, None, None) => None,
+        let search_hint = if state.ui_state.search_results.is_empty() {
+            None
+        } else {
+            Some(format!(
+                "match {}/{}",
+                state.ui_state.selected_search_result + 1,
+                state.ui_state.search_results.len()
+            ))
+        };
+        let right_parts: Vec<String> = [mode_hint, search_hint, link_hint, progress_text]
+            .into_iter()
+            .flatten()
+            .collect();
+        let right_text = if right_parts.is_empty() {
+            None
+        } else {
+            Some(right_parts.join(" "))
         };
         if show_top_bar {
             let header_line =
@@ -4367,6 +4371,10 @@ impl Reader {
         let first_line = state.ui_state.search_results.first().map(|r| r.line);
         if let Some(line) = first_line {
             state.reading_state.row = line;
+            let total = state.ui_state.search_results.len();
+            state
+                .ui_state
+                .set_message(format!("Match 1/{}", total), MessageType::Info);
         } else {
             state
                 .ui_state
@@ -4385,6 +4393,10 @@ impl Reader {
         let next =
             (state.ui_state.selected_search_result + 1) % state.ui_state.search_results.len();
         state.ui_state.selected_search_result = next;
+        let total = state.ui_state.search_results.len();
+        state
+            .ui_state
+            .set_message(format!("Match {}/{}", next + 1, total), MessageType::Info);
         let line = state.ui_state.search_results.get(next).map(|r| r.line);
         if let Some(line) = line {
             state.reading_state.row = line;
@@ -4406,6 +4418,9 @@ impl Reader {
             state.ui_state.selected_search_result - 1
         };
         state.ui_state.selected_search_result = prev;
+        state
+            .ui_state
+            .set_message(format!("Match {}/{}", prev + 1, len), MessageType::Info);
         let line = state.ui_state.search_results.get(prev).map(|r| r.line);
         if let Some(line) = line {
             state.reading_state.row = line;

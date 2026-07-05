@@ -47,6 +47,10 @@ pub struct Theme {
     pub search_fg: Color,
     /// Search-match background color
     pub search_bg: Color,
+    /// Current search hit text color
+    pub search_current_fg: Color,
+    /// Current search hit background color
+    pub search_current_bg: Color,
     /// Info message color
     pub info_fg: Color,
     /// Warning / hint message color
@@ -90,6 +94,8 @@ impl Theme {
             annotation_highlight_bg: Color::Rgb(242, 211, 135),
             search_fg: Color::Black,
             search_bg: Color::Rgb(255, 245, 157), // light pastel yellow
+            search_current_fg: Color::Black,
+            search_current_bg: Color::Rgb(255, 167, 38), // orange
             info_fg: Color::Blue,
             warning_fg: Color::Yellow,
             error_fg: Color::Red,
@@ -109,6 +115,8 @@ impl Theme {
             annotation_highlight_bg: Color::Rgb(235, 219, 178), // #ebdbb2  soft-yellow
             search_fg: Color::Rgb(40, 40, 40),        // #282828
             search_bg: Color::Rgb(250, 189, 47),      // #fabd2f  bright-yellow
+            search_current_fg: Color::Rgb(40, 40, 40), // #282828
+            search_current_bg: Color::Rgb(254, 128, 25), // #fe8019  bright-orange
             info_fg: Color::Rgb(131, 165, 152),       // #83a598  bright-aqua
             warning_fg: Color::Rgb(250, 189, 47),     // #fabd2f  bright-yellow
             error_fg: Color::Rgb(251, 73, 52),        // #fb4934  bright-red
@@ -128,6 +136,8 @@ impl Theme {
             annotation_highlight_bg: Color::Rgb(242, 211, 135), // soft warm yellow
             search_fg: Color::Rgb(251, 241, 199),            // #fbf1c7
             search_bg: Color::Rgb(181, 118, 20),             // #b57614  dark-yellow
+            search_current_fg: Color::Rgb(251, 241, 199),    // #fbf1c7
+            search_current_bg: Color::Rgb(175, 58, 3),       // #af3a03  dark-orange
             info_fg: Color::Rgb(7, 102, 120),                // #076678  dark-aqua
             warning_fg: Color::Rgb(181, 118, 20),            // #b57614  dark-yellow
             error_fg: Color::Rgb(157, 0, 6),                 // #9d0006  dark-red

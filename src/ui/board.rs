@@ -146,6 +146,14 @@ impl Board {
             })
             .collect();
 
+        // The line holding the currently selected search hit gets a distinct
+        // style so n/p navigation is easy to follow.
+        let current_hit_line: Option<usize> = state
+            .ui_state
+            .search_results
+            .get(state.ui_state.selected_search_result)
+            .map(|result| result.line);
+
         let visible_lines: Vec<Line> = text_structure
             .text_lines
             .get(start_line..end_line)
@@ -208,6 +216,7 @@ impl Board {
                             .get(&line_num)
                             .map(|ranges| ranges.as_slice()),
                         search_ranges_arg,
+                        current_hit_line == Some(line_num),
                         theme,
                     );
                     // Apply underline to the character range within the spans
@@ -224,6 +233,7 @@ impl Board {
                             .get(&line_num)
                             .map(|ranges| ranges.as_slice()),
                         search_ranges_arg,
+                        current_hit_line == Some(line_num),
                         theme,
                     )
                     .into_iter()
@@ -388,6 +398,7 @@ impl Board {
         formatting: &[InlineStyle],
         highlight_ranges: Option<&[HighlightRange]>,
         search_ranges: Option<&[(usize, usize)]>,
+        is_current_hit: bool,
         theme: &Theme,
     ) -> Vec<Span<'_>> {
         if line.is_empty() {
@@ -452,7 +463,11 @@ impl Board {
                     start >= range_start && end <= range_end
                 })
             {
-                style = style.fg(theme.search_fg).bg(theme.search_bg);
+                style = if is_current_hit {
+                    style.fg(theme.search_current_fg).bg(theme.search_current_bg)
+                } else {
+                    style.fg(theme.search_fg).bg(theme.search_bg)
+                };
             }
 
             for inline in &line_formatting {
@@ -825,6 +840,7 @@ mod tests {
             &[],
             Some(&ranges),
             None,
+            false,
             &theme,
         );
 
@@ -835,6 +851,46 @@ mod tests {
         assert_eq!(highlighted.style.fg, Some(theme.annotation_highlight_fg));
         assert_eq!(highlighted.style.bg, Some(theme.annotation_highlight_bg));
         assert_ne!(highlighted.style.bg, Some(theme.highlight_bg));
+    }
+
+    #[test]
+    fn test_current_search_hit_uses_distinct_colors() {
+        let board = Board::new();
+        let theme = Theme::for_color_theme(ColorTheme::Default);
+        let search_ranges = vec![(1usize, 3usize)];
+
+        let normal = board.build_line_spans(
+            "abcd",
+            0,
+            Style::default(),
+            &[],
+            None,
+            Some(&search_ranges),
+            false,
+            &theme,
+        );
+        let current = board.build_line_spans(
+            "abcd",
+            0,
+            Style::default(),
+            &[],
+            None,
+            Some(&search_ranges),
+            true,
+            &theme,
+        );
+
+        let normal_hit = normal
+            .iter()
+            .find(|span| span.content.as_ref() == "bc")
+            .expect("search span should be split out");
+        let current_hit = current
+            .iter()
+            .find(|span| span.content.as_ref() == "bc")
+            .expect("search span should be split out");
+        assert_eq!(normal_hit.style.bg, Some(theme.search_bg));
+        assert_eq!(current_hit.style.bg, Some(theme.search_current_bg));
+        assert_ne!(normal_hit.style.bg, current_hit.style.bg);
     }
 
     #[test]
@@ -854,6 +910,7 @@ mod tests {
             &[],
             Some(&ranges),
             None,
+            false,
             &theme,
         );
 

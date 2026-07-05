@@ -118,7 +118,7 @@ Search functionality supports regular expressions.
   - `n`: Jump to the next search hit.
   - `p` / `N`: Jump to the previous search hit.
 - **Clear Highlights**: There is no dedicated key to clear highlights. A workaround is to press `/` to start a new search (which clears existing highlights) and then `Esc` to cancel.
-- **Current Hit**: All matching text is highlighted in yellow. When navigating with `n`, `p`, or `N`, the view jumps to the line containing the match, but the "current" hit is not visually distinguished from other matches on the screen.
+- **Current Hit**: All matching text is highlighted in yellow; the line containing the current hit is highlighted in orange. A `match N/M` counter is shown in the top bar and status messages while navigating with `n`, `p`, or `N`.
 
 ## Keybindings
 
