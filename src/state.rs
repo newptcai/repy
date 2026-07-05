@@ -599,6 +599,16 @@ impl State {
         Ok(())
     }
 
+    pub fn update_highlight_color(&self, id: &str, color: &str) -> Result<()> {
+        self.conn.execute(
+            "UPDATE highlights
+             SET color=?, updated_at=datetime('now')
+             WHERE id=?",
+            params![color, id],
+        )?;
+        Ok(())
+    }
+
     pub fn update_highlight_status(&self, id: &str, status: &str) -> Result<()> {
         self.conn.execute(
             "UPDATE highlights SET resolution_status=?, updated_at=datetime('now') WHERE id=?",

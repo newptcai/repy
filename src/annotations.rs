@@ -1,5 +1,5 @@
 use crate::ebook::Ebook;
-use crate::models::{BookIdentity, Highlight, HighlightRange};
+use crate::models::{BookIdentity, Highlight, HighlightColor, HighlightRange};
 use eyre::Result;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
@@ -138,16 +138,34 @@ pub fn resolve_highlight(
     let needle: Vec<char> = highlight.exact.chars().collect();
     let candidates = find_exact_candidates(&chapter.chars, &needle);
     if let Some(choice) = choose_near_candidate(&candidates, highlight.approx_offset, 200) {
-        return ranges_for_candidate(highlight_index, &chapter, choice, needle.len());
+        return ranges_for_candidate(
+            highlight_index,
+            HighlightColor::from_name(&highlight.color),
+            &chapter,
+            choice,
+            needle.len(),
+        );
     }
     if let Some(choice) = choose_scored_candidate(&chapter, &candidates, highlight) {
-        return ranges_for_candidate(highlight_index, &chapter, choice, needle.len());
+        return ranges_for_candidate(
+            highlight_index,
+            HighlightColor::from_name(&highlight.color),
+            &chapter,
+            choice,
+            needle.len(),
+        );
     }
     if !candidates.is_empty() {
         return Resolution::Ambiguous;
     }
     if let Some(choice) = fuzzy_candidate(&chapter.chars, &needle, highlight.approx_offset) {
-        return ranges_for_candidate(highlight_index, &chapter, choice, needle.len());
+        return ranges_for_candidate(
+            highlight_index,
+            HighlightColor::from_name(&highlight.color),
+            &chapter,
+            choice,
+            needle.len(),
+        );
     }
     Resolution::Unresolved
 }
@@ -321,6 +339,7 @@ fn fuzzy_candidate(haystack: &[char], needle: &[char], approx: usize) -> Option<
 
 fn ranges_for_candidate(
     highlight_index: usize,
+    color: HighlightColor,
     chapter: &NormalizedChapter,
     start: usize,
     len: usize,
@@ -354,6 +373,7 @@ fn ranges_for_candidate(
                 row,
                 start_col,
                 end_col,
+                color,
             });
         }
     }

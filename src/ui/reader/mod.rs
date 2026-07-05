@@ -26,8 +26,8 @@ use crate::ebook::{Ebook, Epub, build_chapter_break};
 use crate::logging;
 use crate::models::{
     BookIdentity, BookMetadata, CHAPTER_BREAK_MARKER, Direction as AppDirection, Highlight,
-    HighlightRange, LibraryItem, LinkEntry, ReadingState, SearchData, TextStructure, TocEntry,
-    WindowType,
+    HighlightColor, HighlightRange, LibraryItem, LinkEntry, ReadingState, SearchData,
+    TextStructure, TocEntry, WindowType,
 };
 use crate::settings::DICT_PRESET_LIST;
 use crate::state::State;
@@ -222,6 +222,8 @@ pub struct UiState {
     pub highlight_comment_cursor: usize,
     pub highlight_comment_editing_id: Option<String>,
     pub pending_delete_highlight: Option<Highlight>,
+    /// Color used for the next created highlight (last used wins).
+    pub next_highlight_color: HighlightColor,
     pub links: Vec<LinkEntry>,
     pub links_selected_index: usize,
     pub images_list: Vec<(usize, String)>,
@@ -308,6 +310,7 @@ impl UiState {
             highlight_comment_cursor: 0,
             highlight_comment_editing_id: None,
             pending_delete_highlight: None,
+            next_highlight_color: HighlightColor::default(),
             links: Vec::new(),
             links_selected_index: 0,
             images_list: Vec::new(),
@@ -1893,6 +1896,20 @@ impl Reader {
                             MessageType::Info,
                         );
                     }
+                }
+            }
+            KeyCode::Char('C') if !has_anchor => {
+                if let Some(highlight) = self.highlight_at_cursor() {
+                    let next_color = HighlightColor::from_name(&highlight.color).next();
+                    self.db_state
+                        .update_highlight_color(&highlight.id, next_color.name())?;
+                    self.refresh_highlights()?;
+                    let mut state = self.state.borrow_mut();
+                    state.ui_state.next_highlight_color = next_color;
+                    state.ui_state.set_message(
+                        format!("Highlight color: {}", next_color.name()),
+                        MessageType::Info,
+                    );
                 }
             }
             KeyCode::Char('y') if has_anchor => {
@@ -5257,7 +5274,13 @@ impl Reader {
             suffix,
             approx_offset,
             normalization_version: NORMALIZATION_VERSION,
-            color: "yellow".to_string(),
+            color: self
+                .state
+                .borrow()
+                .ui_state
+                .next_highlight_color
+                .name()
+                .to_string(),
             comment: None,
             comment_format: "plain".to_string(),
             created_at: now,

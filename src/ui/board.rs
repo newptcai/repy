@@ -447,13 +447,13 @@ impl Board {
 
             let mut style = base_style;
             if let Some(ranges) = highlight_ranges
-                && ranges
+                && let Some(range) = ranges
                     .iter()
-                    .any(|range| start >= range.start_col && end <= range.end_col)
+                    .find(|range| start >= range.start_col && end <= range.end_col)
             {
                 style = style
                     .fg(theme.annotation_highlight_fg)
-                    .bg(theme.annotation_highlight_bg);
+                    .bg(theme.annotation_bg(range.color));
             }
 
             if let Some(ranges) = search_ranges
@@ -711,7 +711,7 @@ impl Default for Board {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::{HighlightRange, TextStructure};
+    use crate::models::{HighlightColor, HighlightRange, TextStructure};
     use crate::theme::ColorTheme;
     use std::collections::HashMap;
 
@@ -831,6 +831,7 @@ mod tests {
             row: 0,
             start_col: 1,
             end_col: 3,
+            color: HighlightColor::Yellow,
         }];
 
         let spans = board.build_line_spans(
@@ -851,6 +852,36 @@ mod tests {
         assert_eq!(highlighted.style.fg, Some(theme.annotation_highlight_fg));
         assert_eq!(highlighted.style.bg, Some(theme.annotation_highlight_bg));
         assert_ne!(highlighted.style.bg, Some(theme.highlight_bg));
+    }
+
+    #[test]
+    fn test_highlight_color_uses_theme_palette() {
+        let board = Board::new();
+        let theme = Theme::for_color_theme(ColorTheme::Default);
+        let ranges = vec![HighlightRange {
+            highlight_index: 0,
+            row: 0,
+            start_col: 1,
+            end_col: 3,
+            color: HighlightColor::Green,
+        }];
+
+        let spans = board.build_line_spans(
+            "abcd",
+            0,
+            Style::default(),
+            &[],
+            Some(&ranges),
+            None,
+            false,
+            &theme,
+        );
+
+        let highlighted = spans
+            .iter()
+            .find(|span| span.content.as_ref() == "bc")
+            .expect("highlighted span should be split out");
+        assert_eq!(highlighted.style.bg, Some(theme.annotation_green_bg));
     }
 
     #[test]
@@ -902,6 +933,7 @@ mod tests {
             row: 0,
             start_col: 0,
             end_col: 4,
+            color: HighlightColor::Yellow,
         }];
         let spans = board.build_line_spans(
             "abcd",

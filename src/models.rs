@@ -167,12 +167,57 @@ pub struct Highlight {
     pub resolution_status: String,
 }
 
+/// Palette of highlight colors (KOReader-style set). The actual RGB values
+/// are resolved per color theme in `theme.rs`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum HighlightColor {
+    #[default]
+    Yellow,
+    Green,
+    Blue,
+    Pink,
+    Purple,
+}
+
+impl HighlightColor {
+    pub fn from_name(name: &str) -> Self {
+        match name {
+            "green" => HighlightColor::Green,
+            "blue" => HighlightColor::Blue,
+            "pink" => HighlightColor::Pink,
+            "purple" => HighlightColor::Purple,
+            _ => HighlightColor::Yellow,
+        }
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            HighlightColor::Yellow => "yellow",
+            HighlightColor::Green => "green",
+            HighlightColor::Blue => "blue",
+            HighlightColor::Pink => "pink",
+            HighlightColor::Purple => "purple",
+        }
+    }
+
+    pub fn next(self) -> Self {
+        match self {
+            HighlightColor::Yellow => HighlightColor::Green,
+            HighlightColor::Green => HighlightColor::Blue,
+            HighlightColor::Blue => HighlightColor::Pink,
+            HighlightColor::Pink => HighlightColor::Purple,
+            HighlightColor::Purple => HighlightColor::Yellow,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct HighlightRange {
     pub highlight_index: usize,
     pub row: usize,
     pub start_col: usize,
     pub end_col: usize,
+    pub color: HighlightColor,
 }
 
 #[derive(Debug, Clone, PartialEq)]

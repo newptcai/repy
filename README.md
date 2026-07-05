@@ -189,10 +189,11 @@ The text-selection flow is two-phase:
 2. In cursor mode, move with `h` `j` `k` `l`, word motions `w` `b` `e`, line motions `^` (first non-blank) and `$` (end of line), paragraph motions `[` and `]`, `f<char>` / `F<char>` to jump to the next / previous occurrence of a literal character on the current line, or `t<char>` / `T<char>` to land just before / after it. All motions accept a numeric count prefix (e.g. `5j`, `3w`, `2]`, `3fa`).
    - When the cursor is on a highlighted span, press `Enter` to edit that highlight's comment.
    - Press `d` to delete the highlight under the cursor; if it has a non-empty comment a confirmation popup is shown (`y` deletes, `n`/`Esc` cancels).
+   - Press `C` to cycle the color of the highlight under the cursor (yellow → green → blue → pink → purple). New highlights use the last color chosen this way.
 3. Press `v` again to set an anchor and enter **Selection Mode**.
 4. In selection mode, move with the same motions as cursor mode (`h` `j` `k` `l`, `w` `b` `e`, `^` `$`, `[` `]`, `f<char>` / `F<char>`, `t<char>` / `T<char>`, all with optional count prefix) to expand/shrink the character-level selection (selection can cross page boundaries).
 5. Press `y` to copy the selected text to clipboard.
-6. Press `a` to save a highlight for the selection.
+6. Press `a` to save a highlight for the selection (using the last-used highlight color).
 7. Press `c` to save a highlight and immediately edit its plain-text comment.
 8. Press `d` to run dictionary lookup on the selection. By default it tries `sdcv`, `dict`, and `wkdict`. You can configure a custom command template in Settings (`s`).
 9. Press `p` to run Wikipedia lookup on the selection; the popup shows a link to the page plus the summary (10s timeout).

@@ -60,6 +60,7 @@ const HELP_TEXT: &[&str] = &[
     "   n / N             Next / Previous match",
     "   Enter             Edit comment of highlight under cursor",
     "   d                 Delete highlight under cursor",
+    "   C                 Cycle color of highlight under cursor",
     " Selection Mode:",
     "   hjkl, w/b/e       Extend selection (prefix with count)",
     "   ^ / $             Extend to start / end of line",

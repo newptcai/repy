@@ -41,8 +41,13 @@ pub struct Theme {
     pub highlight_bg: Color,
     /// Persistent annotation highlight text color
     pub annotation_highlight_fg: Color,
-    /// Persistent annotation highlight background color
+    /// Persistent annotation highlight background color (yellow / default)
     pub annotation_highlight_bg: Color,
+    /// Annotation highlight backgrounds for green/blue/pink/purple
+    pub annotation_green_bg: Color,
+    pub annotation_blue_bg: Color,
+    pub annotation_pink_bg: Color,
+    pub annotation_purple_bg: Color,
     /// Search-match text color
     pub search_fg: Color,
     /// Search-match background color
@@ -64,6 +69,18 @@ pub struct Theme {
 }
 
 impl Theme {
+    /// Background color for a persistent annotation highlight of the given color.
+    pub fn annotation_bg(&self, color: crate::models::HighlightColor) -> Color {
+        use crate::models::HighlightColor::*;
+        match color {
+            Yellow => self.annotation_highlight_bg,
+            Green => self.annotation_green_bg,
+            Blue => self.annotation_blue_bg,
+            Pink => self.annotation_pink_bg,
+            Purple => self.annotation_purple_bg,
+        }
+    }
+
     /// Returns a base Style applying the theme's text fg/bg (for popup blocks).
     pub fn base_style(&self) -> ratatui::style::Style {
         let mut style = ratatui::style::Style::default();
@@ -92,6 +109,10 @@ impl Theme {
             highlight_bg: Color::Blue,
             annotation_highlight_fg: Color::Black,
             annotation_highlight_bg: Color::Rgb(242, 211, 135),
+            annotation_green_bg: Color::Rgb(178, 223, 138),
+            annotation_blue_bg: Color::Rgb(166, 206, 227),
+            annotation_pink_bg: Color::Rgb(244, 194, 194),
+            annotation_purple_bg: Color::Rgb(202, 178, 214),
             search_fg: Color::Black,
             search_bg: Color::Rgb(255, 245, 157), // light pastel yellow
             search_current_fg: Color::Black,
@@ -113,6 +134,10 @@ impl Theme {
             highlight_bg: Color::Rgb(131, 165, 152),  // #83a598  bright-aqua
             annotation_highlight_fg: Color::Rgb(40, 40, 40), // #282828
             annotation_highlight_bg: Color::Rgb(235, 219, 178), // #ebdbb2  soft-yellow
+            annotation_green_bg: Color::Rgb(152, 151, 26),   // #98971a  green
+            annotation_blue_bg: Color::Rgb(69, 133, 136),    // #458588  blue
+            annotation_pink_bg: Color::Rgb(211, 134, 155),   // #d3869b  bright-purple
+            annotation_purple_bg: Color::Rgb(177, 98, 134),  // #b16286  purple
             search_fg: Color::Rgb(40, 40, 40),        // #282828
             search_bg: Color::Rgb(250, 189, 47),      // #fabd2f  bright-yellow
             search_current_fg: Color::Rgb(40, 40, 40), // #282828
@@ -134,6 +159,10 @@ impl Theme {
             highlight_bg: Color::Rgb(7, 102, 120),           // #076678  dark-aqua
             annotation_highlight_fg: Color::Rgb(60, 56, 54), // #3c3836
             annotation_highlight_bg: Color::Rgb(242, 211, 135), // soft warm yellow
+            annotation_green_bg: Color::Rgb(193, 214, 145),  // soft green
+            annotation_blue_bg: Color::Rgb(168, 202, 214),   // soft blue
+            annotation_pink_bg: Color::Rgb(238, 187, 195),   // soft pink
+            annotation_purple_bg: Color::Rgb(212, 187, 220), // soft purple
             search_fg: Color::Rgb(251, 241, 199),            // #fbf1c7
             search_bg: Color::Rgb(181, 118, 20),             // #b57614  dark-yellow
             search_current_fg: Color::Rgb(251, 241, 199),    // #fbf1c7
