@@ -4808,6 +4808,8 @@ impl Reader {
                         "image/png" => "png",
                         "image/gif" => "gif",
                         "image/svg+xml" => "svg",
+                        "image/webp" => "webp",
+                        "image/bmp" => "bmp",
                         _ => "jpg", // Fallback
                     };
 

@@ -16,6 +16,9 @@ pub trait Ebook {
     fn initialize(&mut self) -> Result<()>;
     fn get_raw_text(&mut self, content_id: &str) -> Result<String>;
     fn get_img_bytestr(&mut self, path: &str) -> Result<(String, Vec<u8>)>;
+    fn get_cover(&mut self) -> Option<(String, Vec<u8>)> {
+        None
+    }
     fn cleanup(&mut self) -> Result<()>;
 
     fn get_parsed_content(
@@ -29,6 +32,24 @@ pub trait Ebook {
         text_width: usize,
         page_height: Option<usize>,
     ) -> Result<Vec<TextStructure>>;
+}
+
+fn mime_from_extension(path: &str) -> String {
+    let ext = std::path::Path::new(path)
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_ascii_lowercase())
+        .unwrap_or_default();
+    match ext.as_str() {
+        "jpg" | "jpeg" => "image/jpeg",
+        "png" => "image/png",
+        "gif" => "image/gif",
+        "svg" => "image/svg+xml",
+        "webp" => "image/webp",
+        "bmp" => "image/bmp",
+        _ => "application/octet-stream",
+    }
+    .to_string()
 }
 
 pub struct Epub {
@@ -243,12 +264,21 @@ impl Ebook for Epub {
         if let Some(ref mut doc) = self.doc
             && let Some(bytes) = doc.get_resource_by_path(path)
         {
-            // For now, assume it's an image and use a generic MIME type
-            // In a real implementation, we'd determine the MIME type from the file extension
-            let mime = "image/jpeg".to_string(); // Default assumption
+            let mime = doc
+                .resources
+                .values()
+                .find(|r| r.path == PathBuf::from(path))
+                .map(|r| r.mime.clone())
+                .unwrap_or_else(|| mime_from_extension(path));
             return Ok((mime, bytes));
         }
         Err(eyre::eyre!("Image not found"))
+    }
+
+    fn get_cover(&mut self) -> Option<(String, Vec<u8>)> {
+        let doc = self.doc.as_mut()?;
+        let (bytes, mime) = doc.get_cover()?;
+        Some((mime, bytes))
     }
 
     fn cleanup(&mut self) -> Result<()> {
@@ -651,13 +681,34 @@ mod tests {
         // The image might exist or not - just test that the method doesn't crash
         match result {
             Ok((mime_type, bytes)) => {
-                assert_eq!(mime_type, "image/jpeg"); // Our current implementation
+                assert_eq!(mime_type, "image/jpeg"); // From the EPUB manifest
                 assert!(!bytes.is_empty());
                 assert!(bytes.len() > 1000); // Should be a substantial image
             }
             Err(_) => {
                 // It's okay if the image doesn't exist - just test error handling
             }
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_mime_from_extension() {
+        assert_eq!(mime_from_extension("a/b.JPG"), "image/jpeg");
+        assert_eq!(mime_from_extension("cover.png"), "image/png");
+        assert_eq!(mime_from_extension("pic.svg"), "image/svg+xml");
+        assert_eq!(mime_from_extension("noext"), "application/octet-stream");
+    }
+
+    #[test]
+    fn test_epub_get_cover() -> Result<()> {
+        let mut epub = Epub::new("tests/fixtures/small.epub");
+        epub.initialize()?;
+
+        if let Some((mime, bytes)) = epub.get_cover() {
+            assert!(mime.starts_with("image/"));
+            assert!(!bytes.is_empty());
         }
 
         Ok(())
