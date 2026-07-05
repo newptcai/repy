@@ -1,5 +1,11 @@
-use clap::{ArgAction, Parser};
+use clap::{ArgAction, Parser, ValueEnum};
 use std::path::PathBuf;
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq, ValueEnum)]
+pub enum ExportFormat {
+    Json,
+    Md,
+}
 
 #[derive(Parser, Debug)]
 #[clap(
@@ -17,9 +23,13 @@ pub struct Cli {
     #[clap(short, long)]
     pub dump: bool,
 
-    /// Export persisted highlights for an ebook as JSON
+    /// Export persisted highlights for an ebook
     #[clap(long, value_name = "BOOK")]
     pub export_highlights: Option<PathBuf>,
+
+    /// Output format for --export-highlights
+    #[clap(long, value_enum, default_value_t = ExportFormat::Json)]
+    pub format: ExportFormat,
 
     /// Use a specific configuration file
     #[clap(short = 'c', long, value_name = "FILE")]

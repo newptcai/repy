@@ -77,6 +77,20 @@ fn test_unmatched_pattern_fails() {
 }
 
 #[test]
+fn test_export_highlights_markdown() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("repy"));
+    cmd.env("XDG_CONFIG_HOME", dir.path());
+    cmd.arg("--export-highlights")
+        .arg("tests/fixtures/small.epub")
+        .arg("--format")
+        .arg("md");
+    cmd.assert()
+        .success()
+        .stdout(predicates::str::contains("# Highlights: Accessible EPUB 3"));
+}
+
+#[test]
 fn test_history_number_out_of_range_fails() {
     let dir = tempfile::tempdir().unwrap();
     let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("repy"));

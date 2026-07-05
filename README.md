@@ -106,7 +106,13 @@ repy --debug     # Enable debug output
 repy --export-highlights /path/to/book.epub
 ```
 
-`--export-highlights` writes JSON containing the book identity and all persisted highlights/comments for that EPUB.
+`--export-highlights` writes all persisted highlights/comments for that EPUB to
+stdout. The default format is JSON (including the book identity); pass
+`--format md` for Markdown grouped by chapter, with quotes, notes, and dates:
+
+```sh
+repy --export-highlights book.epub --format md > notes.md
+```
 
 ### Search
 

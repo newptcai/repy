@@ -1,6 +1,6 @@
 use repy::{
     annotations,
-    cli::Cli,
+    cli::{Cli, ExportFormat},
     config::Config,
     ebook::{Ebook, Epub},
     logging::{self, LogLevel},
@@ -35,7 +35,7 @@ fn main() -> Result<()> {
     }
 
     if let Some(book) = cli.export_highlights.as_ref() {
-        export_highlights(book)?;
+        export_highlights(book, cli.format)?;
         return Ok(());
     }
 
@@ -195,19 +195,73 @@ fn dump_content(filepath: &str) -> Result<()> {
     Ok(())
 }
 
-fn export_highlights(filepath: &std::path::Path) -> Result<()> {
+fn export_highlights(filepath: &std::path::Path, format: ExportFormat) -> Result<()> {
     let path = filepath.to_string_lossy();
     let mut epub = Epub::new(&path);
     epub.initialize()?;
     let identity = annotations::derive_book_identity(&mut epub)?;
     let db = State::new()?;
-    let highlights = db.list_highlights(&identity.book_id)?;
-    let payload = serde_json::json!({
-        "book": identity,
-        "highlights": highlights,
-    });
-    println!("{}", serde_json::to_string_pretty(&payload)?);
+    let mut highlights = db.list_highlights(&identity.book_id)?;
+
+    match format {
+        ExportFormat::Json => {
+            let payload = serde_json::json!({
+                "book": identity,
+                "highlights": highlights,
+            });
+            println!("{}", serde_json::to_string_pretty(&payload)?);
+        }
+        ExportFormat::Md => {
+            highlights.sort_by_key(|h| (h.content_index, h.approx_offset));
+            print!("{}", highlights_to_markdown(&epub, &highlights));
+        }
+    }
     Ok(())
+}
+
+/// Render highlights as Markdown grouped by chapter, in reading order.
+fn highlights_to_markdown(epub: &Epub, highlights: &[repy::models::Highlight]) -> String {
+    use std::fmt::Write;
+
+    let meta = epub.get_meta();
+    let mut out = String::new();
+    let title = meta.title.as_deref().unwrap_or("Untitled");
+    writeln!(out, "# Highlights: {}", title).unwrap();
+    if let Some(author) = meta.creator.as_deref().filter(|a| !a.is_empty()) {
+        writeln!(out, "\nAuthor: {}", author).unwrap();
+    }
+
+    let mut current_chapter: Option<usize> = None;
+    for highlight in highlights {
+        if current_chapter != Some(highlight.content_index) {
+            current_chapter = Some(highlight.content_index);
+            let label = epub
+                .toc_entries()
+                .iter()
+                .find(|entry| entry.content_index == highlight.content_index)
+                .map(|entry| entry.label.clone())
+                .unwrap_or_else(|| format!("Chapter {}", highlight.content_index + 1));
+            writeln!(out, "\n## {}", label).unwrap();
+        }
+        writeln!(out).unwrap();
+        for line in highlight.exact.lines() {
+            writeln!(out, "> {}", line).unwrap();
+        }
+        if let Some(comment) = highlight
+            .comment
+            .as_deref()
+            .filter(|c| !c.trim().is_empty())
+        {
+            writeln!(out, "\nNote: {}", comment.trim()).unwrap();
+        }
+        writeln!(
+            out,
+            "\n*{}*",
+            highlight.created_at.format("%Y-%m-%d %H:%M")
+        )
+        .unwrap();
+    }
+    out
 }
 
 fn run_tui_with_default_config() -> Result<()> {
