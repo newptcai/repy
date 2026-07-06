@@ -172,6 +172,24 @@ impl Board {
                     return Line::raw(line).alignment(Alignment::Center);
                 }
 
+                // Margin indicator: a colored bar on rows covered by a
+                // highlight. The 1-col gutter is reserved for the whole book
+                // as soon as it has any highlight, so lines never shift.
+                if !state.ui_state.highlights.is_empty() {
+                    let marker = state
+                        .ui_state
+                        .highlight_ranges
+                        .get(&line_num)
+                        .and_then(|ranges| ranges.first());
+                    spans.push(match marker {
+                        Some(range) => Span::styled(
+                            "▎",
+                            Style::default().fg(theme.annotation_bg(range.color)),
+                        ),
+                        None => Span::raw(" "),
+                    });
+                }
+
                 if state.config.settings.show_line_numbers {
                     spans.push(Span::styled(
                         format!("{:>4} ", line_num + 1),
