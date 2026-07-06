@@ -26,8 +26,8 @@ library management, two-phase cursor/selection modes, image viewing, link/footno
 Wikipedia lookup, persistent highlights/comments, highlight export, and TTS (text-to-speech) all work. Text is intelligently wrapped and hyphenated.
 Reading state and preferences are persisted per-book.
 
-**Not yet implemented:** fuzzy search, mouse support, and additional ebook
-formats beyond EPUB.
+**Not yet implemented:** mouse support and additional ebook formats beyond
+EPUB.
 
 See [to-do.md](to-do.md) for detailed feature status and roadmap.
 
@@ -189,6 +189,12 @@ Press `?` in the TUI to see the help window at any time (`Help (?)`).
   - `r`: Reset to default
   - Dictionary command templates use `%q` as the query placeholder
 - `q` — Quit / Close Window
+
+In the Table of Contents, Bookmarks, Highlights, and Library windows, press
+`/` to fuzzy-filter the list. Matches narrow as you type, best match first.
+`Enter` acts on the selected entry directly, or confirms the filter so
+`j`/`k` can navigate the narrowed list; `Esc` clears the filter (a second
+`Esc` closes the window).
 
 ### Cursor & Selection Modes
 

@@ -34,9 +34,9 @@ use crate::state::State;
 use crate::theme::Theme;
 use crate::ui::board::Board;
 use crate::ui::windows::{
-    bookmarks::BookmarksWindow, dictionary::DictionaryWindow, help::HelpWindow,
-    images::ImagesWindow, library::LibraryWindow, links::LinksWindow, metadata::MetadataWindow,
-    search::SearchWindow, settings::SettingsWindow, toc::TocWindow,
+    bookmarks::BookmarksWindow, dictionary::DictionaryWindow, fuzzy_filter_indices,
+    help::HelpWindow, images::ImagesWindow, library::LibraryWindow, links::LinksWindow,
+    metadata::MetadataWindow, search::SearchWindow, settings::SettingsWindow, toc::TocWindow,
 };
 
 /// Regex to strip textwrap syllable-split hyphenation artifacts from TTS text.
@@ -222,6 +222,13 @@ pub struct UiState {
     pub selected_search_result: usize,
     pub toc_entries: Vec<TocEntry>,
     pub toc_selected_index: usize,
+    /// True while the user is typing a `/`-filter query in a list window.
+    pub list_filter_active: bool,
+    /// The fuzzy-filter query for the currently open list window.
+    pub list_filter_query: String,
+    /// Original indices of items matching the filter, best score first.
+    /// `None` means no filter is applied and selection indices are direct.
+    pub list_filter_indices: Option<Vec<usize>>,
     pub bookmarks: Vec<(String, ReadingState)>,
     pub bookmarks_selected_index: usize,
     pub book_identity: Option<BookIdentity>,
@@ -315,6 +322,9 @@ impl UiState {
             selected_search_result: 0,
             toc_entries: Vec::new(),
             toc_selected_index: 0,
+            list_filter_active: false,
+            list_filter_query: String::new(),
+            list_filter_indices: None,
             bookmarks: Vec::new(),
             bookmarks_selected_index: 0,
             book_identity: None,
@@ -376,8 +386,44 @@ impl UiState {
             .is_some_and(|t| t.elapsed() >= Duration::from_secs(3))
     }
 
+    pub fn clear_list_filter(&mut self) {
+        self.list_filter_active = false;
+        self.list_filter_query.clear();
+        self.list_filter_indices = None;
+    }
+
+    /// Map a selection in the (possibly filtered) list view back to the
+    /// index in the underlying list. `None` when the filter has no matches.
+    pub fn selected_list_index(&self, selected: usize) -> Option<usize> {
+        match &self.list_filter_indices {
+            Some(indices) => indices.get(selected).copied(),
+            None => Some(selected),
+        }
+    }
+
+    /// Number of items visible in the current list view.
+    pub fn filtered_list_len(&self, full_len: usize) -> usize {
+        match &self.list_filter_indices {
+            Some(indices) => indices.len(),
+            None => full_len,
+        }
+    }
+
+    /// Text shown at the bottom of a list window while a filter is set.
+    pub fn list_filter_status(&self) -> Option<String> {
+        if self.list_filter_active {
+            Some(format!(" /{}█ ", self.list_filter_query))
+        } else if self.list_filter_indices.is_some() {
+            Some(format!(" /{} ", self.list_filter_query))
+        } else {
+            None
+        }
+    }
+
     pub fn open_window(&mut self, window_type: WindowType) {
         self.active_window = window_type.clone();
+        // Any window change invalidates the list filter.
+        self.clear_list_filter();
         match window_type {
             WindowType::Reader => {
                 self.show_help = false;
@@ -2136,11 +2182,97 @@ impl Reader {
         }
     }
 
+    /// Handle `/`-fuzzy-filter keys for list windows. While the filter prompt
+    /// is being typed every key except Enter is consumed; Enter commits the
+    /// filter and falls through so the caller can act on the selected item.
+    /// Returns true if the key was consumed.
+    fn handle_list_filter_keys(
+        &mut self,
+        key: &KeyEvent,
+        items: &[String],
+        index: &mut usize,
+    ) -> bool {
+        let active = self.state.borrow().ui_state.list_filter_active;
+        if active {
+            let mut state = self.state.borrow_mut();
+            let ui = &mut state.ui_state;
+            match key.code {
+                KeyCode::Esc => {
+                    ui.clear_list_filter();
+                    *index = 0;
+                }
+                KeyCode::Enter => {
+                    ui.list_filter_active = false;
+                    if ui.list_filter_query.is_empty() {
+                        ui.clear_list_filter();
+                    }
+                    // Not consumed: the caller acts on the selected item.
+                    return false;
+                }
+                KeyCode::Backspace => {
+                    ui.list_filter_query.pop();
+                    ui.list_filter_indices =
+                        Some(fuzzy_filter_indices(&ui.list_filter_query, items));
+                    *index = 0;
+                }
+                KeyCode::Down => {
+                    let len = ui.filtered_list_len(items.len());
+                    if len > 0 {
+                        *index = index.saturating_add(1).min(len - 1);
+                    }
+                }
+                KeyCode::Up => {
+                    *index = index.saturating_sub(1);
+                }
+                KeyCode::Char(c)
+                    if !key.modifiers.contains(KeyModifiers::CONTROL)
+                        && !key.modifiers.contains(KeyModifiers::ALT) =>
+                {
+                    ui.list_filter_query.push(c);
+                    ui.list_filter_indices =
+                        Some(fuzzy_filter_indices(&ui.list_filter_query, items));
+                    *index = 0;
+                }
+                _ => {}
+            }
+            return true;
+        }
+        match key.code {
+            KeyCode::Char('/') if !items.is_empty() => {
+                let mut state = self.state.borrow_mut();
+                state.ui_state.list_filter_active = true;
+                state.ui_state.list_filter_query.clear();
+                state.ui_state.list_filter_indices = Some((0..items.len()).collect());
+                *index = 0;
+                true
+            }
+            // With a committed filter, the first Esc clears it; a second
+            // Esc (handled by handle_list_nav) closes the window.
+            KeyCode::Esc if self.state.borrow().ui_state.list_filter_indices.is_some() => {
+                self.state.borrow_mut().ui_state.clear_list_filter();
+                *index = 0;
+                true
+            }
+            _ => false,
+        }
+    }
+
     fn handle_toc_mode_keys(&mut self, key: KeyEvent, repeat_count: u32) -> eyre::Result<()> {
-        let (list_len, mut index) = {
+        let (items, mut index) = {
             let s = self.state.borrow();
-            (s.ui_state.toc_entries.len(), s.ui_state.toc_selected_index)
+            let items: Vec<String> = s
+                .ui_state
+                .toc_entries
+                .iter()
+                .map(|entry| entry.label.clone())
+                .collect();
+            (items, s.ui_state.toc_selected_index)
         };
+        if self.handle_list_filter_keys(&key, &items, &mut index) {
+            self.state.borrow_mut().ui_state.toc_selected_index = index;
+            return Ok(());
+        }
+        let list_len = self.state.borrow().ui_state.filtered_list_len(items.len());
         if !self.handle_list_nav(&key, repeat_count, list_len, &mut index) {
             match key.code {
                 KeyCode::Enter => {
@@ -2155,20 +2287,30 @@ impl Reader {
     }
 
     fn handle_bookmarks_mode_keys(&mut self, key: KeyEvent, repeat_count: u32) -> eyre::Result<()> {
-        let (list_len, mut index) = {
+        let (items, mut index) = {
             let s = self.state.borrow();
-            (
-                s.ui_state.bookmarks.len(),
-                s.ui_state.bookmarks_selected_index,
-            )
+            let items: Vec<String> = s
+                .ui_state
+                .bookmarks
+                .iter()
+                .map(|(name, reading_state)| Self::format_bookmark_entry(name, reading_state))
+                .collect();
+            (items, s.ui_state.bookmarks_selected_index)
         };
+        if self.handle_list_filter_keys(&key, &items, &mut index) {
+            self.state.borrow_mut().ui_state.bookmarks_selected_index = index;
+            return Ok(());
+        }
+        let list_len = self.state.borrow().ui_state.filtered_list_len(items.len());
         if !self.handle_list_nav(&key, repeat_count, list_len, &mut index) {
             match key.code {
                 KeyCode::Char('a') => {
                     self.add_bookmark()?;
+                    self.reset_list_filter_after_change();
                 }
                 KeyCode::Char('d') => {
                     self.delete_selected_bookmark()?;
+                    self.reset_list_filter_after_change();
                 }
                 KeyCode::Enter => {
                     self.jump_to_selected_bookmark()?;
@@ -2179,6 +2321,18 @@ impl Reader {
             self.state.borrow_mut().ui_state.bookmarks_selected_index = index;
         }
         Ok(())
+    }
+
+    /// Drop the list filter after the underlying list changed (add/delete),
+    /// since the stored indices no longer line up with the new list.
+    fn reset_list_filter_after_change(&mut self) {
+        let mut state = self.state.borrow_mut();
+        if state.ui_state.list_filter_indices.is_some() {
+            state.ui_state.clear_list_filter();
+            state.ui_state.bookmarks_selected_index = 0;
+            state.ui_state.highlights_selected_index = 0;
+            state.ui_state.library_selected_index = 0;
+        }
     }
 
     fn handle_links_mode_keys(&mut self, key: KeyEvent, repeat_count: u32) -> eyre::Result<()> {
@@ -2224,17 +2378,26 @@ impl Reader {
     }
 
     fn handle_library_mode_keys(&mut self, key: KeyEvent, repeat_count: u32) -> eyre::Result<()> {
-        let (list_len, mut index) = {
+        let (items, mut index) = {
             let s = self.state.borrow();
-            (
-                s.ui_state.library_items.len(),
-                s.ui_state.library_selected_index,
-            )
+            let items: Vec<String> = s
+                .ui_state
+                .library_items
+                .iter()
+                .map(Self::format_library_item)
+                .collect();
+            (items, s.ui_state.library_selected_index)
         };
+        if self.handle_list_filter_keys(&key, &items, &mut index) {
+            self.state.borrow_mut().ui_state.library_selected_index = index;
+            return Ok(());
+        }
+        let list_len = self.state.borrow().ui_state.filtered_list_len(items.len());
         if !self.handle_list_nav(&key, repeat_count, list_len, &mut index) {
             match key.code {
                 KeyCode::Char('d') => {
                     self.delete_selected_library_item()?;
+                    self.reset_list_filter_after_change();
                 }
                 KeyCode::Enter => {
                     self.open_selected_library_item()?;
@@ -2646,12 +2809,25 @@ impl Reader {
                 &theme,
             );
         } else if state.ui_state.show_toc {
+            let filter = state.ui_state.list_filter_status();
+            let filtered_toc: Vec<TocEntry>;
+            let toc_entries: &[TocEntry] = match state.ui_state.list_filter_indices.as_ref() {
+                Some(indices) => {
+                    filtered_toc = indices
+                        .iter()
+                        .filter_map(|&i| state.ui_state.toc_entries.get(i).cloned())
+                        .collect();
+                    &filtered_toc
+                }
+                None => &state.ui_state.toc_entries,
+            };
             TocWindow::render(
                 frame,
                 frame.area(),
-                &state.ui_state.toc_entries,
+                toc_entries,
                 state.ui_state.toc_selected_index,
                 state.ui_state.metadata.as_ref(),
+                filter.as_deref(),
                 &theme,
             );
         } else if state.ui_state.show_bookmarks {
@@ -2659,8 +2835,10 @@ impl Reader {
                 .ui_state
                 .bookmarks
                 .iter()
-                .map(|(name, reading_state)| format!("{} (line {})", name, reading_state.row + 1))
+                .map(|(name, reading_state)| Self::format_bookmark_entry(name, reading_state))
                 .collect();
+            let filter = state.ui_state.list_filter_status();
+            let entries = Self::apply_list_filter(entries, &state.ui_state);
             BookmarksWindow::render(
                 frame,
                 frame.area(),
@@ -2669,6 +2847,7 @@ impl Reader {
                 &entries,
                 state.ui_state.bookmarks_selected_index,
                 None,
+                filter.as_deref(),
                 &theme,
             );
         } else if state.ui_state.show_highlights {
@@ -2676,27 +2855,10 @@ impl Reader {
                 .ui_state
                 .highlights
                 .iter()
-                .map(|highlight| {
-                    let status = match highlight.resolution_status.as_str() {
-                        "resolved" => String::new(),
-                        status => format!(" [{status}]"),
-                    };
-                    let comment = highlight
-                        .comment
-                        .as_deref()
-                        .filter(|text| !text.trim().is_empty())
-                        .map(|text| format!(" - {}", text.lines().next().unwrap_or("")))
-                        .unwrap_or_default();
-                    format!(
-                        "{}:{}{} {}{}",
-                        highlight.content_index + 1,
-                        highlight.approx_offset,
-                        status,
-                        highlight.exact,
-                        comment
-                    )
-                })
+                .map(Self::format_highlight_entry)
                 .collect();
+            let filter = state.ui_state.list_filter_status();
+            let entries = Self::apply_list_filter(entries, &state.ui_state);
             BookmarksWindow::render(
                 frame,
                 frame.area(),
@@ -2705,6 +2867,7 @@ impl Reader {
                 &entries,
                 state.ui_state.highlights_selected_index,
                 Some("Highlights (Enter jump, e edit, d delete)"),
+                filter.as_deref(),
                 &theme,
             );
         } else if state.ui_state.show_library {
@@ -2714,11 +2877,14 @@ impl Reader {
                 .iter()
                 .map(Self::format_library_item)
                 .collect();
+            let filter = state.ui_state.list_filter_status();
+            let entries = Self::apply_list_filter(entries, &state.ui_state);
             LibraryWindow::render(
                 frame,
                 frame.area(),
                 &entries,
                 state.ui_state.library_selected_index,
+                filter.as_deref(),
                 &theme,
             );
         } else if state.ui_state.show_search {
@@ -2841,6 +3007,43 @@ impl Reader {
                 );
             }
         }
+    }
+
+    /// Keep only the entries selected by the active list filter, in
+    /// filter (score) order. A no-op when no filter is applied.
+    fn apply_list_filter(entries: Vec<String>, ui_state: &UiState) -> Vec<String> {
+        match ui_state.list_filter_indices.as_ref() {
+            Some(indices) => indices
+                .iter()
+                .filter_map(|&i| entries.get(i).cloned())
+                .collect(),
+            None => entries,
+        }
+    }
+
+    fn format_bookmark_entry(name: &str, reading_state: &ReadingState) -> String {
+        format!("{} (line {})", name, reading_state.row + 1)
+    }
+
+    fn format_highlight_entry(highlight: &Highlight) -> String {
+        let status = match highlight.resolution_status.as_str() {
+            "resolved" => String::new(),
+            status => format!(" [{status}]"),
+        };
+        let comment = highlight
+            .comment
+            .as_deref()
+            .filter(|text| !text.trim().is_empty())
+            .map(|text| format!(" - {}", text.lines().next().unwrap_or("")))
+            .unwrap_or_default();
+        format!(
+            "{}:{}{} {}{}",
+            highlight.content_index + 1,
+            highlight.approx_offset,
+            status,
+            highlight.exact,
+            comment
+        )
     }
 
     fn format_library_item(item: &LibraryItem) -> String {
@@ -3389,18 +3592,29 @@ impl Reader {
         key: KeyEvent,
         repeat_count: u32,
     ) -> eyre::Result<()> {
-        let (list_len, mut index) = {
+        let (items, mut index) = {
             let s = self.state.borrow();
-            (
-                s.ui_state.highlights.len(),
-                s.ui_state.highlights_selected_index,
-            )
+            let items: Vec<String> = s
+                .ui_state
+                .highlights
+                .iter()
+                .map(Self::format_highlight_entry)
+                .collect();
+            (items, s.ui_state.highlights_selected_index)
         };
+        if self.handle_list_filter_keys(&key, &items, &mut index) {
+            self.state.borrow_mut().ui_state.highlights_selected_index = index;
+            return Ok(());
+        }
+        let list_len = self.state.borrow().ui_state.filtered_list_len(items.len());
         if !self.handle_list_nav(&key, repeat_count, list_len, &mut index) {
             match key.code {
                 KeyCode::Enter => self.jump_to_selected_highlight()?,
                 KeyCode::Char('e') => self.edit_selected_highlight_comment()?,
-                KeyCode::Char('d') => self.delete_selected_highlight()?,
+                KeyCode::Char('d') => {
+                    self.delete_selected_highlight()?;
+                    self.reset_list_filter_after_change();
+                }
                 _ => {}
             }
         } else {
@@ -3414,8 +3628,8 @@ impl Reader {
             let state = self.state.borrow();
             state
                 .ui_state
-                .highlights
-                .get(state.ui_state.highlights_selected_index)
+                .selected_list_index(state.ui_state.highlights_selected_index)
+                .and_then(|i| state.ui_state.highlights.get(i))
                 .cloned()
         };
         let Some(highlight) = highlight else {
@@ -3457,8 +3671,8 @@ impl Reader {
             let state = self.state.borrow();
             state
                 .ui_state
-                .highlights
-                .get(state.ui_state.highlights_selected_index)
+                .selected_list_index(state.ui_state.highlights_selected_index)
+                .and_then(|i| state.ui_state.highlights.get(i))
                 .cloned()
         };
         let Some(highlight) = highlight else {
@@ -3479,8 +3693,8 @@ impl Reader {
             let state = self.state.borrow();
             state
                 .ui_state
-                .highlights
-                .get(state.ui_state.highlights_selected_index)
+                .selected_list_index(state.ui_state.highlights_selected_index)
+                .and_then(|i| state.ui_state.highlights.get(i))
                 .map(|highlight| highlight.id.clone())
         };
         if let Some(id) = id {
@@ -4834,8 +5048,8 @@ impl Reader {
             let state = self.state.borrow();
             if let Some(entry) = state
                 .ui_state
-                .toc_entries
-                .get(state.ui_state.toc_selected_index)
+                .selected_list_index(state.ui_state.toc_selected_index)
+                .and_then(|i| state.ui_state.toc_entries.get(i))
             {
                 (entry.section.clone(), entry.content_index)
             } else {
@@ -4892,8 +5106,8 @@ impl Reader {
             let state = self.state.borrow();
             state
                 .ui_state
-                .bookmarks
-                .get(state.ui_state.bookmarks_selected_index)
+                .selected_list_index(state.ui_state.bookmarks_selected_index)
+                .and_then(|i| state.ui_state.bookmarks.get(i))
                 .map(|(name, _)| name.clone())
         };
         if let Some(name) = bookmark_name {
@@ -4921,8 +5135,8 @@ impl Reader {
             let state = self.state.borrow();
             state
                 .ui_state
-                .bookmarks
-                .get(state.ui_state.bookmarks_selected_index)
+                .selected_list_index(state.ui_state.bookmarks_selected_index)
+                .and_then(|i| state.ui_state.bookmarks.get(i))
                 .map(|(_, reading_state)| reading_state.row)
         };
         if let Some(row) = row {
@@ -4939,8 +5153,8 @@ impl Reader {
             let state = self.state.borrow();
             state
                 .ui_state
-                .library_items
-                .get(state.ui_state.library_selected_index)
+                .selected_list_index(state.ui_state.library_selected_index)
+                .and_then(|i| state.ui_state.library_items.get(i))
                 .map(|item| item.filepath.clone())
         };
         if let Some(path) = filepath {
@@ -4961,8 +5175,8 @@ impl Reader {
             let state = self.state.borrow();
             state
                 .ui_state
-                .library_items
-                .get(state.ui_state.library_selected_index)
+                .selected_list_index(state.ui_state.library_selected_index)
+                .and_then(|i| state.ui_state.library_items.get(i))
                 .map(|item| item.filepath.clone())
         };
         if let Some(path) = filepath {

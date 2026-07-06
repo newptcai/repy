@@ -2,7 +2,7 @@ use ratatui::{
     Frame,
     layout::Rect,
     style::Style,
-    text::Line,
+    text::{Line, Span},
     widgets::{Block, Borders, Clear, List, ListItem, Paragraph},
 };
 
@@ -16,6 +16,7 @@ impl LibraryWindow {
         area: Rect,
         entries: &[String],
         selected_index: usize,
+        filter: Option<&str>,
         theme: &Theme,
     ) {
         let popup_area = Rect::new(
@@ -27,24 +28,34 @@ impl LibraryWindow {
 
         frame.render_widget(Clear, popup_area);
 
+        let make_block = || {
+            let mut block = Block::default()
+                .title("Library")
+                .borders(Borders::ALL)
+                .style(theme.base_style());
+            if let Some(filter) = filter {
+                block = block.title_bottom(Span::styled(
+                    filter.to_string(),
+                    Style::default().fg(theme.warning_fg),
+                ));
+            }
+            block
+        };
+
         if entries.is_empty() {
-            let paragraph = Paragraph::new("No history yet")
+            let message = if filter.is_some() {
+                "No matches"
+            } else {
+                "No history yet"
+            };
+            let paragraph = Paragraph::new(message)
                 .style(theme.base_style().fg(theme.muted_fg))
-                .block(
-                    Block::default()
-                        .title("Library")
-                        .borders(Borders::ALL)
-                        .style(theme.base_style()),
-                );
+                .block(make_block());
             frame.render_widget(paragraph, popup_area);
             return;
         }
 
-        let border_block = Block::default()
-            .title("Library")
-            .borders(Borders::ALL)
-            .style(theme.base_style());
-        frame.render_widget(border_block, popup_area);
+        frame.render_widget(make_block(), popup_area);
 
         let inner_area = Rect {
             x: popup_area.x + 1,

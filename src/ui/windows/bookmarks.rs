@@ -2,7 +2,7 @@ use ratatui::{
     Frame,
     layout::Rect,
     style::{Modifier, Style},
-    text::Line,
+    text::{Line, Span},
     widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph},
 };
 
@@ -19,6 +19,7 @@ impl BookmarksWindow {
         entries: &[String],
         selected_index: usize,
         status: Option<&str>,
+        filter: Option<&str>,
         theme: &Theme,
     ) {
         let popup_area = Rect::new(
@@ -30,24 +31,34 @@ impl BookmarksWindow {
 
         frame.render_widget(Clear, popup_area);
 
+        let make_block = || {
+            let mut block = Block::default()
+                .title(title)
+                .borders(Borders::ALL)
+                .style(theme.base_style());
+            if let Some(filter) = filter {
+                block = block.title_bottom(Span::styled(
+                    filter.to_string(),
+                    Style::default().fg(theme.warning_fg),
+                ));
+            }
+            block
+        };
+
         if entries.is_empty() {
-            let paragraph = Paragraph::new(empty_message)
+            let message = if filter.is_some() {
+                "No matches"
+            } else {
+                empty_message
+            };
+            let paragraph = Paragraph::new(message)
                 .style(theme.base_style().fg(theme.muted_fg))
-                .block(
-                    Block::default()
-                        .title(title)
-                        .borders(Borders::ALL)
-                        .style(theme.base_style()),
-                );
+                .block(make_block());
             frame.render_widget(paragraph, popup_area);
             return;
         }
 
-        let block = Block::default()
-            .title(title)
-            .borders(Borders::ALL)
-            .style(theme.base_style());
-        frame.render_widget(block, popup_area);
+        frame.render_widget(make_block(), popup_area);
 
         let mut list_area = Rect {
             x: popup_area.x + 1,

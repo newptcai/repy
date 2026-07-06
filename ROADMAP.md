@@ -18,7 +18,7 @@ Effort estimates: S = small, M = medium, L = large.
 2. **Fix image MIME + cover extraction** (S) — ✅ done: manifest-based MIME with extension fallback; `get_cover()` on the `Ebook` trait. Prerequisite for Phase 3.
 3. ~~**User-definable themes**~~ — dropped by decision (2026-07): built-in themes only. A sepia/paper theme was added to the built-in cycle instead. More built-ins (Solarized, Nord, Catppuccin) remain possible as S-effort additions to `src/theme.rs`.
 4. **Search upgrades** (M) — ✅ done: distinct current-hit style, `match N/M` counter, persisted search history (Up/Down in prompt, capped at 100), incremental search with Esc-restore.
-5. **Fuzzy filtering in TOC/library/bookmarks/highlights windows** (S-M) — `/` to filter, crate `nucleo-matcher`. Shared widget in `src/ui/windows/mod.rs`.
+5. **Fuzzy filtering in TOC/library/bookmarks/highlights windows** (S-M) — ✅ done: `/` filters with `nucleo-matcher`; shared helper in `src/ui/windows/mod.rs`; Esc clears, Enter acts on the selection.
 6. **Highlight colors, Markdown export, margin indicators** (M) — mostly done: five-color highlights with `C` cycling ✅, `--export-highlights --format md` ✅. Remaining: 1-col margin gutter with colored `▎` on highlighted rows (`src/ui/board.rs`).
 7. **Mouse + line-number wiring** (S-M) — gutter width fix ✅. Remaining: honor `mouse_support` (wheel scroll, click-to-follow/select; only enable capture when the setting is on so native terminal copy still works).
 8. **Double-spread: implement minimally or delete** (M) — two columns at wide terminals (left = rows `k..k+h`, right = `k+h..k+2h`); visual mode/TTS temporarily drop to single column. If the compromise proves ugly, delete the settings instead of leaving them half-wired.

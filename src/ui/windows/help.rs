@@ -50,6 +50,7 @@ const HELP_TEXT: &[&str] = &[
     "   i                 Metadata",
     "   r                 Library (History)",
     "   s                 Settings",
+    "   /                 Fuzzy-filter list windows (Esc clears, Enter picks)",
     " Text-to-Speech:",
     "   !                 Toggle TTS (Read Aloud)",
     " Cursor Mode:",

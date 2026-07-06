@@ -18,30 +18,45 @@ impl TocWindow {
         entries: &[TocEntry],
         selected_index: usize,
         metadata: Option<&BookMetadata>,
+        filter: Option<&str>,
         theme: &Theme,
     ) {
         let popup_area = super::centered_popup_area(area, 60, 70);
 
         frame.render_widget(Clear, popup_area);
 
+        let make_block = || {
+            let mut block = Block::default()
+                .title("Table of Contents")
+                .borders(Borders::ALL)
+                .style(theme.base_style());
+            if let Some(filter) = filter {
+                block = block.title_bottom(Span::styled(
+                    filter.to_string(),
+                    Style::default().fg(theme.warning_fg),
+                ));
+            }
+            block
+        };
+
         if entries.is_empty() {
-            let empty_text = vec![
-                Line::from("No table of contents available"),
-                Line::from(""),
-                Line::from(Span::styled(
+            let message = if filter.is_some() {
+                "No matches"
+            } else {
+                "No table of contents available"
+            };
+            let mut empty_text = vec![Line::from(message)];
+            if filter.is_none() {
+                empty_text.push(Line::from(""));
+                empty_text.push(Line::from(Span::styled(
                     "Press any key to close",
                     Style::default().add_modifier(Modifier::ITALIC),
-                )),
-            ];
+                )));
+            }
 
             let paragraph = Paragraph::new(empty_text)
                 .style(theme.base_style().fg(theme.muted_fg))
-                .block(
-                    Block::default()
-                        .title("Table of Contents")
-                        .borders(Borders::ALL)
-                        .style(theme.base_style()),
-                );
+                .block(make_block());
 
             frame.render_widget(paragraph, popup_area);
             return;
@@ -90,12 +105,7 @@ impl TocWindow {
 
         let paragraph = Paragraph::new(lines)
             .style(theme.base_style())
-            .block(
-                Block::default()
-                    .title("Table of Contents")
-                    .borders(Borders::ALL)
-                    .style(theme.base_style()),
-            )
+            .block(make_block())
             .scroll((scroll_offset as u16, 0));
 
         frame.render_widget(paragraph, popup_area);
