@@ -1,23 +1,6 @@
 use crate::theme::ColorTheme;
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, PartialEq, Copy, Serialize, Deserialize)]
-pub struct DoubleSpreadPadding {
-    pub left: u16,
-    pub middle: u16,
-    pub right: u16,
-}
-
-impl Default for DoubleSpreadPadding {
-    fn default() -> Self {
-        Self {
-            left: 10,
-            middle: 7,
-            right: 10,
-        }
-    }
-}
-
 pub const VIEWER_PRESET_LIST: &[&str] = &[
     "feh",
     "imv",
@@ -41,7 +24,6 @@ pub struct Settings {
     pub show_progress_indicator: bool,
     pub page_scroll_animation: bool,
     pub mouse_support: bool,
-    pub start_with_double_spread: bool,
     pub color_theme: ColorTheme,
     pub seamless_between_chapters: bool,
     pub preferred_tts_engine: Option<String>,
@@ -58,7 +40,6 @@ impl Settings {
         self.show_progress_indicator = other.show_progress_indicator;
         self.page_scroll_animation = other.page_scroll_animation;
         self.mouse_support = other.mouse_support;
-        self.start_with_double_spread = other.start_with_double_spread;
         self.color_theme = other.color_theme;
         self.seamless_between_chapters = other.seamless_between_chapters;
         if other.preferred_tts_engine.is_some() {
@@ -81,7 +62,6 @@ impl Default for Settings {
             show_progress_indicator: true,
             page_scroll_animation: true,
             mouse_support: false,
-            start_with_double_spread: false,
             color_theme: ColorTheme::Default,
             seamless_between_chapters: false,
             preferred_tts_engine: Some("purr".to_string()),
@@ -125,7 +105,6 @@ pub struct CfgDefaultKeymaps {
     pub help: String,
     pub switch_color: String,
     pub tts_toggle: String,
-    pub double_spread_toggle: String,
     pub library: String,
 }
 
@@ -161,7 +140,6 @@ impl Default for CfgDefaultKeymaps {
             help: "?".to_string(),
             switch_color: "c".to_string(),
             tts_toggle: "!".to_string(),
-            double_spread_toggle: "D".to_string(),
             library: "R".to_string(),
         }
     }
@@ -198,7 +176,6 @@ impl CfgDefaultKeymaps {
         self.help = other.help;
         self.switch_color = other.switch_color;
         self.tts_toggle = other.tts_toggle;
-        self.double_spread_toggle = other.double_spread_toggle;
         self.library = other.library;
     }
 }
@@ -239,7 +216,6 @@ pub struct Keymap {
     pub add_bookmark: Vec<u16>,
     pub beginning_of_ch: Vec<u16>,
     pub define_word: Vec<u16>,
-    pub double_spread_toggle: Vec<u16>,
     pub end_of_ch: Vec<u16>,
     pub enlarge: Vec<u16>,
     pub follow: Vec<u16>,
@@ -271,22 +247,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_double_spread_padding_default() {
-        let padding = DoubleSpreadPadding::default();
-        assert_eq!(padding.left, 10);
-        assert_eq!(padding.middle, 7);
-        assert_eq!(padding.right, 10);
-    }
-
-    #[test]
-    fn test_double_spread_padding_serialization() {
-        let padding = DoubleSpreadPadding::default();
-        let serialized = serde_json::to_string(&padding).unwrap();
-        let deserialized: DoubleSpreadPadding = serde_json::from_str(&serialized).unwrap();
-        assert_eq!(padding, deserialized);
-    }
-
-    #[test]
     fn test_settings_default() {
         let settings = Settings::default();
         assert_eq!(settings.default_viewer, "auto");
@@ -294,7 +254,6 @@ mod tests {
         assert!(settings.show_progress_indicator);
         assert!(settings.page_scroll_animation);
         assert!(!settings.mouse_support);
-        assert!(!settings.start_with_double_spread);
         assert_eq!(settings.color_theme, ColorTheme::Default);
         assert!(!settings.seamless_between_chapters);
         assert_eq!(settings.preferred_tts_engine, Some("purr".to_string()));
@@ -426,7 +385,6 @@ mod tests {
         assert_eq!(keymaps.help, "?");
         assert_eq!(keymaps.switch_color, "c");
         assert_eq!(keymaps.tts_toggle, "!");
-        assert_eq!(keymaps.double_spread_toggle, "D");
         assert_eq!(keymaps.library, "R");
     }
 

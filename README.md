@@ -292,7 +292,6 @@ Example `configuration.json`:
     "show_progress_indicator": true,
     "page_scroll_animation": true,
     "mouse_support": false,
-    "start_with_double_spread": false,
     "seamless_between_chapters": true,
     "color_theme": "Default",
     "preferred_tts_engine": "purr",

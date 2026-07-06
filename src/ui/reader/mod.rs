@@ -531,7 +531,6 @@ enum SettingItem {
     MouseSupport,
     PageScrollAnimation,
     ShowProgressIndicator,
-    StartWithDoubleSpread,
     SeamlessBetweenChapters,
     DictionaryClient,
     TtsEngine,
@@ -547,7 +546,6 @@ impl SettingItem {
             SettingItem::MouseSupport,
             SettingItem::PageScrollAnimation,
             SettingItem::ShowProgressIndicator,
-            SettingItem::StartWithDoubleSpread,
             SettingItem::SeamlessBetweenChapters,
             SettingItem::DictionaryClient,
             SettingItem::TtsEngine,
@@ -3174,12 +3172,6 @@ impl Reader {
                         settings.show_progress_indicator
                     )
                 }
-                SettingItem::StartWithDoubleSpread => {
-                    format!(
-                        "Start with double spread: {}",
-                        settings.start_with_double_spread
-                    )
-                }
                 SettingItem::SeamlessBetweenChapters => {
                     format!(
                         "Seamless between chapters: {}",
@@ -5399,10 +5391,6 @@ impl Reader {
             SettingItem::ShowProgressIndicator => {
                 state.config.settings.show_progress_indicator =
                     !state.config.settings.show_progress_indicator;
-            }
-            SettingItem::StartWithDoubleSpread => {
-                state.config.settings.start_with_double_spread =
-                    !state.config.settings.start_with_double_spread;
             }
             SettingItem::SeamlessBetweenChapters => {
                 state.config.settings.seamless_between_chapters =

@@ -21,7 +21,7 @@ Effort estimates: S = small, M = medium, L = large.
 5. **Fuzzy filtering in TOC/library/bookmarks/highlights windows** (S-M) — ✅ done: `/` filters with `nucleo-matcher`; shared helper in `src/ui/windows/mod.rs`; Esc clears, Enter acts on the selection.
 6. **Highlight colors, Markdown export, margin indicators** (M) — mostly done: five-color highlights with `C` cycling ✅, `--export-highlights --format md` ✅. Remaining: 1-col margin gutter with colored `▎` on highlighted rows (`src/ui/board.rs`).
 7. **Mouse + line-number wiring** (S-M) — ✅ done: gutter width fix; `mouse_support` honored (capture only when on, live toggle in Settings, wheel scroll everywhere, click-to-follow links in the reader).
-8. **Double-spread: implement minimally or delete** (M) — two columns at wide terminals (left = rows `k..k+h`, right = `k+h..k+2h`); visual mode/TTS temporarily drop to single column. If the compromise proves ugly, delete the settings instead of leaving them half-wired.
+8. ~~**Double-spread: implement minimally or delete**~~ — resolved by deletion (2026-07): the half-wired settings (`start_with_double_spread`, `double_spread_toggle`, `DoubleSpreadPadding`) were removed. A real two-column mode would perturb the row-keyed coordinate system (visual mode, TTS, highlights, search) for modest value in a TUI; can be revisited as its own project if ever wanted.
 
 ## Phase 2 — Data layer: statistics, persistence, library
 
