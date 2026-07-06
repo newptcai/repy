@@ -10,7 +10,9 @@ use std::sync::LazyLock;
 use std::time::{Duration, Instant};
 
 use chrono::Local;
-use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use crossterm::event::{
+    Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+};
 use ratatui::{
     Frame, Terminal,
     backend::CrosstermBackend,
@@ -1223,9 +1225,13 @@ impl Reader {
         crossterm::execute!(
             io::stdout(),
             crossterm::terminal::EnterAlternateScreen,
-            crossterm::event::EnableMouseCapture,
             crossterm::event::EnableBracketedPaste
         )?;
+        // Capture the mouse only when the setting is on, so that native
+        // terminal selection/copy keeps working otherwise.
+        if self.state.borrow().config.settings.mouse_support {
+            crossterm::execute!(io::stdout(), crossterm::event::EnableMouseCapture)?;
+        }
 
         self.terminal.clear()?;
         self.terminal.hide_cursor()?;
@@ -1325,6 +1331,11 @@ impl Reader {
                             == WindowType::HighlightCommentEditor
                         {
                             self.highlight_comment_insert(&text);
+                        }
+                    }
+                    Event::Mouse(mouse) => {
+                        if self.state.borrow().config.settings.mouse_support {
+                            self.handle_mouse_event(mouse)?;
                         }
                     }
                     Event::Resize(_, _) => {
@@ -2151,6 +2162,67 @@ impl Reader {
 
     /// Handle common list navigation keys (Esc/q to close, j/k to move selection).
     /// Returns `true` if the key was consumed, `false` if it should be handled by the caller.
+    /// Handle mouse input. Wheel ticks are translated into Up/Down key
+    /// presses so every window reacts the same way it does to the keyboard
+    /// (the reader scrolls, list windows move their selection, scrollable
+    /// popups scroll). A left click in the reader follows the link on the
+    /// clicked line, if any.
+    fn handle_mouse_event(&mut self, mouse: MouseEvent) -> eyre::Result<()> {
+        let active_window = self.state.borrow().ui_state.active_window.clone();
+        let synthesize = |code: KeyCode| KeyEvent::new(code, KeyModifiers::NONE);
+        match mouse.kind {
+            MouseEventKind::ScrollDown | MouseEventKind::ScrollUp => {
+                let code = if mouse.kind == MouseEventKind::ScrollDown {
+                    KeyCode::Down
+                } else {
+                    KeyCode::Up
+                };
+                // Scroll several lines per tick in the reading view; one
+                // selection step per tick inside windows.
+                let steps = if active_window == WindowType::Reader {
+                    3
+                } else {
+                    1
+                };
+                for _ in 0..steps {
+                    self.handle_key_event(synthesize(code))?;
+                }
+            }
+            MouseEventKind::Down(MouseButton::Left) if active_window == WindowType::Reader => {
+                self.handle_reader_click(mouse.row)?;
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    /// Follow the link on the clicked reader line. With several links on
+    /// the same line the links window opens instead, since wrapped text
+    /// carries no per-column link information.
+    fn handle_reader_click(&mut self, screen_row: u16) -> eyre::Result<()> {
+        // Mirror render_reader_static's vertical layout: a 1-row top bar
+        // plus a 2-row gap when the top bar is shown.
+        let content_top: u16 = if self.state.borrow().config.settings.show_top_bar {
+            3
+        } else {
+            0
+        };
+        if screen_row < content_top {
+            return Ok(());
+        }
+        let line = self.state.borrow().reading_state.row + (screen_row - content_top) as usize;
+        let (visible_start, visible_end) = self.visible_line_range();
+        if line < visible_start || line >= visible_end {
+            return Ok(());
+        }
+        let mut links = self.board.links_in_range(line, line + 1);
+        match links.len() {
+            0 => Ok(()),
+            1 => self.follow_link_entry(links.remove(0)),
+            _ => self.open_links_window(),
+        }
+    }
+
     fn handle_list_nav(
         &self,
         key: &KeyEvent,
@@ -5313,6 +5385,12 @@ impl Reader {
             }
             SettingItem::MouseSupport => {
                 state.config.settings.mouse_support = !state.config.settings.mouse_support;
+                // Apply immediately so the toggle works without a restart.
+                if state.config.settings.mouse_support {
+                    crossterm::execute!(io::stdout(), crossterm::event::EnableMouseCapture)?;
+                } else {
+                    crossterm::execute!(io::stdout(), crossterm::event::DisableMouseCapture)?;
+                }
             }
             SettingItem::PageScrollAnimation => {
                 state.config.settings.page_scroll_animation =

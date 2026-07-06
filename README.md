@@ -26,8 +26,7 @@ library management, two-phase cursor/selection modes, image viewing, link/footno
 Wikipedia lookup, persistent highlights/comments, highlight export, and TTS (text-to-speech) all work. Text is intelligently wrapped and hyphenated.
 Reading state and preferences are persisted per-book.
 
-**Not yet implemented:** mouse support and additional ebook formats beyond
-EPUB.
+**Not yet implemented:** additional ebook formats beyond EPUB.
 
 See [to-do.md](to-do.md) for detailed feature status and roadmap.
 
@@ -315,6 +314,19 @@ Example `configuration.json`:
 
 You can modify any setting or keybinding by editing this file. Changes take effect
 on next restart.
+
+### Mouse support
+
+Set `"mouse_support": true` (or toggle it in the Settings window, where it
+applies immediately) to enable the mouse:
+
+- The wheel scrolls the reading view (3 lines per tick) and moves the
+  selection in list windows and scrollable popups.
+- Left-clicking a line that contains a link follows it; if the line has
+  several links, the links window opens instead.
+
+When `mouse_support` is off (the default), the terminal keeps its native
+mouse behavior, so you can select and copy text the usual way.
 
 ## Database and Reading State
 
