@@ -15,7 +15,7 @@ use crossterm::event::{
 };
 use ratatui::{
     Frame, Terminal,
-    backend::CrosstermBackend,
+    backend::{Backend, CrosstermBackend},
     layout::{Constraint, Layout, Rect},
     style::Style,
     text::Line,
@@ -612,9 +612,9 @@ enum TtsWorkerEvent {
 }
 
 /// Main reader application struct
-pub struct Reader {
+pub struct Reader<B: Backend = CrosstermBackend<io::Stdout>> {
     state: Rc<RefCell<ApplicationState>>,
-    terminal: Terminal<CrosstermBackend<io::Stdout>>,
+    terminal: Terminal<B>,
     db_state: State,
     board: Board,
     clipboard: Clipboard,
@@ -652,6 +652,16 @@ pub struct Reader {
 }
 
 impl Reader {
+    /// Create a new Reader instance
+    pub fn new(config: Config) -> eyre::Result<Self> {
+        Self::with_backend(config, CrosstermBackend::new(io::stdout()), State::new()?)
+    }
+}
+
+impl<B: Backend> Reader<B>
+where
+    B::Error: std::error::Error + Send + Sync + 'static,
+{
     fn split_dictionary_command_template(template: &str) -> eyre::Result<Vec<(String, bool)>> {
         let mut args = Vec::new();
         let mut current = String::new();
@@ -1007,13 +1017,9 @@ impl Reader {
         }
     }
 
-    /// Create a new Reader instance
-    pub fn new(config: Config) -> eyre::Result<Self> {
-        let backend = CrosstermBackend::new(io::stdout());
+    /// Build a Reader on top of an arbitrary backend, e.g. `TestBackend` in tests.
+    fn with_backend(config: Config, backend: B, db_state: State) -> eyre::Result<Self> {
         let terminal = Terminal::new(backend)?;
-
-        // Initialize database state
-        let db_state = State::new()?;
 
         let app_state = ApplicationState::new(config);
 
@@ -1041,6 +1047,16 @@ impl Reader {
             tts_current_engine: String::new(),
             tts_temp_dir: None,
         })
+    }
+
+    /// Extract the current UI state into a single frame draw.
+    fn draw(&mut self) -> eyre::Result<()> {
+        let state = self.state.clone();
+        self.terminal.draw(|f| {
+            let state_ref = state.borrow();
+            Self::render_static(f, &state_ref, &self.board, &self.content_start_rows);
+        })?;
+        Ok(())
     }
 
     /// Load the most recently read ebook, if any, using the database
@@ -1215,7 +1231,9 @@ impl Reader {
         }
         Ok(())
     }
+}
 
+impl Reader {
     /// Run the main application loop
     pub fn run(&mut self) -> eyre::Result<()> {
         // Initialize terminal
@@ -1279,13 +1297,7 @@ impl Reader {
             }
 
             // Render UI
-            {
-                let state = self.state.clone();
-                self.terminal.draw(|f| {
-                    let state_ref = state.borrow();
-                    Self::render_static(f, &state_ref, &self.board, &self.content_start_rows);
-                })?;
-            }
+            self.draw()?;
 
             // Poll with timeout so we can re-render when messages expire or for animation
             let poll_timeout = {
@@ -1383,7 +1395,12 @@ impl Reader {
 
         Ok(())
     }
+}
 
+impl<B: Backend> Reader<B>
+where
+    B::Error: std::error::Error + Send + Sync + 'static,
+{
     /// Handle keyboard input events
     fn handle_key_event(&mut self, key: KeyEvent) -> eyre::Result<()> {
         {
@@ -6878,13 +6895,7 @@ impl Reader {
         }
 
         // Redraw before starting synthesis
-        {
-            let state = self.state.clone();
-            self.terminal.draw(|f| {
-                let state_ref = state.borrow();
-                Self::render_static(f, &state_ref, &self.board, &self.content_start_rows);
-            })?;
-        }
+        self.draw()?;
 
         let engine = self.tts_current_engine.clone();
 
@@ -7128,6 +7139,11 @@ mod tests {
     use std::thread;
     use std::time::Duration;
 
+    /// Alias pinning the default backend so associated-function calls like
+    /// `Reader::foo()` don't need turbofish (the default type param isn't
+    /// inferred for those).
+    type TestReader = Reader<CrosstermBackend<std::io::Stdout>>;
+
     fn make_test_reader(text_lines: Vec<String>) -> Reader {
         let config =
             Config::with_settings(Settings::default(), CfgDefaultKeymaps::default()).unwrap();
@@ -7274,14 +7290,16 @@ mod tests {
 
     #[test]
     fn resolve_relative_href_joins_base_dir() {
-        let resolved =
-            Reader::resolve_relative_href("chapter007.xhtml", Some("OEBPS/Text/chapter001.xhtml"));
+        let resolved = TestReader::resolve_relative_href(
+            "chapter007.xhtml",
+            Some("OEBPS/Text/chapter001.xhtml"),
+        );
         assert_eq!(resolved, Some("OEBPS/Text/chapter007.xhtml".to_string()));
     }
 
     #[test]
     fn resolve_relative_href_handles_parent_dirs() {
-        let resolved = Reader::resolve_relative_href(
+        let resolved = TestReader::resolve_relative_href(
             "../Images/cover.jpg",
             Some("OEBPS/Text/chapter001.xhtml"),
         );
@@ -7290,20 +7308,21 @@ mod tests {
 
     #[test]
     fn resolve_relative_href_strips_leading_slash() {
-        let resolved = Reader::resolve_relative_href("/Text/chapter007.xhtml", None);
+        let resolved = TestReader::resolve_relative_href("/Text/chapter007.xhtml", None);
         assert_eq!(resolved, Some("Text/chapter007.xhtml".to_string()));
     }
 
     #[test]
     fn build_dictionary_command_replaces_placeholder() {
-        let (program, args) = Reader::build_dictionary_command("dict -wn \"%q\"", "apple").unwrap();
+        let (program, args) =
+            TestReader::build_dictionary_command("dict -wn \"%q\"", "apple").unwrap();
         assert_eq!(program, "dict");
         assert_eq!(args, vec!["-wn".to_string(), "apple".to_string()]);
     }
 
     #[test]
     fn build_dictionary_command_appends_query_without_placeholder() {
-        let (program, args) = Reader::build_dictionary_command("dict -wn", "apple").unwrap();
+        let (program, args) = TestReader::build_dictionary_command("dict -wn", "apple").unwrap();
         assert_eq!(program, "dict");
         assert_eq!(args, vec!["-wn".to_string(), "apple".to_string()]);
     }
@@ -7313,7 +7332,7 @@ mod tests {
         // Current behavior: if query contains quotes, they are passed as part of the argument.
         // This is safe because we don't use shell=True.
         let (program, args) =
-            Reader::build_dictionary_command("tool --arg=%q", "word \"with\" quotes").unwrap();
+            TestReader::build_dictionary_command("tool --arg=%q", "word \"with\" quotes").unwrap();
         assert_eq!(program, "tool");
         assert_eq!(args, vec!["--arg=word \"with\" quotes".to_string()]);
     }
@@ -7321,7 +7340,7 @@ mod tests {
     #[test]
     fn build_dictionary_command_escapes_quotes_if_wrapped_in_template() {
         let (program, args) =
-            Reader::build_dictionary_command("sh -c \"dict %q\"", "a\"b").unwrap();
+            TestReader::build_dictionary_command("sh -c \"dict %q\"", "a\"b").unwrap();
         assert_eq!(program, "sh");
         assert_eq!(args, vec!["-c".to_string(), "dict a\\\"b".to_string()]);
     }
@@ -7340,7 +7359,7 @@ mod tests {
           }
         }"#;
         let parsed: WikipediaSummaryResponse = serde_json::from_str(body).unwrap();
-        let result = Reader::parse_wikipedia_summary_response(&parsed, "simple", "Rust")
+        let result = TestReader::parse_wikipedia_summary_response(&parsed, "simple", "Rust")
             .unwrap()
             .unwrap();
         assert_eq!(result.url, "https://simple.wikipedia.org/wiki/Rust");
@@ -7368,7 +7387,7 @@ mod tests {
         }"#;
         let parsed: WikipediaSummaryResponse = serde_json::from_str(body).unwrap();
         let result =
-            Reader::parse_wikipedia_summary_response(&parsed, "simple", "NoSuchTerm").unwrap();
+            TestReader::parse_wikipedia_summary_response(&parsed, "simple", "NoSuchTerm").unwrap();
         assert!(result.is_none());
     }
 
@@ -7383,7 +7402,7 @@ mod tests {
           }
         }"#;
         let parsed: WikipediaSearchResponse = serde_json::from_str(body).unwrap();
-        let titles = Reader::extract_search_titles(parsed);
+        let titles = TestReader::extract_search_titles(parsed);
         assert_eq!(
             titles,
             vec![
@@ -7395,7 +7414,7 @@ mod tests {
 
     #[test]
     fn build_ecosia_search_url_encodes_normalized_query() {
-        let url = Reader::build_ecosia_search_url("rust\nterminal  ui").unwrap();
+        let url = TestReader::build_ecosia_search_url("rust\nterminal  ui").unwrap();
         assert_eq!(url, "https://www.ecosia.org/search?q=rust+terminal+ui");
     }
 
@@ -7425,7 +7444,7 @@ mod tests {
             write_json_response(&mut stream, "200 OK", body);
         });
 
-        let result = Reader::wikipedia_lookup_summary("Rust", &base, Duration::from_secs(2))
+        let result = TestReader::wikipedia_lookup_summary("Rust", &base, Duration::from_secs(2))
             .expect("direct lookup should succeed");
         server.join().unwrap();
 
@@ -7488,8 +7507,9 @@ mod tests {
             write_json_response(&mut stream3, "200 OK", hit);
         });
 
-        let result = Reader::wikipedia_lookup_summary("NoSuchTerm", &base, Duration::from_secs(2))
-            .expect("fallback lookup should succeed");
+        let result =
+            TestReader::wikipedia_lookup_summary("NoSuchTerm", &base, Duration::from_secs(2))
+                .expect("fallback lookup should succeed");
         server.join().unwrap();
 
         assert_eq!(
@@ -7538,7 +7558,7 @@ mod tests {
     #[test]
     fn tts_chunk_matching_handles_unicode_boundaries() {
         let text = "“Well said, friend,” the delighted bhikkhus spoke, and asked, “Is there yet another teaching on how a disciple practices Right View?\u{a0}.\u{a0}.\u{a0}.”";
-        let chunks = Reader::split_into_sentence_chunks(text, 50, 100);
+        let chunks = TestReader::split_into_sentence_chunks(text, 50, 100);
 
         assert!(!chunks.is_empty());
 
@@ -7562,7 +7582,7 @@ mod tests {
     #[test]
     fn tts_chunk_split_respects_quote_and_footnote_sentence_boundaries() {
         let text = "Subhadda asked, “World-Honored One, are the other religious teachers in Magadha and Koshala fully enlightened?” The Buddha knew he had only a short time to live and that answering such a question would be a waste of precious moments. When you have the opportunity to ask a teacher about the Dharma, ask a question that can change your life. The Buddha replied, “Subhadda, it is not important whether they are fully enlightened. The question is whether you want to liberate yourself. If you do, practice the Noble Eightfold Path. Wherever the Noble Eightfold Path is practiced, joy, peace, and insight are there.”[1] The Buddha offered the Eightfold Path in his first Dharma talk, he continued to teach the Eightfold Path for forty-five years, and in his last Dharma talk, spoken to Subhadda, he offered the Noble Eightfold Path. Right View, Right Thinking, Right Speech, Right Action, Right Livelihood, Right Diligence, Right Mindfulness, and Right Concentration.[2]";
-        let chunks = Reader::split_into_sentence_chunks(text, 50, 100);
+        let chunks = TestReader::split_into_sentence_chunks(text, 50, 100);
 
         assert!(
             chunks.iter().any(|chunk| chunk.ends_with("there.”[1]")),
@@ -7578,14 +7598,14 @@ mod tests {
 
     #[test]
     fn tts_target_row_turns_page_when_next_chunk_starts_new_chapter() {
-        let target_row = Reader::tts_target_row_for_chunk(1, 10, 12, 20, false, &[0, 10]);
+        let target_row = TestReader::tts_target_row_for_chunk(1, 10, 12, 20, false, &[0, 10]);
 
         assert_eq!(target_row, 11);
     }
 
     #[test]
     fn tts_target_row_keeps_viewport_when_chunk_is_visible_in_same_chapter() {
-        let target_row = Reader::tts_target_row_for_chunk(11, 12, 13, 20, false, &[0, 10]);
+        let target_row = TestReader::tts_target_row_for_chunk(11, 12, 13, 20, false, &[0, 10]);
 
         assert_eq!(target_row, 11);
     }
@@ -7620,27 +7640,27 @@ mod tests {
     #[test]
     fn visual_search_regex_smartcase_and_escape() {
         // All-lowercase query is case-insensitive (smartcase off).
-        let re = Reader::build_visual_search_regex("foo").unwrap();
+        let re = TestReader::build_visual_search_regex("foo").unwrap();
         assert!(re.is_match("FOO"));
         assert!(re.is_match("foo"));
 
         // Mixed/upper case forces case-sensitive (smartcase on).
-        let re = Reader::build_visual_search_regex("Foo").unwrap();
+        let re = TestReader::build_visual_search_regex("Foo").unwrap();
         assert!(re.is_match("Foo"));
         assert!(!re.is_match("foo"));
 
         // Regex specials are treated literally.
-        let re = Reader::build_visual_search_regex("a.b").unwrap();
+        let re = TestReader::build_visual_search_regex("a.b").unwrap();
         assert!(re.is_match("a.b"));
         assert!(!re.is_match("axb"));
 
         // Spaces match across newlines so wrapped-line queries work.
-        let re = Reader::build_visual_search_regex("foo bar").unwrap();
+        let re = TestReader::build_visual_search_regex("foo bar").unwrap();
         assert!(re.is_match("foo\nbar"));
         assert!(re.is_match("foo  bar"));
 
         // Soft hyphen wraps inserted by the line-wrapper match.
-        let re = Reader::build_visual_search_regex("example").unwrap();
+        let re = TestReader::build_visual_search_regex("example").unwrap();
         assert!(re.is_match("example"));
         assert!(re.is_match("exam-\nple"));
         // But a plain in-line hyphen is not silently matched.
