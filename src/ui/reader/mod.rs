@@ -7667,3 +7667,6 @@ mod tests {
         assert!(!re.is_match("exam-ple"));
     }
 }
+
+#[cfg(test)]
+mod snapshot_tests;

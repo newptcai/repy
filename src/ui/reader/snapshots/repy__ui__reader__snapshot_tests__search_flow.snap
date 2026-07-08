@@ -1,0 +1,28 @@
+---
+source: src/ui/reader/snapshot_tests.rs
+expression: reader.terminal.backend()
+---
+"                  Accessible EPUB 3                    match 1/2 links:18 (u) 2%"
+"                                                                                "
+"                                                                                "
+"     ## Table of Contents                                                       "
+"     1. [Preface]                                                               "
+"     1. [Conventions Used in This Book]                                         "
+"     2. [Using Code Examples]                                                   "
+"     3. [Safari® Books Online]                                                  "
+"     4. [How to Contact Us]                                                     "
+"     5. [Acknowledgments]                                                       "
+"     2. [1. Introduction]                                                       "
+"     1. [The Digital Famine]                                                    "
+"     2. [Accessibility and Usability]                                           "
+"     3. [2. Building a Better EPUB: Fundamental Accessibility]                  "
+"     1. [A Solid Foundation: Structure and Semantics]                           "
+"     1.  [Data Integrity]                                                       "
+"     2.  [Separation of Style]                                                  "
+"     3.  [Semantic Inflection]                                                  "
+"     4.  [Language]                                                             "
+"     5.  [Logical Reading Order]                                                "
+"     6.  [Sections and Headings]                                                "
+"     7.  [Context Changes]                                                      "
+"                                                                                "
+"                                                                                "

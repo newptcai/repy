@@ -1,0 +1,28 @@
+---
+source: src/ui/reader/snapshot_tests.rs
+expression: reader.terminal.backend()
+---
+"  ┌Help (?)──────────────────────────────────────────────────────────────────┐0%"
+"  │ Navigation:                                                              │  "
+"  │   k / Up            Line Up                                              │  "
+"  │   j / Down          Line Down                                            │  "
+"  │   h / Left          Page Up                                              │  "
+"  │   l / Right / Space Page Down                                            │  "
+"  │   Ctrl+u            Half Page Up                                         │  "
+"  │   Ctrl+d            Half Page Down                                       │  "
+"  │   L                 Next Chapter                                         │  "
+"  │   H                 Prev Chapter                                         │  "
+"  │   g                 Chapter Start                                        │  "
+"  │   G                 Chapter End                                          │  "
+"  │   Home              Book Start                                           │  "
+"  │   End               Book End                                             │  "
+"  │ Jump History:                                                            │  "
+"  │   Ctrl+o            Jump Back                                            │  "
+"  │   Ctrl+i/Tab        Jump Forward                                         │  "
+"  │ Search:                                                                  │  "
+"  │   /                 Start Search (matches update as you type)            │  "
+"  │   Up / Down         Recall search history while typing                   │  "
+"  │   Enter             Confirm query; Enter again jumps & closes            │  "
+"  │   n                 Next Hit                                             │  "
+"  │   p / N             Previous Hit                                         │  "
+"  └──────────────────────────────────────────────────────────────────────────┘  "
