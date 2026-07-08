@@ -2,7 +2,7 @@
 source: src/ui/reader/snapshot_tests.rs
 expression: reader.terminal.backend()
 ---
-"                  Accessible EPUB 3                    match 1/2 links:18 (u) 2%"
+"              Accessible EPUB 3               match 1/2 links:18 (u) ~1m left 2%"
 "                                                                                "
 "                                                                                "
 "     ## Table of Contents                                                       "

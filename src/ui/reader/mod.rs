@@ -9,7 +9,7 @@ use std::rc::Rc;
 use std::sync::LazyLock;
 use std::time::{Duration, Instant};
 
-use chrono::Local;
+use chrono::{DateTime, Local, Utc};
 use crossterm::event::{
     Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
 };
@@ -28,8 +28,8 @@ use crate::ebook::{Ebook, Epub, build_chapter_break};
 use crate::logging;
 use crate::models::{
     BookIdentity, BookMetadata, CHAPTER_BREAK_MARKER, Direction as AppDirection, Highlight,
-    HighlightColor, HighlightRange, LibraryItem, LinkEntry, ReadingState, SearchData,
-    TextStructure, TocEntry, WindowType,
+    HighlightColor, HighlightRange, LibraryItem, LinkEntry, ReadingState, ReadingStatistics,
+    SearchData, TextStructure, TocEntry, WindowType,
 };
 use crate::settings::DICT_PRESET_LIST;
 use crate::state::State;
@@ -38,13 +38,16 @@ use crate::ui::board::Board;
 use crate::ui::windows::{
     bookmarks::BookmarksWindow, dictionary::DictionaryWindow, fuzzy_filter_indices,
     help::HelpWindow, images::ImagesWindow, library::LibraryWindow, links::LinksWindow,
-    metadata::MetadataWindow, search::SearchWindow, settings::SettingsWindow, toc::TocWindow,
+    metadata::MetadataWindow, search::SearchWindow, settings::SettingsWindow,
+    statistics::StatisticsWindow, toc::TocWindow,
 };
 
 /// Regex to strip textwrap syllable-split hyphenation artifacts from TTS text.
 /// Matches letter + hyphen + whitespace + lowercase letter (e.g. "ex- ample").
 static RE_TTS_HYPHEN: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"([A-Za-z])-\s+([a-z])").unwrap());
+const READING_IDLE_TIMEOUT: Duration = Duration::from_secs(5 * 60);
+const DEFAULT_READING_WPM: f64 = 250.0;
 
 fn previous_grapheme_boundary(text: &str, cursor: usize) -> usize {
     use unicode_segmentation::UnicodeSegmentation;
@@ -214,6 +217,7 @@ pub struct UiState {
     pub show_links: bool,
     pub show_images: bool,
     pub show_metadata: bool,
+    pub show_statistics: bool,
     pub show_dictionary: bool,
     pub show_settings: bool,
     pub show_highlights: bool,
@@ -260,6 +264,7 @@ pub struct UiState {
     pub library_items: Vec<LibraryItem>,
     pub library_selected_index: usize,
     pub metadata: Option<BookMetadata>,
+    pub statistics: ReadingStatistics,
     pub dictionary_word: String,
     pub dictionary_definition: String,
     pub dictionary_client_used: String,
@@ -327,6 +332,7 @@ impl UiState {
             show_links: false,
             show_images: false,
             show_metadata: false,
+            show_statistics: false,
             show_dictionary: false,
             show_settings: false,
             show_highlights: false,
@@ -363,6 +369,7 @@ impl UiState {
             library_items: Vec::new(),
             library_selected_index: 0,
             metadata: None,
+            statistics: ReadingStatistics::default(),
             dictionary_word: String::new(),
             dictionary_definition: String::new(),
             dictionary_client_used: String::new(),
@@ -455,6 +462,7 @@ impl UiState {
                 self.show_links = false;
                 self.show_images = false;
                 self.show_metadata = false;
+                self.show_statistics = false;
                 self.show_dictionary = false;
                 self.show_settings = false;
                 self.show_highlights = false;
@@ -475,6 +483,7 @@ impl UiState {
             WindowType::Links => self.show_links = true,
             WindowType::Images => self.show_images = true,
             WindowType::Metadata => self.show_metadata = true,
+            WindowType::Statistics => self.show_statistics = true,
             WindowType::Dictionary => {
                 self.show_dictionary = true;
                 self.dictionary_scroll_offset = 0;
@@ -620,6 +629,16 @@ struct TtsChunk {
     underline: HashMap<usize, (usize, usize)>,
 }
 
+struct ActiveReadingSession {
+    book_id: String,
+    started_at: DateTime<Utc>,
+    last_activity: Instant,
+    last_activity_at: DateTime<Utc>,
+    last_row: usize,
+    rows: usize,
+    words: usize,
+}
+
 enum TtsWorkerCommand {
     UpdatePlaybackIndex(usize),
     Stop,
@@ -673,6 +692,8 @@ pub struct Reader<B: Backend = CrosstermBackend<io::Stdout>> {
     tts_current_engine: String,
     /// Session-scoped temp dir for generated TTS audio files.
     tts_temp_dir: Option<std::path::PathBuf>,
+    /// Active reading-statistics session, flushed on idle, book switch, or quit.
+    reading_session: Option<ActiveReadingSession>,
 }
 
 impl Reader {
@@ -1070,6 +1091,7 @@ where
             tts_worker_rx: None,
             tts_current_engine: String::new(),
             tts_temp_dir: None,
+            reading_session: None,
         })
     }
 
@@ -1094,6 +1116,8 @@ where
     }
 
     pub fn load_ebook(&mut self, path: &str) -> eyre::Result<()> {
+        self.finish_reading_session(Utc::now())?;
+
         let normalized_path = Self::normalize_ebook_path(path);
         if normalized_path != path {
             self.db_state.reconcile_filepath(path, &normalized_path)?;
@@ -1216,6 +1240,7 @@ where
                 .update_library(epub, reading_state.rel_pctg.or(Some(0.0)))?;
 
             // Now update the UI state
+            let session_book_id = identity.book_id.clone();
             let mut state = self.state.borrow_mut();
             state.reading_state = reading_state;
             state.book_color_theme = book_color_theme;
@@ -1230,7 +1255,10 @@ where
                 state.ui_state.bookmarks = bookmarks;
                 state.ui_state.bookmarks_selected_index = 0;
             }
+            let session_row = state.reading_state.row;
             drop(state);
+            self.start_reading_session(session_book_id, session_row);
+            self.refresh_statistics_snapshot()?;
             self.refresh_highlights()?;
             if alias_conflict {
                 self.state.borrow_mut().ui_state.set_message(
@@ -1242,6 +1270,186 @@ where
         }
 
         Ok(())
+    }
+
+    fn start_reading_session(&mut self, book_id: String, row: usize) {
+        let now = Utc::now();
+        self.reading_session = Some(ActiveReadingSession {
+            book_id,
+            started_at: now,
+            last_activity: Instant::now(),
+            last_activity_at: now,
+            last_row: row,
+            rows: 0,
+            words: 0,
+        });
+    }
+
+    fn finish_reading_session(&mut self, ended_at: DateTime<Utc>) -> eyre::Result<()> {
+        let Some(session) = self.reading_session.take() else {
+            return Ok(());
+        };
+        self.db_state.insert_reading_session(
+            &session.book_id,
+            session.started_at,
+            ended_at.max(session.started_at),
+            session.rows,
+            session.words,
+        )?;
+        self.refresh_statistics_snapshot()?;
+        Ok(())
+    }
+
+    fn close_idle_reading_session(&mut self) -> eyre::Result<()> {
+        let Some(session) = self.reading_session.as_ref() else {
+            return Ok(());
+        };
+        if session.last_activity.elapsed() < READING_IDLE_TIMEOUT {
+            return Ok(());
+        }
+        let idle_allowance = chrono::Duration::from_std(READING_IDLE_TIMEOUT)
+            .unwrap_or_else(|_| chrono::Duration::seconds(0));
+        let ended_at = session.last_activity_at + idle_allowance;
+        self.finish_reading_session(ended_at)
+    }
+
+    fn record_reading_activity(&mut self, previous_row: usize) -> eyre::Result<()> {
+        if self.ebook.is_none() || self.state.borrow().should_quit {
+            return Ok(());
+        }
+
+        let (book_id, current_row) = {
+            let state = self.state.borrow();
+            let Some(identity) = state.ui_state.book_identity.as_ref() else {
+                return Ok(());
+            };
+            (identity.book_id.clone(), state.reading_state.row)
+        };
+
+        if self
+            .reading_session
+            .as_ref()
+            .is_none_or(|session| session.book_id != book_id)
+        {
+            self.start_reading_session(book_id, previous_row);
+        }
+
+        let words = if current_row > previous_row {
+            self.count_words_in_range(previous_row, current_row)
+        } else {
+            0
+        };
+
+        if let Some(session) = self.reading_session.as_mut() {
+            if current_row > previous_row {
+                session.rows += current_row - previous_row;
+                session.words += words;
+            }
+            session.last_row = current_row;
+            session.last_activity = Instant::now();
+            session.last_activity_at = Utc::now();
+        }
+        self.refresh_statistics_snapshot()?;
+        Ok(())
+    }
+
+    fn refresh_statistics_snapshot(&mut self) -> eyre::Result<()> {
+        let book_id = self
+            .state
+            .borrow()
+            .ui_state
+            .book_identity
+            .as_ref()
+            .map(|identity| identity.book_id.clone());
+        let mut stats = self.db_state.get_reading_statistics(book_id.as_deref())?;
+
+        if let Some(session) = self.reading_session.as_ref() {
+            let active_seconds = (Utc::now() - session.started_at).num_seconds().max(0);
+            stats.global.seconds += active_seconds;
+            stats.global.rows += session.rows as i64;
+            stats.global.words += session.words as i64;
+            stats.global.sessions += 1;
+            let (current_streak, longest_streak) = self
+                .db_state
+                .reading_streaks_with_day(Some(session.started_at.date_naive()))?;
+            stats.current_streak_days = current_streak;
+            stats.longest_streak_days = longest_streak;
+            if book_id.as_deref() == Some(session.book_id.as_str()) {
+                stats.book.seconds += active_seconds;
+                stats.book.rows += session.rows as i64;
+                stats.book.words += session.words as i64;
+                stats.book.sessions += 1;
+            }
+        }
+
+        let wpm = stats
+            .book
+            .words_per_minute()
+            .or_else(|| stats.global.words_per_minute())
+            .filter(|wpm| *wpm >= 50.0)
+            .unwrap_or(DEFAULT_READING_WPM);
+        stats.estimated_chapter_minutes_left = self.estimated_minutes_left_for_range(
+            self.current_row(),
+            self.current_chapter_end(),
+            wpm,
+        );
+        stats.estimated_book_minutes_left = self.estimated_minutes_left_for_range(
+            self.current_row(),
+            self.board.total_lines(),
+            wpm,
+        );
+
+        self.state.borrow_mut().ui_state.statistics = stats;
+        Ok(())
+    }
+
+    fn current_row(&self) -> usize {
+        self.state.borrow().reading_state.row
+    }
+
+    fn current_chapter_end(&self) -> usize {
+        let current_row = self.current_row();
+        if let Some(index) = self.content_index_for_row(current_row)
+            && let Some((_start, end)) = self.chapter_bounds_for_index(index)
+        {
+            return end.saturating_add(1);
+        }
+        self.board.total_lines()
+    }
+
+    fn estimated_minutes_left_for_range(
+        &self,
+        start_row: usize,
+        end_row: usize,
+        wpm: f64,
+    ) -> Option<i64> {
+        if end_row <= start_row || wpm <= 0.0 {
+            return None;
+        }
+        let words = self.count_words_in_range(start_row, end_row);
+        if words == 0 {
+            return None;
+        }
+        Some((words as f64 / wpm).ceil() as i64)
+    }
+
+    fn count_words_in_range(&self, start_row: usize, end_row: usize) -> usize {
+        let Some(lines) = self.board.lines() else {
+            return 0;
+        };
+        let end = end_row.min(lines.len());
+        if start_row >= end {
+            return 0;
+        }
+        lines[start_row..end]
+            .iter()
+            .filter(|line| line.as_str() != CHAPTER_BREAK_MARKER)
+            .map(|line| {
+                line.split_whitespace()
+                    .filter(|word| word.chars().any(|ch| ch.is_alphanumeric()))
+                    .count()
+            })
+            .sum()
     }
 
     fn persist_state(&mut self) -> eyre::Result<()> {
@@ -1305,6 +1513,7 @@ impl Reader {
                     state.ui_state.clear_message();
                 }
             }
+            self.close_idle_reading_session()?;
 
             // Check for dictionary results
             if let Some(rx) = &self.dictionary_res_rx {
@@ -1329,7 +1538,9 @@ impl Reader {
                     if let Ok(()) = rx.try_recv() {
                         self.tts_child = None;
                         self.tts_done_rx = None;
+                        let previous_row = self.state.borrow().reading_state.row;
                         self.tts_advance_paragraph()?;
+                        self.record_reading_activity(previous_row)?;
                     }
                 }
             }
@@ -1371,7 +1582,10 @@ impl Reader {
                 match event {
                     Event::Key(key) => {
                         if key.kind == KeyEventKind::Press {
+                            self.close_idle_reading_session()?;
+                            let previous_row = self.state.borrow().reading_state.row;
                             self.handle_key_event(key)?;
+                            self.record_reading_activity(previous_row)?;
                         }
                     }
                     Event::Paste(text) => {
@@ -1383,7 +1597,10 @@ impl Reader {
                     }
                     Event::Mouse(mouse) => {
                         if self.state.borrow().config.settings.mouse_support {
+                            self.close_idle_reading_session()?;
+                            let previous_row = self.state.borrow().reading_state.row;
                             self.handle_mouse_event(mouse)?;
+                            self.record_reading_activity(previous_row)?;
                         }
                     }
                     Event::Resize(_, _) => {
@@ -1413,6 +1630,8 @@ impl Reader {
                 }
             }
         }
+
+        self.finish_reading_session(Utc::now())?;
 
         // Stop TTS if it's still running
         self.stop_tts();
@@ -1501,6 +1720,7 @@ where
             WindowType::Images => self.handle_images_mode_keys(key, repeat_count)?,
             WindowType::Help => self.handle_help_mode_keys(key, repeat_count)?,
             WindowType::Metadata => self.handle_modal_close_keys(key)?,
+            WindowType::Statistics => self.handle_modal_close_keys(key)?,
             WindowType::Dictionary => self.handle_dictionary_mode_keys(key, repeat_count)?,
             WindowType::DictionaryCommandInput => self.handle_dictionary_command_input_keys(key)?,
             _ => self.handle_normal_mode_keys(key, repeat_count)?,
@@ -1714,6 +1934,9 @@ where
             }
             KeyCode::Char('r') => {
                 self.open_library_window()?;
+            }
+            KeyCode::Char('R') => {
+                self.open_statistics_window()?;
             }
             KeyCode::Char('s') => {
                 let mut state = self.state.borrow_mut();
@@ -3188,6 +3411,8 @@ where
                 state.ui_state.metadata.as_ref(),
                 &theme,
             );
+        } else if state.ui_state.show_statistics {
+            StatisticsWindow::render(frame, frame.area(), &state.ui_state.statistics, &theme);
         } else if state.ui_state.active_window == WindowType::DictionaryCommandInput {
             Self::render_dictionary_command_input_static(frame, state, &theme);
         } else if state.ui_state.active_window == WindowType::HighlightCommentEditor {
@@ -3491,6 +3716,12 @@ where
             (None, Some(pct)) => Some(pct),
             (None, None) => None,
         };
+        let time_left_hint = state
+            .ui_state
+            .statistics
+            .estimated_chapter_minutes_left
+            .filter(|minutes| *minutes > 0)
+            .map(|minutes| format!("~{} left", Self::format_minutes_compact(minutes)));
         let search_hint = if state.ui_state.search_results.is_empty() {
             None
         } else {
@@ -3500,10 +3731,16 @@ where
                 state.ui_state.search_results.len()
             ))
         };
-        let right_parts: Vec<String> = [mode_hint, search_hint, link_hint, progress_text]
-            .into_iter()
-            .flatten()
-            .collect();
+        let right_parts: Vec<String> = [
+            mode_hint,
+            search_hint,
+            link_hint,
+            time_left_hint,
+            progress_text,
+        ]
+        .into_iter()
+        .flatten()
+        .collect();
         let right_text = if right_parts.is_empty() {
             None
         } else {
@@ -3554,6 +3791,15 @@ where
         }
 
         buffer.into_iter().collect()
+    }
+
+    fn format_minutes_compact(minutes: i64) -> String {
+        let minutes = minutes.max(0);
+        if minutes >= 60 {
+            format!("{}h{}m", minutes / 60, minutes % 60)
+        } else {
+            format!("{minutes}m")
+        }
     }
 
     fn render_message_static(
@@ -4059,6 +4305,15 @@ where
         let mut state = self.state.borrow_mut();
         state.ui_state.metadata = metadata;
         state.ui_state.open_window(WindowType::Metadata);
+        Ok(())
+    }
+
+    fn open_statistics_window(&mut self) -> eyre::Result<()> {
+        self.refresh_statistics_snapshot()?;
+        self.state
+            .borrow_mut()
+            .ui_state
+            .open_window(WindowType::Statistics);
         Ok(())
     }
 
@@ -7437,6 +7692,7 @@ mod tests {
             tts_worker_rx: None,
             tts_current_engine: String::new(),
             tts_temp_dir: None,
+            reading_session: None,
         }
     }
 

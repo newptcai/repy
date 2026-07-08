@@ -25,7 +25,7 @@ Effort estimates: S = small, M = medium, L = large.
 
 ## Phase 2 — Data layer: statistics, persistence, library
 
-1. **Reading statistics** (M) — *do early: data only becomes valuable once it accumulates.* New `sessions` table (book_id, start/end time, rows, words); idle detection closes sessions (KOReader semantics). New Statistics window: per-book time/words/wpm/est. time left, global totals + streaks; status-bar "~34 min left in chapter". Files: `src/state.rs` (migration), `src/ui/reader/mod.rs` (event hooks), new `src/ui/windows/statistics.rs`.
+1. **Reading statistics** (M) — ✅ done (2026-07): new `reading_sessions` table keyed by stable `book_id`; active sessions close on idle, book switch, and quit; Statistics window shows per-book/global time, rows, words, WPM, estimates, and streaks; the top bar shows estimated chapter time remaining.
 2. **Persist jump history + marks per book** (S) — ✅ done (2026-07): new `jump_history` and `marks` tables; Vim-style `m<c>` / `` `<c> `` marks persist per book; jump history is saved on state persistence.
 3. **Real library** (M-L) — configurable scan directories (`walkdir`), background metadata scan cached in SQLite (path+mtime), sort by recent/title/author/progress, fuzzy filter, distinguish on-disk vs history. Rewrite `src/ui/windows/library.rs`; follow the TTS worker-thread pattern for background scanning.
 4. **Footnote/link popup preview** (S-M) — ✅ done (2026-07): following an internal link opens a ~10-line preview popup (`Enter` jumps, `Esc`/`q` stays), reusing the links-window preview code and covered by TUI snapshots.

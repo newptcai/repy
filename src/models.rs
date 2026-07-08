@@ -33,12 +33,43 @@ pub enum WindowType {
     Metadata,
     Settings,
     Images,
+    Statistics,
     Visual,
     DictionaryCommandInput,
     Highlights,
     HighlightCommentEditor,
     ConfirmDeleteHighlight,
     LinkPreview,
+}
+
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct ReadingStatsTotals {
+    pub seconds: i64,
+    pub rows: i64,
+    pub words: i64,
+    pub sessions: i64,
+}
+
+impl ReadingStatsTotals {
+    pub fn words_per_minute(&self) -> Option<f64> {
+        if self.seconds > 0 && self.words > 0 {
+            Some(self.words as f64 / (self.seconds as f64 / 60.0))
+        } else {
+            None
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct ReadingStatistics {
+    pub book_title: Option<String>,
+    pub book_author: Option<String>,
+    pub book: ReadingStatsTotals,
+    pub global: ReadingStatsTotals,
+    pub current_streak_days: usize,
+    pub longest_streak_days: usize,
+    pub estimated_book_minutes_left: Option<i64>,
+    pub estimated_chapter_minutes_left: Option<i64>,
 }
 
 #[derive(Debug, Clone, PartialEq)]

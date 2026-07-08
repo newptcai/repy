@@ -185,6 +185,7 @@ Press `?` in the TUI to see the help window at any time (`Help (?)`).
   - `j`/`k` to select an entry
   - `Enter` to open the selected book
   - `d` to delete the selected history entry
+- `R` — Reading Statistics
 - `s` — Settings
   - `Enter`: Activate (toggle boolean, input for dictionary client)
   - `r`: Reset to default
@@ -350,15 +351,19 @@ The database file (`states.db`) is located in the same directory as your config 
 - **`jump_history`** and **`marks`** — Per-book jump list and Vim-style marks
   - Jump entries are row lists; marks store a one-character name plus position fields
 
+- **`reading_sessions`** — Reading statistics keyed by stable book identity
+  - `book_id`, start/end time, duration, rows, and words
+
 - **`books`** and **`book_aliases`** — Stable EPUB identity and path aliases
   - Book identity uses metadata plus spine href and content fingerprints, not just file path
 
 - **`highlights`** — Persistent highlight anchors and plain-text comments
   - Stores exact text, prefix/suffix context, approximate normalized offset, color, comment, and resolution status
 
-When you quit (`q` from the reader window), `repy` saves your current position
-and updates the library entry. When you open a book, it restores your last position
-and any stored bookmarks, marks, jump history, highlights, and per-book theme.
+When you quit (`q` from the reader window), `repy` saves your current position,
+updates the library entry, and flushes the active reading-statistics session.
+When you open a book, it restores your last position and any stored bookmarks,
+marks, jump history, highlights, and per-book theme.
 
 ## Contributing
 

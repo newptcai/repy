@@ -51,6 +51,7 @@ const HELP_TEXT: &[&str] = &[
     "   o                 Images on Page",
     "   i                 Metadata",
     "   r                 Library (History)",
+    "   R                 Reading Statistics",
     "   s                 Settings",
     "   /                 Fuzzy-filter list windows (Esc clears, Enter picks)",
     " Text-to-Speech:",

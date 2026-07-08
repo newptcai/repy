@@ -1,7 +1,11 @@
-use crate::models::{BookIdentity, Highlight, LibraryItem, ReadingState};
+use crate::models::{
+    BookIdentity, Highlight, LibraryItem, ReadingState, ReadingStatistics, ReadingStatsTotals,
+};
 use crate::theme::ColorTheme;
+use chrono::{DateTime, NaiveDate, Utc};
 use eyre::Result;
 use rusqlite::{Connection, OptionalExtension, params};
+use std::collections::BTreeSet;
 
 // Re-use the get_app_data_prefix from config.rs
 use crate::config::get_app_data_prefix;
@@ -79,6 +83,17 @@ impl State {
             conn.execute_batch("BEGIN IMMEDIATE TRANSACTION;")?;
             if let Err(err) = Self::migrate_v4(conn).and_then(|_| {
                 conn.pragma_update(None, "user_version", 4)
+                    .map_err(Into::into)
+            }) {
+                let _ = conn.execute_batch("ROLLBACK;");
+                return Err(err);
+            }
+            conn.execute_batch("COMMIT;")?;
+        }
+        if current_version < 5 {
+            conn.execute_batch("BEGIN IMMEDIATE TRANSACTION;")?;
+            if let Err(err) = Self::migrate_v5(conn).and_then(|_| {
+                conn.pragma_update(None, "user_version", 5)
                     .map_err(Into::into)
             }) {
                 let _ = conn.execute_batch("ROLLBACK;");
@@ -227,6 +242,31 @@ impl State {
                 FOREIGN KEY (filepath) REFERENCES reading_states(filepath)
                 ON DELETE CASCADE
             );
+            ",
+        )?;
+        Ok(())
+    }
+
+    fn migrate_v5(conn: &Connection) -> Result<()> {
+        conn.execute_batch(
+            "
+            CREATE TABLE IF NOT EXISTS reading_sessions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                book_id TEXT NOT NULL,
+                started_at TEXT NOT NULL,
+                ended_at TEXT NOT NULL,
+                duration_seconds INTEGER NOT NULL,
+                rows INTEGER NOT NULL DEFAULT 0,
+                words INTEGER NOT NULL DEFAULT 0,
+                FOREIGN KEY (book_id) REFERENCES books(book_id)
+                ON DELETE CASCADE
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_reading_sessions_book_started
+            ON reading_sessions(book_id, started_at);
+
+            CREATE INDEX IF NOT EXISTS idx_reading_sessions_started
+            ON reading_sessions(started_at);
             ",
         )?;
         Ok(())
@@ -663,6 +703,145 @@ impl State {
         Ok(marks)
     }
 
+    pub fn insert_reading_session(
+        &self,
+        book_id: &str,
+        started_at: DateTime<Utc>,
+        ended_at: DateTime<Utc>,
+        rows: usize,
+        words: usize,
+    ) -> Result<()> {
+        let duration_seconds = (ended_at - started_at).num_seconds().max(0);
+        if duration_seconds == 0 && rows == 0 && words == 0 {
+            return Ok(());
+        }
+        self.conn.execute(
+            "INSERT INTO reading_sessions
+             (book_id, started_at, ended_at, duration_seconds, rows, words)
+             VALUES (?, ?, ?, ?, ?, ?)",
+            params![
+                book_id,
+                started_at.to_rfc3339(),
+                ended_at.to_rfc3339(),
+                duration_seconds,
+                rows as i64,
+                words as i64,
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_reading_statistics(&self, book_id: Option<&str>) -> Result<ReadingStatistics> {
+        let book = match book_id {
+            Some(book_id) => self.session_totals(Some(book_id))?,
+            None => ReadingStatsTotals::default(),
+        };
+        let global = self.session_totals(None)?;
+        let (book_title, book_author) = match book_id {
+            Some(book_id) => self
+                .conn
+                .query_row(
+                    "SELECT title, creator FROM books WHERE book_id=?",
+                    params![book_id],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .optional()?
+                .unwrap_or((None, None)),
+            None => (None, None),
+        };
+        let (current_streak_days, longest_streak_days) = self.reading_streaks_with_day(None)?;
+        Ok(ReadingStatistics {
+            book_title,
+            book_author,
+            book,
+            global,
+            current_streak_days,
+            longest_streak_days,
+            estimated_book_minutes_left: None,
+            estimated_chapter_minutes_left: None,
+        })
+    }
+
+    fn session_totals(&self, book_id: Option<&str>) -> Result<ReadingStatsTotals> {
+        let sql = match book_id {
+            Some(_) => {
+                "SELECT COALESCE(SUM(duration_seconds), 0),
+                        COALESCE(SUM(rows), 0),
+                        COALESCE(SUM(words), 0),
+                        COUNT(*)
+                 FROM reading_sessions WHERE book_id=?"
+            }
+            None => {
+                "SELECT COALESCE(SUM(duration_seconds), 0),
+                        COALESCE(SUM(rows), 0),
+                        COALESCE(SUM(words), 0),
+                        COUNT(*)
+                 FROM reading_sessions"
+            }
+        };
+        let mut stmt = self.conn.prepare(sql)?;
+        let totals = match book_id {
+            Some(book_id) => stmt.query_row(params![book_id], |row| {
+                Ok(ReadingStatsTotals {
+                    seconds: row.get(0)?,
+                    rows: row.get(1)?,
+                    words: row.get(2)?,
+                    sessions: row.get(3)?,
+                })
+            })?,
+            None => stmt.query_row([], |row| {
+                Ok(ReadingStatsTotals {
+                    seconds: row.get(0)?,
+                    rows: row.get(1)?,
+                    words: row.get(2)?,
+                    sessions: row.get(3)?,
+                })
+            })?,
+        };
+        Ok(totals)
+    }
+
+    pub fn reading_streaks_with_day(&self, extra_day: Option<NaiveDate>) -> Result<(usize, usize)> {
+        let mut stmt = self.conn.prepare(
+            "SELECT DISTINCT substr(started_at, 1, 10)
+             FROM reading_sessions
+             ORDER BY 1 ASC",
+        )?;
+        let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+        let mut days = BTreeSet::new();
+        for row in rows {
+            if let Ok(day) = NaiveDate::parse_from_str(&row?, "%Y-%m-%d") {
+                days.insert(day);
+            }
+        }
+        if let Some(day) = extra_day {
+            days.insert(day);
+        }
+
+        let mut longest = 0usize;
+        let mut run = 0usize;
+        let mut previous = None;
+        for day in &days {
+            run = if previous.is_some_and(|prev| *day == prev + chrono::Duration::days(1)) {
+                run + 1
+            } else {
+                1
+            };
+            longest = longest.max(run);
+            previous = Some(*day);
+        }
+
+        let today = Utc::now().date_naive();
+        let mut current = 0usize;
+        let mut day = today;
+        while days.contains(&day) {
+            current += 1;
+            day -= chrono::Duration::days(1);
+        }
+
+        Ok((current, longest))
+    }
+
     pub fn update_library(
         &self,
         ebook: &dyn crate::ebook::Ebook,
@@ -1076,7 +1255,7 @@ mod tests {
         let version: i64 = conn
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .unwrap();
-        assert_eq!(version, 4);
+        assert_eq!(version, 5);
     }
 
     fn sample_identity(book_id: &str) -> BookIdentity {
@@ -1227,7 +1406,7 @@ mod tests {
         let version: i64 = conn
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .unwrap();
-        assert_eq!(version, 4);
+        assert_eq!(version, 5);
 
         let row: i64 = conn
             .query_row(
@@ -1250,6 +1429,12 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM marks", [], |row| row.get(0))
             .unwrap();
         assert_eq!(marks_table_count, 0);
+        let sessions_table_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM reading_sessions", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(sessions_table_count, 0);
 
         let state = State { conn };
         let identity = sample_identity("legacy-book");
@@ -1332,6 +1517,47 @@ mod tests {
         );
         assert_eq!(state.get_jump_history(&ebook).unwrap(), (vec![3, 9, 42], 2));
         assert_eq!(state.get_marks(&ebook).unwrap()[0].1.row, 42);
+    }
+
+    #[test]
+    fn test_reading_statistics_sessions_and_streaks() {
+        let state = State::new_for_test();
+        let identity = sample_identity("book-stats");
+        state
+            .upsert_book_identity("/tmp/book.epub", &identity)
+            .unwrap();
+
+        let now = chrono::Utc::now();
+        state
+            .insert_reading_session(
+                &identity.book_id,
+                now - chrono::Duration::days(1) - chrono::Duration::minutes(20),
+                now - chrono::Duration::days(1),
+                10,
+                300,
+            )
+            .unwrap();
+        state
+            .insert_reading_session(
+                &identity.book_id,
+                now - chrono::Duration::minutes(30),
+                now,
+                20,
+                600,
+            )
+            .unwrap();
+
+        let stats = state
+            .get_reading_statistics(Some(&identity.book_id))
+            .unwrap();
+        assert_eq!(stats.book.sessions, 2);
+        assert_eq!(stats.book.seconds, 50 * 60);
+        assert_eq!(stats.book.rows, 30);
+        assert_eq!(stats.book.words, 900);
+        assert_eq!(stats.global.sessions, 2);
+        assert_eq!(stats.current_streak_days, 2);
+        assert!(stats.longest_streak_days >= 2);
+        assert_eq!(stats.book_title.as_deref(), Some("Title"));
     }
 
     #[test]
