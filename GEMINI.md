@@ -175,6 +175,15 @@ When debugging or fixing HTML parsing bugs (links, footnotes, sections, formatti
 3. **Provide explicit `text_lines`** that match what the parser would produce — this avoids coupling to the full `parse_html` pipeline and keeps tests fast and focused.
 4. See `tests/fixtures/footnotes-class-based.html` and the `test_extract_links_filters_class_based_backlinks` / `test_extract_sections_class_based_footnotes` tests for a reference pattern.
 
+#### TUI Snapshot Testing (rendered-output tests)
+`Reader` is generic over the ratatui `Backend` trait, so UI behavior is tested end-to-end in-process with `TestBackend` + `insta` snapshots — no real terminal needed:
+- Tests live in `src/ui/reader/snapshot_tests.rs` (`#[cfg(test)]` submodule of the reader, so private items are accessible); snapshots in `src/ui/reader/snapshots/` (committed).
+- Harness: `Reader::with_backend(config, TestBackend::new(80, 24), State::new_for_test())`, `load_ebook(tests/fixtures/small.epub)`, then feed `KeyEvent`s via `press`/`press_char`/`type_str` helpers and `insta::assert_snapshot!(reader.terminal.backend())`.
+- When a rendering change breaks snapshots intentionally, review and accept with `cargo insta review` (or `INSTA_UPDATE=always cargo test` then inspect the diff).
+- Determinism rules: fixed 80×24 size, fixed fixture, call `ui_state.clear_message()` after actions that queue status toasts (messages can embed absolute paths).
+- Note: `TestBackend`'s Display renders characters only, not colors/styles — assert on structure (cursor position, counters, layout), not highlight colors.
+- Add a snapshot test whenever a new window or reader-mode rendering path is introduced.
+
 ### Dependencies
 - `ratatui` 0.30.0-beta.0: Terminal UI framework
 - `crossterm` 0.29.0: Cross-platform terminal manipulation
