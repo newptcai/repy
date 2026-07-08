@@ -30,6 +30,25 @@ impl ColorTheme {
             ColorTheme::Sepia => "sepia (paper)",
         }
     }
+
+    pub fn storage_name(self) -> &'static str {
+        match self {
+            ColorTheme::Default => "Default",
+            ColorTheme::Dark => "Dark",
+            ColorTheme::Light => "Light",
+            ColorTheme::Sepia => "Sepia",
+        }
+    }
+
+    pub fn from_storage_name(name: &str) -> Option<Self> {
+        match name {
+            "Default" | "default" | "default (terminal)" => Some(ColorTheme::Default),
+            "Dark" | "dark" | "dark (Gruvbox)" => Some(ColorTheme::Dark),
+            "Light" | "light" | "light (Gruvbox)" => Some(ColorTheme::Light),
+            "Sepia" | "sepia" | "sepia (paper)" => Some(ColorTheme::Sepia),
+            _ => None,
+        }
+    }
 }
 
 /// Semantic color palette resolved for the active theme

@@ -37,7 +37,15 @@ impl LinksWindow {
         preview_text.push_str(trimmed);
     }
 
-    fn build_preview_text(entry: &LinkEntry, board: &Board) -> String {
+    pub fn build_preview_text(entry: &LinkEntry, board: &Board) -> String {
+        Self::build_preview_text_with_limit(entry, board, 8)
+    }
+
+    pub fn build_preview_text_with_limit(
+        entry: &LinkEntry,
+        board: &Board,
+        line_limit: usize,
+    ) -> String {
         let Some(target_row) = entry.target_row else {
             return format!("URL: {}", entry.url);
         };
@@ -45,7 +53,7 @@ impl LinksWindow {
         let mut preview_text = String::new();
         let mut lines_shown = 0;
         let mut offset = 0;
-        while lines_shown < 8 {
+        while lines_shown < line_limit {
             let Some(line) = board.get_line(target_row + offset) else {
                 break;
             };

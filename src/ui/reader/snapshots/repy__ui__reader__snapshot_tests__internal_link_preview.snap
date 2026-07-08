@@ -1,0 +1,29 @@
+---
+source: src/ui/reader/snapshot_tests.rs
+assertion_line: 109
+expression: reader.terminal.backend()
+---
+"                  Accessible EPUB 3                    match 1/2 links:18 (u) 2%"
+"                                                                                "
+"                                                                                "
+"     ## Table of Contents                                                       "
+"     1. [Preface]                                                               "
+"     1. [Conv┌ Link Preview: Preface ────────────────────────────┐              "
+"     2. [Usin│## Preface                                         │              "
+"     3. [Safa│                                                   │              "
+"     4. [How │Accessibility is a difficult concept to define.    │              "
+"     5. [Ackn│There’s no single magic bullet solution that will  │              "
+"     2. [1. I│make all content accessible to all people. Perhaps │              "
+"     1. [The │that’s a strange way to preface a book on          │              "
+"     2. [Acce│accessible practices, but it’s also a reality you  │              "
+"     3. [2. B│need to be aware of. Accessible practices change,  │              "
+"     1. [A So│technologies evolve to solve stubborn problems, and│              "
+"     1.  [Dat│the world becomes a more accessible place all the  │              "
+"     2.  [Sep│time.                                              │              "
+"     3.  [Sem│                                                   │              "
+"     4.  [Lan└───────────────────────────────────────────────────┘              "
+"     5.  [Logical Reading Order]                                                "
+"     6.  [Sections and Headings]                                                "
+"     7.  [Context Changes]                                                      "
+"                                                                                "
+"                                                                                "

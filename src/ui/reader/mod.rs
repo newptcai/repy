@@ -33,7 +33,7 @@ use crate::models::{
 };
 use crate::settings::DICT_PRESET_LIST;
 use crate::state::State;
-use crate::theme::Theme;
+use crate::theme::{ColorTheme, Theme};
 use crate::ui::board::Board;
 use crate::ui::windows::{
     bookmarks::BookmarksWindow, dictionary::DictionaryWindow, fuzzy_filter_indices,
@@ -119,6 +119,8 @@ pub struct ApplicationState {
     pub count_prefix: String, // For command repetition (e.g., "5j")
     pub jump_history: Vec<usize>,
     pub jump_history_index: usize,
+    pub marks: HashMap<char, ReadingState>,
+    pub book_color_theme: Option<ColorTheme>,
 }
 
 impl ApplicationState {
@@ -132,11 +134,18 @@ impl ApplicationState {
             count_prefix: String::new(),
             jump_history: Vec::new(),
             jump_history_index: 0,
+            marks: HashMap::new(),
+            book_color_theme: None,
         }
     }
 
     pub fn theme(&self) -> Theme {
-        Theme::for_color_theme(self.config.settings.color_theme)
+        Theme::for_color_theme(self.effective_color_theme())
+    }
+
+    pub fn effective_color_theme(&self) -> ColorTheme {
+        self.book_color_theme
+            .unwrap_or(self.config.settings.color_theme)
     }
 
     pub fn record_jump(&mut self) {
@@ -245,6 +254,7 @@ pub struct UiState {
     pub next_highlight_color: HighlightColor,
     pub links: Vec<LinkEntry>,
     pub links_selected_index: usize,
+    pub link_preview: Option<LinkEntry>,
     pub images_list: Vec<(usize, String)>,
     pub images_selected_index: usize,
     pub library_items: Vec<LibraryItem>,
@@ -282,6 +292,13 @@ pub struct UiState {
     /// keypress becomes the find target. Stores the count typed before the
     /// motion key (e.g. `2` in `2fa`) so it survives the intermediate key.
     pub pending_visual_find: Option<(VisualFindDirection, u32)>,
+    pub pending_mark_command: Option<PendingMarkCommand>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PendingMarkCommand {
+    Set,
+    Jump,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -340,6 +357,7 @@ impl UiState {
             next_highlight_color: HighlightColor::default(),
             links: Vec::new(),
             links_selected_index: 0,
+            link_preview: None,
             images_list: Vec::new(),
             images_selected_index: 0,
             library_items: Vec::new(),
@@ -368,6 +386,7 @@ impl UiState {
             visual_search_matches: Vec::new(),
             visual_search_selected: 0,
             pending_visual_find: None,
+            pending_mark_command: None,
         }
     }
 
@@ -442,6 +461,8 @@ impl UiState {
                 self.visual_anchor = None;
                 self.visual_cursor = None;
                 self.pending_visual_find = None;
+                self.pending_mark_command = None;
+                self.link_preview = None;
             }
             WindowType::Help => {
                 self.show_help = true;
@@ -469,6 +490,9 @@ impl UiState {
             }
             WindowType::ConfirmDeleteHighlight => {
                 self.show_highlights = false;
+            }
+            WindowType::LinkPreview => {
+                self.show_links = false;
             }
         }
     }
@@ -617,7 +641,7 @@ pub struct Reader<B: Backend = CrosstermBackend<io::Stdout>> {
     terminal: Terminal<B>,
     db_state: State,
     board: Board,
-    clipboard: Clipboard,
+    clipboard: Option<Clipboard>,
     ebook: Option<Epub>,
     content_start_rows: Vec<usize>,
     /// Per-chapter text structures for incremental rebuilds
@@ -1028,7 +1052,7 @@ where
             terminal,
             db_state,
             board: Board::new(),
-            clipboard: Clipboard::new()?,
+            clipboard: Clipboard::new().ok(),
             ebook: None,
             content_start_rows: Vec::new(),
             chapter_text_structures: Vec::new(),
@@ -1182,6 +1206,10 @@ where
 
             // Persist the reading state first (required for foreign key constraint)
             self.db_state.set_last_reading_state(epub, &reading_state)?;
+            let book_color_theme = self.db_state.get_book_theme(epub)?;
+            let (jump_history, jump_history_index) = self.db_state.get_jump_history(epub)?;
+            let marks: HashMap<char, ReadingState> =
+                self.db_state.get_marks(epub)?.into_iter().collect();
             // Preserve any existing reading progress rather than resetting it to
             // 0% on open; only a brand-new book starts at 0.0.
             self.db_state
@@ -1190,6 +1218,10 @@ where
             // Now update the UI state
             let mut state = self.state.borrow_mut();
             state.reading_state = reading_state;
+            state.book_color_theme = book_color_theme;
+            state.jump_history = jump_history;
+            state.jump_history_index = jump_history_index.min(state.jump_history.len());
+            state.marks = marks;
             state.ui_state.metadata = Some(epub.get_meta().clone());
             state.ui_state.book_identity = Some(identity);
             state.ui_state.toc_entries = epub.toc_entries().clone();
@@ -1228,6 +1260,12 @@ where
             to_save.rel_pctg = rel_pctg;
             self.db_state.set_last_reading_state(epub, &to_save)?;
             self.db_state.update_library(epub, rel_pctg)?;
+            let (jump_history, jump_history_index) = {
+                let state = self.state.borrow();
+                (state.jump_history.clone(), state.jump_history_index)
+            };
+            self.db_state
+                .set_jump_history(epub, &jump_history, jump_history_index)?;
         }
         Ok(())
     }
@@ -1412,6 +1450,12 @@ where
             }
         }
 
+        if self.handle_pending_mark_key(key)? {
+            let mut state = self.state.borrow_mut();
+            state.count_prefix.clear();
+            return Ok(());
+        }
+
         // Handle count prefix (number repetition)
         // Only capture digits if we are in a mode that supports it (Reader or Visual)
         let active_window = self.state.borrow().ui_state.active_window.clone();
@@ -1449,12 +1493,11 @@ where
             WindowType::Bookmarks => self.handle_bookmarks_mode_keys(key, repeat_count)?,
             WindowType::Highlights => self.handle_highlights_mode_keys(key, repeat_count)?,
             WindowType::HighlightCommentEditor => self.handle_highlight_comment_editor_keys(key)?,
-            WindowType::ConfirmDeleteHighlight => {
-                self.handle_confirm_delete_highlight_keys(key)?
-            }
+            WindowType::ConfirmDeleteHighlight => self.handle_confirm_delete_highlight_keys(key)?,
             WindowType::Library => self.handle_library_mode_keys(key, repeat_count)?,
             WindowType::Settings => self.handle_settings_mode_keys(key, repeat_count)?,
             WindowType::Links => self.handle_links_mode_keys(key, repeat_count)?,
+            WindowType::LinkPreview => self.handle_link_preview_mode_keys(key)?,
             WindowType::Images => self.handle_images_mode_keys(key, repeat_count)?,
             WindowType::Help => self.handle_help_mode_keys(key, repeat_count)?,
             WindowType::Metadata => self.handle_modal_close_keys(key)?,
@@ -1636,6 +1679,22 @@ where
                 self.open_toc_window()?;
             }
             KeyCode::Char('m') => {
+                let mut state = self.state.borrow_mut();
+                state.ui_state.pending_mark_command = Some(PendingMarkCommand::Set);
+                state.ui_state.set_message(
+                    "Mark position: press a mark key".to_string(),
+                    MessageType::Info,
+                );
+            }
+            KeyCode::Char('`') => {
+                let mut state = self.state.borrow_mut();
+                state.ui_state.pending_mark_command = Some(PendingMarkCommand::Jump);
+                state.ui_state.set_message(
+                    "Jump to mark: press a mark key".to_string(),
+                    MessageType::Info,
+                );
+            }
+            KeyCode::Char('B') => {
                 self.open_bookmarks_window()?;
             }
             KeyCode::Char('u') => {
@@ -1686,13 +1745,7 @@ where
 
             // Color theme cycle
             KeyCode::Char('c') => {
-                let mut state = self.state.borrow_mut();
-                let next = state.config.settings.color_theme.next();
-                state.config.settings.color_theme = next;
-                let _ = state.config.save();
-                state
-                    .ui_state
-                    .set_message(format!("Theme: {}", next.name()), MessageType::Info);
+                self.cycle_color_theme()?;
             }
 
             _ => {}
@@ -1707,13 +1760,117 @@ where
     }
 
     fn jump_back(&mut self) {
-        let mut state = self.state.borrow_mut();
-        state.jump_back();
+        {
+            let mut state = self.state.borrow_mut();
+            state.jump_back();
+        }
+        self.sync_reading_content_index();
     }
 
     fn jump_forward(&mut self) {
-        let mut state = self.state.borrow_mut();
-        state.jump_forward();
+        {
+            let mut state = self.state.borrow_mut();
+            state.jump_forward();
+        }
+        self.sync_reading_content_index();
+    }
+
+    fn sync_reading_content_index(&mut self) {
+        let row = self.state.borrow().reading_state.row;
+        if let Some(content_index) = self.content_index_for_row(row) {
+            self.state.borrow_mut().reading_state.content_index = content_index;
+        }
+    }
+
+    fn handle_pending_mark_key(&mut self, key: KeyEvent) -> eyre::Result<bool> {
+        let pending = {
+            let state = self.state.borrow();
+            if state.ui_state.active_window != WindowType::Reader {
+                return Ok(false);
+            }
+            state.ui_state.pending_mark_command
+        };
+        let Some(command) = pending else {
+            return Ok(false);
+        };
+
+        if matches!(key.code, KeyCode::Esc) {
+            let mut state = self.state.borrow_mut();
+            state.ui_state.pending_mark_command = None;
+            state
+                .ui_state
+                .set_message("Mark command cancelled".to_string(), MessageType::Info);
+            return Ok(true);
+        }
+
+        let KeyCode::Char(name) = key.code else {
+            return Ok(true);
+        };
+        self.state.borrow_mut().ui_state.pending_mark_command = None;
+
+        match command {
+            PendingMarkCommand::Set => {
+                let Some(epub) = self.ebook.as_ref() else {
+                    return Ok(true);
+                };
+                let reading_state = { self.state.borrow().reading_state.clone() };
+                self.db_state.upsert_mark(epub, name, &reading_state)?;
+                let mut state = self.state.borrow_mut();
+                state.marks.insert(name, reading_state);
+                state
+                    .ui_state
+                    .set_message(format!("Set mark '{name}'"), MessageType::Info);
+            }
+            PendingMarkCommand::Jump => {
+                let target = { self.state.borrow().marks.get(&name).cloned() };
+                if let Some(target) = target {
+                    self.record_jump_position();
+                    let mut state = self.state.borrow_mut();
+                    state.reading_state.row = target.row;
+                    state.reading_state.content_index = target.content_index;
+                    state.ui_state.open_window(WindowType::Reader);
+                } else {
+                    self.state
+                        .borrow_mut()
+                        .ui_state
+                        .set_message(format!("Mark '{name}' is not set"), MessageType::Warning);
+                }
+            }
+        }
+        Ok(true)
+    }
+
+    fn cycle_color_theme(&mut self) -> eyre::Result<()> {
+        let next = {
+            let state = self.state.borrow();
+            state.effective_color_theme().next()
+        };
+        self.set_effective_color_theme(Some(next))?;
+        self.state
+            .borrow_mut()
+            .ui_state
+            .set_message(format!("Theme: {}", next.name()), MessageType::Info);
+        Ok(())
+    }
+
+    fn set_effective_color_theme(&mut self, theme: Option<ColorTheme>) -> eyre::Result<()> {
+        if let Some(epub) = self.ebook.as_ref() {
+            self.db_state.set_book_theme(epub, theme)?;
+            self.state.borrow_mut().book_color_theme = theme;
+        } else {
+            let mut state = self.state.borrow_mut();
+            state.config.settings.color_theme = theme.unwrap_or(ColorTheme::Default);
+            let _ = state.config.save();
+        }
+        Ok(())
+    }
+
+    fn set_clipboard_text(&mut self, text: String) -> eyre::Result<bool> {
+        let Some(clipboard) = self.clipboard.as_mut() else {
+            return Ok(false);
+        };
+        clipboard.set_text(text)?;
+        Ok(true)
     }
 
     /// Handle keys in search mode.
@@ -1872,7 +2029,11 @@ where
         let range = ranges
             .iter()
             .find(|r| col >= r.start_col && col < r.end_col)?;
-        state.ui_state.highlights.get(range.highlight_index).cloned()
+        state
+            .ui_state
+            .highlights
+            .get(range.highlight_index)
+            .cloned()
     }
 
     fn handle_confirm_delete_highlight_keys(&mut self, key: KeyEvent) -> eyre::Result<()> {
@@ -1919,11 +2080,7 @@ where
     ///     p for Wikipedia, s to search the web.
     fn handle_visual_mode_keys(&mut self, key: KeyEvent, repeat_count: u32) -> eyre::Result<()> {
         let has_anchor = self.state.borrow().ui_state.visual_anchor.is_some();
-        let search_input_active = self
-            .state
-            .borrow()
-            .ui_state
-            .visual_search_input_active;
+        let search_input_active = self.state.borrow().ui_state.visual_search_input_active;
 
         // When the inline `/`-prompt is open, all keys go to the query editor.
         if search_input_active {
@@ -1934,25 +2091,14 @@ where
                     state.ui_state.visual_search_query.clear();
                 }
                 KeyCode::Enter => {
-                    self.state
-                        .borrow_mut()
-                        .ui_state
-                        .visual_search_input_active = false;
+                    self.state.borrow_mut().ui_state.visual_search_input_active = false;
                     self.execute_visual_search();
                 }
                 KeyCode::Backspace => {
-                    self.state
-                        .borrow_mut()
-                        .ui_state
-                        .visual_search_query
-                        .pop();
+                    self.state.borrow_mut().ui_state.visual_search_query.pop();
                 }
                 KeyCode::Char(c) => {
-                    self.state
-                        .borrow_mut()
-                        .ui_state
-                        .visual_search_query
-                        .push(c);
+                    self.state.borrow_mut().ui_state.visual_search_query.push(c);
                 }
                 _ => {}
             }
@@ -2040,10 +2186,10 @@ where
                     } else {
                         self.db_state.delete_highlight(&highlight.id)?;
                         self.refresh_highlights()?;
-                        self.state.borrow_mut().ui_state.set_message(
-                            "Highlight deleted".to_string(),
-                            MessageType::Info,
-                        );
+                        self.state
+                            .borrow_mut()
+                            .ui_state
+                            .set_message("Highlight deleted".to_string(), MessageType::Info);
                     }
                 }
             }
@@ -2443,6 +2589,21 @@ where
         Ok(())
     }
 
+    fn handle_link_preview_mode_keys(&mut self, key: KeyEvent) -> eyre::Result<()> {
+        match key.code {
+            KeyCode::Enter => {
+                self.confirm_link_preview_jump();
+            }
+            KeyCode::Esc | KeyCode::Char('q') => {
+                let mut state = self.state.borrow_mut();
+                state.ui_state.link_preview = None;
+                state.ui_state.open_window(WindowType::Reader);
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
     fn handle_images_mode_keys(&mut self, key: KeyEvent, repeat_count: u32) -> eyre::Result<()> {
         let (list_len, mut index) = {
             let s = self.state.borrow();
@@ -2544,7 +2705,7 @@ where
                 self.adjust_textwidth(-5)?;
             }
             KeyCode::Char('r') => {
-                self.reset_selected_setting();
+                self.reset_selected_setting()?;
             }
             _ => {}
         }
@@ -2989,6 +3150,8 @@ where
                 state.ui_state.selected_search_result,
                 &theme,
             );
+        } else if state.ui_state.active_window == WindowType::LinkPreview {
+            Self::render_link_preview_static(frame, state, board, &theme);
         } else if state.ui_state.show_links {
             LinksWindow::render(
                 frame,
@@ -3088,10 +3251,7 @@ where
                 let text = format!("/{}", state.ui_state.visual_search_query);
                 let bar_style = theme.base_style().fg(theme.info_fg);
                 frame.render_widget(Clear, bar);
-                frame.render_widget(
-                    Paragraph::new(text).style(bar_style),
-                    bar,
-                );
+                frame.render_widget(Paragraph::new(text).style(bar_style), bar);
             }
         }
     }
@@ -3214,7 +3374,16 @@ where
                 SettingItem::Width => format!("Text width: {}", state.reading_state.textwidth),
                 SettingItem::ShowTopBar => format!("Show top bar: {}", settings.show_top_bar),
                 SettingItem::ColorTheme => {
-                    format!("Color theme: {}", settings.color_theme.name())
+                    let suffix = if state.book_color_theme.is_some() {
+                        " (book)"
+                    } else {
+                        " (global)"
+                    };
+                    format!(
+                        "Color theme: {}{}",
+                        state.effective_color_theme().name(),
+                        suffix
+                    )
                 }
             })
             .collect()
@@ -3546,6 +3715,42 @@ where
         let paragraph = Paragraph::new(lines)
             .block(block)
             .wrap(Wrap { trim: false })
+            .style(theme.base_style());
+        frame.render_widget(Clear, popup_area);
+        frame.render_widget(paragraph, popup_area);
+    }
+
+    fn render_link_preview_static(
+        frame: &mut Frame,
+        state: &ApplicationState,
+        board: &Board,
+        theme: &Theme,
+    ) {
+        let Some(entry) = state.ui_state.link_preview.as_ref() else {
+            return;
+        };
+        let area = frame.area();
+        let width = (area.width * 2 / 3).max(40).min(area.width);
+        let height = 14u16.min(area.height);
+        let x = area.x + (area.width.saturating_sub(width)) / 2;
+        let y = area.y + (area.height.saturating_sub(height)) / 2;
+        let popup_area = Rect::new(x, y, width, height);
+
+        let preview_text = LinksWindow::build_preview_text_with_limit(entry, board, 10);
+        let label = if entry.label.trim().is_empty() {
+            entry.url.as_str()
+        } else {
+            entry.label.as_str()
+        };
+        let text = format!("{preview_text}\n\nEnter: jump  Esc/q: stay");
+        let block = Block::default()
+            .title(format!(" Link Preview: {label} "))
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(theme.info_fg))
+            .style(theme.base_style());
+        let paragraph = Paragraph::new(text)
+            .block(block)
+            .wrap(Wrap { trim: true })
             .style(theme.base_style());
         frame.render_widget(Clear, popup_area);
         frame.render_widget(paragraph, popup_area);
@@ -4762,9 +4967,10 @@ where
         if let Some(line) = line {
             state.reading_state.row = line;
             let total = state.ui_state.search_results.len();
-            state
-                .ui_state
-                .set_message(format!("Match {}/{}", selected + 1, total), MessageType::Info);
+            state.ui_state.set_message(
+                format!("Match {}/{}", selected + 1, total),
+                MessageType::Info,
+            );
         } else {
             state
                 .ui_state
@@ -5024,12 +5230,7 @@ where
             // For the end position, we want the (line, col) of the byte *after*
             // the last matched char so that it represents an exclusive end.
             let (e_line, e_col) = pos_at(mat.end());
-            matches.push((
-                start_line + s_line,
-                s_col,
-                start_line + e_line,
-                e_col,
-            ));
+            matches.push((start_line + s_line, s_col, start_line + e_line, e_col));
         }
 
         if matches.is_empty() {
@@ -5443,23 +5644,19 @@ where
                 state.config.settings.preferred_tts_engine = Some(options[next_index].to_string());
             }
             SettingItem::Width => {
-                state.config.settings.width = if state.config.settings.width.is_some() {
-                    None
-                } else {
-                    Some(70)
-                };
-                // Set textwidth to the configured value
                 let textwidth = state.config.settings.width.unwrap_or(70);
-                let _ = state.config.save();
                 drop(state);
                 self.rebuild_text_structure_with_textwidth(textwidth)?;
+                self.persist_state()?;
                 return Ok(());
             }
             SettingItem::ShowTopBar => {
                 state.config.settings.show_top_bar = !state.config.settings.show_top_bar;
             }
             SettingItem::ColorTheme => {
-                state.config.settings.color_theme = state.config.settings.color_theme.next();
+                drop(state);
+                self.cycle_color_theme()?;
+                return Ok(());
             }
         }
         let _ = state.config.save();
@@ -5498,7 +5695,7 @@ where
         self.change_textwidth(delta)
     }
 
-    fn reset_selected_setting(&mut self) {
+    fn reset_selected_setting(&mut self) -> eyre::Result<()> {
         let selected = {
             let state = self.state.borrow();
             SettingItem::all()
@@ -5506,17 +5703,36 @@ where
                 .copied()
         };
 
-        if selected != Some(SettingItem::DictionaryClient) {
-            return;
+        match selected {
+            Some(SettingItem::DictionaryClient) => {
+                let mut state = self.state.borrow_mut();
+                state.config.settings.dictionary_client = "auto".to_string();
+                let _ = state.config.save();
+                state.ui_state.set_message(
+                    "Dictionary client reset to auto".to_string(),
+                    MessageType::Info,
+                );
+            }
+            Some(SettingItem::Width) => {
+                let textwidth = self.state.borrow().config.settings.width.unwrap_or(70);
+                self.rebuild_text_structure_with_textwidth(textwidth)?;
+                self.persist_state()?;
+                self.state.borrow_mut().ui_state.set_message(
+                    format!("Text width reset to {textwidth}"),
+                    MessageType::Info,
+                );
+            }
+            Some(SettingItem::ColorTheme) => {
+                self.set_effective_color_theme(None)?;
+                let theme_name = self.state.borrow().effective_color_theme().name();
+                self.state
+                    .borrow_mut()
+                    .ui_state
+                    .set_message(format!("Theme reset to {theme_name}"), MessageType::Info);
+            }
+            _ => {}
         }
-
-        let mut state = self.state.borrow_mut();
-        state.config.settings.dictionary_client = "auto".to_string();
-        let _ = state.config.save();
-        state.ui_state.set_message(
-            "Dictionary client reset to auto".to_string(),
-            MessageType::Info,
-        );
+        Ok(())
     }
 
     fn rebuild_text_structure(&mut self, padding: usize) -> eyre::Result<()> {
@@ -5674,9 +5890,13 @@ where
 
         let selected_text = self.board.get_selected_text_range(anchor, cursor);
         if !selected_text.is_empty() {
-            self.clipboard.set_text(selected_text)?;
+            let copied = self.set_clipboard_text(selected_text)?;
             let ui_state = &mut self.state.borrow_mut().ui_state;
-            ui_state.set_message("Text copied to clipboard".to_string(), MessageType::Info);
+            if copied {
+                ui_state.set_message("Text copied to clipboard".to_string(), MessageType::Info);
+            } else {
+                ui_state.set_message("Clipboard unavailable".to_string(), MessageType::Warning);
+            }
         }
         self.state
             .borrow_mut()
@@ -5994,15 +6214,19 @@ where
                     .set_message("Opened search in browser".to_string(), MessageType::Info);
             }
             Ok(false) | Err(_) => {
-                self.clipboard.set_text(url)?;
+                let copied = self.set_clipboard_text(url)?;
                 let mut state = self.state.borrow_mut();
                 state.ui_state.visual_anchor = None;
                 state.ui_state.visual_cursor = None;
                 state.ui_state.open_window(WindowType::Reader);
-                state.ui_state.set_message(
-                    "Failed to open; search URL copied".to_string(),
-                    MessageType::Warning,
-                );
+                let message = if copied {
+                    "Failed to open; search URL copied"
+                } else {
+                    "Failed to open; clipboard unavailable"
+                };
+                state
+                    .ui_state
+                    .set_message(message.to_string(), MessageType::Warning);
             }
         }
 
@@ -6019,9 +6243,13 @@ where
                 .map(|link| link.url.clone())
         };
         if let Some(url) = url {
-            self.clipboard.set_text(url)?;
+            let copied = self.set_clipboard_text(url)?;
             let ui_state = &mut self.state.borrow_mut().ui_state;
-            ui_state.set_message("Link copied to clipboard".to_string(), MessageType::Info);
+            if copied {
+                ui_state.set_message("Link copied to clipboard".to_string(), MessageType::Info);
+            } else {
+                ui_state.set_message("Clipboard unavailable".to_string(), MessageType::Warning);
+            }
             ui_state.open_window(WindowType::Reader);
         }
         Ok(())
@@ -6051,13 +6279,11 @@ where
 
         if let Some(target_row) = self.resolve_internal_link_row(&link.url, base_content.as_deref())
         {
-            self.record_jump_position();
+            let mut link = link;
+            link.target_row = Some(target_row);
             let mut state = self.state.borrow_mut();
-            state.reading_state.row = target_row;
-            if let Some(content_index) = self.content_index_for_row(target_row) {
-                state.reading_state.content_index = content_index;
-            }
-            state.ui_state.open_window(WindowType::Reader);
+            state.ui_state.link_preview = Some(link);
+            state.ui_state.open_window(WindowType::LinkPreview);
             return Ok(());
         }
 
@@ -6070,23 +6296,54 @@ where
                     return Ok(());
                 }
                 Ok(false) | Err(_) => {
-                    self.clipboard.set_text(link.url)?;
+                    let copied = self.set_clipboard_text(link.url)?;
                     let ui_state = &mut self.state.borrow_mut().ui_state;
-                    ui_state.set_message(
-                        "Failed to open; link copied".to_string(),
-                        MessageType::Warning,
-                    );
+                    let message = if copied {
+                        "Failed to open; link copied"
+                    } else {
+                        "Failed to open; clipboard unavailable"
+                    };
+                    ui_state.set_message(message.to_string(), MessageType::Warning);
                     ui_state.open_window(WindowType::Reader);
                     return Ok(());
                 }
             }
         }
 
-        self.clipboard.set_text(link.url)?;
+        let copied = self.set_clipboard_text(link.url)?;
         let ui_state = &mut self.state.borrow_mut().ui_state;
-        ui_state.set_message("Link copied to clipboard".to_string(), MessageType::Info);
+        if copied {
+            ui_state.set_message("Link copied to clipboard".to_string(), MessageType::Info);
+        } else {
+            ui_state.set_message("Clipboard unavailable".to_string(), MessageType::Warning);
+        }
         ui_state.open_window(WindowType::Reader);
         Ok(())
+    }
+
+    fn confirm_link_preview_jump(&mut self) {
+        let target_row = {
+            let mut state = self.state.borrow_mut();
+            state
+                .ui_state
+                .link_preview
+                .take()
+                .and_then(|entry| entry.target_row)
+        };
+        if let Some(target_row) = target_row {
+            self.record_jump_position();
+            let mut state = self.state.borrow_mut();
+            state.reading_state.row = target_row;
+            if let Some(content_index) = self.content_index_for_row(target_row) {
+                state.reading_state.content_index = content_index;
+            }
+            state.ui_state.open_window(WindowType::Reader);
+        } else {
+            self.state
+                .borrow_mut()
+                .ui_state
+                .open_window(WindowType::Reader);
+        }
     }
 
     fn resolve_internal_link_row(&self, href: &str, base_content: Option<&str>) -> Option<usize> {
@@ -7162,7 +7419,7 @@ mod tests {
             terminal: Terminal::new(CrosstermBackend::new(std::io::stdout())).unwrap(),
             db_state: state,
             board,
-            clipboard: Clipboard::new().unwrap(),
+            clipboard: Clipboard::new().ok(),
             ebook: None,
             content_start_rows: Vec::new(),
             chapter_text_structures: Vec::new(),

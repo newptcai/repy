@@ -175,8 +175,10 @@ Press `?` in the TUI to see the help window at any time (`Help (?)`).
 - `!` — Text-to-Speech (Toggle)
 - `v` — Cursor Mode
 - `t` — Table of Contents
-- `m` — Bookmarks (`a` to add, `d` to delete, `Enter` to jump)
-- `u` — Links on Page
+- `m<char>` — Set a persistent mark
+- `` `<char> `` — Jump to a persistent mark
+- `B` — Bookmarks (`a` to add, `d` to delete, `Enter` to jump)
+- `u` — Links on Page (`Enter` previews internal links; `Enter` again jumps)
 - `o` — Images on Page
 - `i` — Metadata
 - `r` — Library (History)
@@ -264,7 +266,9 @@ The configuration file is automatically created on first run with sensible defau
 - **Light**: Gruvbox Light theme
 - **Sepia**: Warm paper-like palette (classic e-reader sepia mode)
 
-Press `c` in the reader to cycle through themes. The selected theme is saved in `configuration.json` under `Settings.color_theme`.
+Press `c` in the reader to cycle through themes. With a book open, the selected
+theme is saved for that book; otherwise it is saved in `configuration.json`
+under `Settings.color_theme`.
 
 ### Location
 
@@ -329,19 +333,22 @@ mouse behavior, so you can select and copy text the usual way.
 
 ## Database and Reading State
 
-`repy` stores reading history, last positions, bookmarks, and highlights in a SQLite database.
+`repy` stores reading history, last positions, jump history, marks, bookmarks, and highlights in a SQLite database.
 The database file (`states.db`) is located in the same directory as your config file.
 
 ### Database schema
 
 - **`reading_states`** — Current position for each book
-  - `filepath`, `content_index`, `padding`, `row`, `rel_pctg`
+  - `filepath`, `content_index`, `textwidth`, `row`, `rel_pctg`, optional per-book `color_theme`
 
 - **`library`** — Metadata and reading progress
   - `filepath`, `last_read`, `title`, `author`, `reading_progress`
 
 - **`bookmarks`** — Named bookmarks per book
   - `id`, `filepath`, `name`, plus position fields
+
+- **`jump_history`** and **`marks`** — Per-book jump list and Vim-style marks
+  - Jump entries are row lists; marks store a one-character name plus position fields
 
 - **`books`** and **`book_aliases`** — Stable EPUB identity and path aliases
   - Book identity uses metadata plus spine href and content fingerprints, not just file path
@@ -351,7 +358,7 @@ The database file (`states.db`) is located in the same directory as your config 
 
 When you quit (`q` from the reader window), `repy` saves your current position
 and updates the library entry. When you open a book, it restores your last position
-and any stored bookmarks/highlights.
+and any stored bookmarks, marks, jump history, highlights, and per-book theme.
 
 ## Contributing
 

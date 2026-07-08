@@ -93,6 +93,23 @@ fn search_flow() {
 }
 
 #[test]
+fn internal_link_preview() {
+    let mut reader = test_reader();
+    press_char(&mut reader, '/');
+    type_str(&mut reader, "Preface");
+    press(&mut reader, KeyCode::Enter);
+    press(&mut reader, KeyCode::Enter);
+    reader.state.borrow_mut().ui_state.clear_message();
+    reader
+        .draw()
+        .expect("failed to draw after clearing message");
+
+    press_char(&mut reader, 'u');
+    press(&mut reader, KeyCode::Enter);
+    insta::assert_snapshot!(reader.terminal.backend());
+}
+
+#[test]
 fn cursor_mode() {
     let mut reader = test_reader();
     press_char(&mut reader, 'v');

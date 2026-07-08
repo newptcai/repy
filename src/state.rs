@@ -1,4 +1,5 @@
 use crate::models::{BookIdentity, Highlight, LibraryItem, ReadingState};
+use crate::theme::ColorTheme;
 use eyre::Result;
 use rusqlite::{Connection, OptionalExtension, params};
 
@@ -67,6 +68,17 @@ impl State {
             conn.execute_batch("BEGIN IMMEDIATE TRANSACTION;")?;
             if let Err(err) = Self::migrate_v3(conn).and_then(|_| {
                 conn.pragma_update(None, "user_version", 3)
+                    .map_err(Into::into)
+            }) {
+                let _ = conn.execute_batch("ROLLBACK;");
+                return Err(err);
+            }
+            conn.execute_batch("COMMIT;")?;
+        }
+        if current_version < 4 {
+            conn.execute_batch("BEGIN IMMEDIATE TRANSACTION;")?;
+            if let Err(err) = Self::migrate_v4(conn).and_then(|_| {
+                conn.pragma_update(None, "user_version", 4)
                     .map_err(Into::into)
             }) {
                 let _ = conn.execute_batch("ROLLBACK;");
@@ -190,6 +202,36 @@ impl State {
         Ok(())
     }
 
+    fn migrate_v4(conn: &Connection) -> Result<()> {
+        let _ = conn.execute("ALTER TABLE reading_states ADD COLUMN color_theme TEXT", []);
+        conn.execute_batch(
+            "
+            CREATE TABLE IF NOT EXISTS jump_history (
+                filepath TEXT PRIMARY KEY,
+                entries_json TEXT NOT NULL,
+                current_index INTEGER NOT NULL,
+                updated_at DATETIME DEFAULT (datetime('now')),
+                FOREIGN KEY (filepath) REFERENCES reading_states(filepath)
+                ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS marks (
+                filepath TEXT NOT NULL,
+                name TEXT NOT NULL,
+                content_index INTEGER,
+                textwidth INTEGER DEFAULT 80,
+                row INTEGER,
+                rel_pctg REAL,
+                updated_at DATETIME DEFAULT (datetime('now')),
+                PRIMARY KEY (filepath, name),
+                FOREIGN KEY (filepath) REFERENCES reading_states(filepath)
+                ON DELETE CASCADE
+            );
+            ",
+        )?;
+        Ok(())
+    }
+
     /// Record a search query, refreshing its recency. History is capped at
     /// the 100 most recently used queries.
     pub fn add_search_history(&self, query: &str) -> Result<()> {
@@ -289,8 +331,8 @@ impl State {
 
         if !new_exists {
             tx.execute(
-                "INSERT INTO reading_states (filepath, content_index, textwidth, row, rel_pctg)
-                 SELECT ?, content_index, textwidth, row, rel_pctg FROM reading_states WHERE filepath=?",
+                "INSERT INTO reading_states (filepath, content_index, textwidth, row, rel_pctg, color_theme)
+                 SELECT ?, content_index, textwidth, row, rel_pctg, color_theme FROM reading_states WHERE filepath=?",
                 params![new_path, old_path],
             )?;
         }
@@ -330,13 +372,14 @@ impl State {
                     )?;
                 }
                 tx.execute(
-                    "INSERT INTO reading_states (filepath, content_index, textwidth, row, rel_pctg)
-                     SELECT ?, content_index, textwidth, row, rel_pctg FROM reading_states WHERE filepath=?
+                    "INSERT INTO reading_states (filepath, content_index, textwidth, row, rel_pctg, color_theme)
+                     SELECT ?, content_index, textwidth, row, rel_pctg, color_theme FROM reading_states WHERE filepath=?
                      ON CONFLICT(filepath) DO UPDATE SET
                         content_index=excluded.content_index,
                         textwidth=excluded.textwidth,
                         row=excluded.row,
-                        rel_pctg=excluded.rel_pctg",
+                        rel_pctg=excluded.rel_pctg,
+                        color_theme=excluded.color_theme",
                     params![new_path, old_path],
                 )?;
             }
@@ -346,6 +389,25 @@ impl State {
             "UPDATE bookmarks SET filepath=? WHERE filepath=?",
             params![new_path, old_path],
         )?;
+        tx.execute(
+            "DELETE FROM jump_history WHERE filepath=? AND EXISTS
+             (SELECT 1 FROM jump_history WHERE filepath=?)",
+            params![new_path, old_path],
+        )?;
+        tx.execute(
+            "UPDATE jump_history SET filepath=? WHERE filepath=?",
+            params![new_path, old_path],
+        )?;
+        tx.execute(
+            "DELETE FROM marks
+             WHERE filepath=? AND name IN
+             (SELECT name FROM marks WHERE filepath=?)",
+            params![new_path, old_path],
+        )?;
+        tx.execute(
+            "UPDATE marks SET filepath=? WHERE filepath=?",
+            params![new_path, old_path],
+        )?;
 
         tx.execute("DELETE FROM library WHERE filepath=?", params![old_path])?;
         tx.execute(
@@ -353,6 +415,11 @@ impl State {
             params![old_path],
         )?;
         tx.execute("DELETE FROM bookmarks WHERE filepath=?", params![old_path])?;
+        tx.execute(
+            "DELETE FROM jump_history WHERE filepath=?",
+            params![old_path],
+        )?;
+        tx.execute("DELETE FROM marks WHERE filepath=?", params![old_path])?;
 
         tx.commit()?;
         Ok(())
@@ -396,7 +463,13 @@ impl State {
         reading_state: &ReadingState,
     ) -> Result<()> {
         self.conn.execute(
-            "INSERT OR REPLACE INTO reading_states (filepath, content_index, textwidth, row, rel_pctg) VALUES (?, ?, ?, ?, ?)",
+            "INSERT INTO reading_states (filepath, content_index, textwidth, row, rel_pctg)
+             VALUES (?, ?, ?, ?, ?)
+             ON CONFLICT(filepath) DO UPDATE SET
+                content_index=excluded.content_index,
+                textwidth=excluded.textwidth,
+                row=excluded.row,
+                rel_pctg=excluded.rel_pctg",
             params![
                 ebook.path(),
                 reading_state.content_index,
@@ -404,6 +477,31 @@ impl State {
                 reading_state.row,
                 reading_state.rel_pctg,
             ],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_book_theme(&self, ebook: &dyn crate::ebook::Ebook) -> Result<Option<ColorTheme>> {
+        let stored: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT color_theme FROM reading_states WHERE filepath=?",
+                params![ebook.path()],
+                |row| row.get(0),
+            )
+            .optional()?
+            .flatten();
+        Ok(stored.and_then(|name| ColorTheme::from_storage_name(&name)))
+    }
+
+    pub fn set_book_theme(
+        &self,
+        ebook: &dyn crate::ebook::Ebook,
+        theme: Option<ColorTheme>,
+    ) -> Result<()> {
+        self.conn.execute(
+            "UPDATE reading_states SET color_theme=? WHERE filepath=?",
+            params![theme.map(|theme| theme.storage_name()), ebook.path()],
         )?;
         Ok(())
     }
@@ -469,6 +567,100 @@ impl State {
         }
 
         Ok(bookmarks)
+    }
+
+    pub fn set_jump_history(
+        &self,
+        ebook: &dyn crate::ebook::Ebook,
+        entries: &[usize],
+        current_index: usize,
+    ) -> Result<()> {
+        let entries_json = serde_json::to_string(entries)?;
+        let current_index = current_index.min(entries.len());
+        self.conn.execute(
+            "INSERT INTO jump_history (filepath, entries_json, current_index, updated_at)
+             VALUES (?, ?, ?, datetime('now'))
+             ON CONFLICT(filepath) DO UPDATE SET
+                entries_json=excluded.entries_json,
+                current_index=excluded.current_index,
+                updated_at=datetime('now')",
+            params![ebook.path(), entries_json, current_index],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_jump_history(&self, ebook: &dyn crate::ebook::Ebook) -> Result<(Vec<usize>, usize)> {
+        let stored: Option<(String, usize)> = self
+            .conn
+            .query_row(
+                "SELECT entries_json, current_index FROM jump_history WHERE filepath=?",
+                params![ebook.path()],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?;
+        let Some((entries_json, current_index)) = stored else {
+            return Ok((Vec::new(), 0));
+        };
+        let entries: Vec<usize> = serde_json::from_str(&entries_json).unwrap_or_default();
+        let current_index = current_index.min(entries.len());
+        Ok((entries, current_index))
+    }
+
+    pub fn upsert_mark(
+        &self,
+        ebook: &dyn crate::ebook::Ebook,
+        name: char,
+        reading_state: &ReadingState,
+    ) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO marks
+             (filepath, name, content_index, textwidth, row, rel_pctg, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, datetime('now'))
+             ON CONFLICT(filepath, name) DO UPDATE SET
+                content_index=excluded.content_index,
+                textwidth=excluded.textwidth,
+                row=excluded.row,
+                rel_pctg=excluded.rel_pctg,
+                updated_at=datetime('now')",
+            params![
+                ebook.path(),
+                name.to_string(),
+                reading_state.content_index,
+                reading_state.textwidth,
+                reading_state.row,
+                reading_state.rel_pctg,
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_marks(&self, ebook: &dyn crate::ebook::Ebook) -> Result<Vec<(char, ReadingState)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT name, content_index, textwidth, row, rel_pctg
+             FROM marks WHERE filepath=? ORDER BY name",
+        )?;
+        let rows = stmt.query_map(params![ebook.path()], |row| {
+            let name: String = row.get(0)?;
+            Ok((
+                name.chars().next().unwrap_or('\0'),
+                ReadingState {
+                    content_index: row.get(1)?,
+                    textwidth: row.get(2)?,
+                    row: row.get(3)?,
+                    rel_pctg: row.get(4)?,
+                    section: None,
+                },
+            ))
+        })?;
+
+        let mut marks = Vec::new();
+        for row in rows {
+            let (name, reading_state) = row?;
+            if name != '\0' {
+                marks.push((name, reading_state));
+            }
+        }
+        Ok(marks)
     }
 
     pub fn update_library(
@@ -855,6 +1047,8 @@ mod tests {
         )
         .unwrap();
 
+        State::init_db(&conn).unwrap();
+
         let state = State { conn };
 
         (state, temp_dir)
@@ -877,11 +1071,12 @@ mod tests {
             .map(|r| r.unwrap())
             .collect();
         assert!(columns.contains(&"textwidth".to_string()));
+        assert!(columns.contains(&"color_theme".to_string()));
 
         let version: i64 = conn
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .unwrap();
-        assert_eq!(version, 3);
+        assert_eq!(version, 4);
     }
 
     fn sample_identity(book_id: &str) -> BookIdentity {
@@ -1032,7 +1227,7 @@ mod tests {
         let version: i64 = conn
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .unwrap();
-        assert_eq!(version, 3);
+        assert_eq!(version, 4);
 
         let row: i64 = conn
             .query_row(
@@ -1047,6 +1242,14 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM highlights", [], |row| row.get(0))
             .unwrap();
         assert_eq!(highlight_count, 0);
+        let jump_table_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM jump_history", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(jump_table_count, 0);
+        let marks_table_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM marks", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(marks_table_count, 0);
 
         let state = State { conn };
         let identity = sample_identity("legacy-book");
@@ -1081,6 +1284,54 @@ mod tests {
         let highlights = state.list_highlights(&identity.book_id).unwrap();
         assert_eq!(highlights.len(), 1);
         assert_eq!(highlights[0].id, "h-keep");
+    }
+
+    #[test]
+    fn test_book_theme_jump_history_and_marks_persist() {
+        let state = State::new_for_test();
+        let ebook = MockEbook::new("/tmp/book.epub", "Title", "Author");
+        let reading_state = ReadingState {
+            content_index: 2,
+            textwidth: 86,
+            row: 42,
+            rel_pctg: Some(0.4),
+            section: None,
+        };
+        state
+            .set_last_reading_state(&ebook, &reading_state)
+            .unwrap();
+
+        assert_eq!(state.get_book_theme(&ebook).unwrap(), None);
+        state
+            .set_book_theme(&ebook, Some(ColorTheme::Sepia))
+            .unwrap();
+        assert_eq!(
+            state.get_book_theme(&ebook).unwrap(),
+            Some(ColorTheme::Sepia)
+        );
+
+        state.set_jump_history(&ebook, &[3, 9, 42], 2).unwrap();
+        assert_eq!(state.get_jump_history(&ebook).unwrap(), (vec![3, 9, 42], 2));
+
+        state.upsert_mark(&ebook, 'a', &reading_state).unwrap();
+        let marks = state.get_marks(&ebook).unwrap();
+        assert_eq!(marks.len(), 1);
+        assert_eq!(marks[0].0, 'a');
+        assert_eq!(marks[0].1.row, 42);
+
+        let updated_state = ReadingState {
+            row: 100,
+            ..reading_state
+        };
+        state
+            .set_last_reading_state(&ebook, &updated_state)
+            .unwrap();
+        assert_eq!(
+            state.get_book_theme(&ebook).unwrap(),
+            Some(ColorTheme::Sepia)
+        );
+        assert_eq!(state.get_jump_history(&ebook).unwrap(), (vec![3, 9, 42], 2));
+        assert_eq!(state.get_marks(&ebook).unwrap()[0].1.row, 42);
     }
 
     #[test]
