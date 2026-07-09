@@ -827,8 +827,8 @@ mod tests {
             let meditations_content =
                 meditations_epub.get_parsed_content(&meditations_first_id, 80, 0)?;
 
-            // Both should have parsed content (or at least not crash)
-            assert!(!small_content.text_lines.is_empty() || true); // Allow empty for edge cases
+            // Both should parse without crashing; content may be empty for edge cases
+            let _small_lines = small_content.text_lines.len();
 
             // Meditations content might be empty due to parsing issues, so just check it doesn't crash
             let _meditations_lines = meditations_content.text_lines.len();
