@@ -147,7 +147,7 @@ impl Default for CfgDefaultKeymaps {
             help: "?".to_string(),
             switch_color: "c".to_string(),
             tts_toggle: "!".to_string(),
-            library: "R".to_string(),
+            library: "r".to_string(),
         }
     }
 }
@@ -392,7 +392,7 @@ mod tests {
         assert_eq!(keymaps.help, "?");
         assert_eq!(keymaps.switch_color, "c");
         assert_eq!(keymaps.tts_toggle, "!");
-        assert_eq!(keymaps.library, "R");
+        assert_eq!(keymaps.library, "r");
     }
 
     #[test]
