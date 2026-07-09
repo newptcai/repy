@@ -31,6 +31,9 @@ pub struct Settings {
     pub width: Option<usize>,
     pub show_line_numbers: bool,
     pub show_top_bar: bool,
+    /// Directories scanned for ebooks by the library window (`~` expands to
+    /// the home directory). A Calibre library root works as-is.
+    pub library_directories: Vec<String>,
 }
 
 impl Settings {
@@ -51,6 +54,9 @@ impl Settings {
         self.width = other.width;
         self.show_line_numbers = other.show_line_numbers;
         self.show_top_bar = other.show_top_bar;
+        if !other.library_directories.is_empty() {
+            self.library_directories = other.library_directories;
+        }
     }
 }
 
@@ -69,6 +75,7 @@ impl Default for Settings {
             width: None,
             show_line_numbers: false,
             show_top_bar: true,
+            library_directories: Vec::new(),
         }
     }
 }

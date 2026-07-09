@@ -177,3 +177,51 @@ fn line_numbers() {
     press_char(&mut reader, 'q');
     insta::assert_snapshot!(reader.terminal.backend());
 }
+
+/// The last-read timestamp embeds the current time, and the history entry's
+/// filepath embeds the repo checkout path; redact both.
+fn library_snapshot_filters() -> Vec<(&'static str, &'static str)> {
+    vec![
+        (r"\d{2}:\d{2}(AM|PM) \w{3} \d{2}", "[time]"),
+        (r"\([^)]*small\.epub\)?", "([path]/small.epub)"),
+    ]
+}
+
+#[test]
+fn library_window() {
+    let mut reader = test_reader();
+    // A book the scanner found on disk but that was never opened.
+    reader
+        .db_state
+        .upsert_library_file(
+            "/scanned/example.epub",
+            1,
+            Some("Scanned Book"),
+            Some("Some Author"),
+        )
+        .unwrap();
+    press_char(&mut reader, 'r');
+    insta::with_settings!({filters => library_snapshot_filters()}, {
+        insta::assert_snapshot!(reader.terminal.backend());
+    });
+}
+
+#[test]
+fn library_window_sorted_by_title() {
+    let mut reader = test_reader();
+    reader
+        .db_state
+        .upsert_library_file(
+            "/scanned/example.epub",
+            1,
+            Some("A Scanned Book"),
+            Some("Some Author"),
+        )
+        .unwrap();
+    press_char(&mut reader, 'r');
+    // 's' cycles recent → title; the scanned book sorts first.
+    press_char(&mut reader, 's');
+    insta::with_settings!({filters => library_snapshot_filters()}, {
+        insta::assert_snapshot!(reader.terminal.backend());
+    });
+}

@@ -6,17 +6,21 @@ use ratatui::{
     widgets::{Block, Borders, Clear, List, ListItem, Paragraph},
 };
 
+use crate::models::LibrarySortMode;
 use crate::theme::Theme;
 
 pub struct LibraryWindow;
 
 impl LibraryWindow {
+    #[allow(clippy::too_many_arguments)]
     pub fn render(
         frame: &mut Frame,
         area: Rect,
         entries: &[String],
         selected_index: usize,
         filter: Option<&str>,
+        sort_mode: LibrarySortMode,
+        scanning: bool,
         theme: &Theme,
     ) {
         let popup_area = Rect::new(
@@ -28,9 +32,15 @@ impl LibraryWindow {
 
         frame.render_widget(Clear, popup_area);
 
+        let title = if scanning {
+            format!("Library — by {} (scanning…)", sort_mode.label())
+        } else {
+            format!("Library — by {}", sort_mode.label())
+        };
+
         let make_block = || {
             let mut block = Block::default()
-                .title("Library")
+                .title(title.clone())
                 .borders(Borders::ALL)
                 .style(theme.base_style());
             if let Some(filter) = filter {
@@ -45,8 +55,10 @@ impl LibraryWindow {
         if entries.is_empty() {
             let message = if filter.is_some() {
                 "No matches"
+            } else if scanning {
+                "Scanning library directories…"
             } else {
-                "No history yet"
+                "No books yet — open an EPUB or set library_directories in the config"
             };
             let paragraph = Paragraph::new(message)
                 .style(theme.base_style().fg(theme.muted_fg))
@@ -71,7 +83,7 @@ impl LibraryWindow {
             height: 1,
         };
 
-        let hint = Paragraph::new("HINT: Press 'd' to delete.")
+        let hint = Paragraph::new("HINT: Enter: open  d: delete  s: sort  /: filter")
             .style(Style::default().fg(theme.warning_fg));
         frame.render_widget(hint, hint_area);
 

@@ -28,8 +28,8 @@ use crate::ebook::{Ebook, Epub, build_chapter_break};
 use crate::logging;
 use crate::models::{
     BookIdentity, BookMetadata, CHAPTER_BREAK_MARKER, Direction as AppDirection, Highlight,
-    HighlightColor, HighlightRange, LibraryItem, LinkEntry, ReadingState, ReadingStatistics,
-    SearchData, TextStructure, TocEntry, WindowType,
+    HighlightColor, HighlightRange, LibraryEntry, LibraryItem, LibrarySortMode, LinkEntry,
+    ReadingState, ReadingStatistics, ScannedBook, SearchData, TextStructure, TocEntry, WindowType,
 };
 use crate::settings::DICT_PRESET_LIST;
 use crate::state::State;
@@ -264,8 +264,11 @@ pub struct UiState {
     pub link_preview: Option<LinkEntry>,
     pub images_list: Vec<(usize, String)>,
     pub images_selected_index: usize,
-    pub library_items: Vec<LibraryItem>,
+    pub library_items: Vec<LibraryEntry>,
     pub library_selected_index: usize,
+    pub library_sort_mode: LibrarySortMode,
+    /// True while a background library scan is running.
+    pub library_scanning: bool,
     pub metadata: Option<BookMetadata>,
     pub statistics: ReadingStatistics,
     pub dictionary_word: String,
@@ -371,6 +374,8 @@ impl UiState {
             images_selected_index: 0,
             library_items: Vec::new(),
             library_selected_index: 0,
+            library_sort_mode: LibrarySortMode::default(),
+            library_scanning: false,
             metadata: None,
             statistics: ReadingStatistics::default(),
             dictionary_word: String::new(),
@@ -685,6 +690,8 @@ pub struct Reader<B: Backend = CrosstermBackend<io::Stdout>> {
     /// Text width used for the current chapter structures
     current_text_width: Option<usize>,
     dictionary_res_rx: Option<std::sync::mpsc::Receiver<DictionaryResult>>,
+    /// Signals that the background library scan finished (cache updated).
+    library_scan_rx: Option<std::sync::mpsc::Receiver<()>>,
     /// Channel to receive notification when a TTS chunk finishes speaking
     tts_done_rx: Option<std::sync::mpsc::Receiver<()>>,
     /// Handle to the running TTS child process
@@ -1098,6 +1105,7 @@ where
             chapter_text_structures: Vec::new(),
             current_text_width: None,
             dictionary_res_rx: None,
+            library_scan_rx: None,
             tts_done_rx: None,
             tts_child: None,
             tts_chunks: Vec::new(),
@@ -1573,6 +1581,18 @@ impl Reader {
                 }
             }
 
+            // Check for library scan completion (the worker already updated
+            // the SQLite cache; refresh the window from it).
+            if let Some(rx) = &self.library_scan_rx {
+                if rx.try_recv().is_ok() {
+                    self.library_scan_rx = None;
+                    self.state.borrow_mut().ui_state.library_scanning = false;
+                    if self.state.borrow().ui_state.show_library {
+                        self.rebuild_library_entries()?;
+                    }
+                }
+            }
+
             self.tts_poll_worker()?;
 
             // Check for TTS paragraph completion → advance to next paragraph
@@ -1600,6 +1620,8 @@ impl Reader {
                     Duration::from_millis(200)
                 } else if state.ui_state.dictionary_loading && state.ui_state.show_dictionary {
                     Duration::from_millis(100)
+                } else if state.ui_state.library_scanning && state.ui_state.show_library {
+                    Duration::from_millis(200)
                 } else {
                     match state.ui_state.message_time {
                         Some(t) => {
@@ -2920,6 +2942,16 @@ where
                     self.delete_selected_library_item()?;
                     self.reset_list_filter_after_change();
                 }
+                KeyCode::Char('s') => {
+                    {
+                        let mut state = self.state.borrow_mut();
+                        state.ui_state.library_sort_mode =
+                            state.ui_state.library_sort_mode.next();
+                        state.ui_state.library_selected_index = 0;
+                    }
+                    self.rebuild_library_entries()?;
+                    self.reset_list_filter_after_change();
+                }
                 KeyCode::Enter => {
                     self.open_selected_library_item()?;
                 }
@@ -3406,6 +3438,8 @@ where
                 &entries,
                 state.ui_state.library_selected_index,
                 filter.as_deref(),
+                state.ui_state.library_sort_mode,
+                state.ui_state.library_scanning,
                 &theme,
             );
         } else if state.ui_state.show_search {
@@ -3568,14 +3602,14 @@ where
         )
     }
 
-    fn format_library_item(item: &LibraryItem) -> String {
+    fn format_library_item(item: &LibraryEntry) -> String {
         let reading_progress_str = match item.reading_progress {
             Some(p) => {
                 let pct = (p * 100.0).round() as i32;
                 let pct = pct.clamp(0, 100);
                 format!("{:>4}", format!("{}%", pct))
             }
-            None => format!("{:>4}", "N/A"),
+            None => format!("{:>4}", "new"),
         };
 
         let filename = {
@@ -3600,10 +3634,19 @@ where
                 filename
             };
 
-        let last_read_local = item.last_read.with_timezone(&Local);
-        let last_read_str = last_read_local.format("%I:%M%p %b %d").to_string();
+        let last_read_str = match item.last_read {
+            Some(last_read) => last_read
+                .with_timezone(&Local)
+                .format("%I:%M%p %b %d")
+                .to_string(),
+            None => format!("{:>14}", "unread"),
+        };
+        let missing = if item.on_disk { "" } else { " [missing]" };
 
-        format!("{} {}: {}", reading_progress_str, last_read_str, book_name)
+        format!(
+            "{} {}: {}{}",
+            reading_progress_str, last_read_str, book_name, missing
+        )
     }
 
     fn settings_entries(state: &ApplicationState) -> Vec<String> {
@@ -4342,12 +4385,146 @@ where
     }
 
     fn open_library_window(&mut self) -> eyre::Result<()> {
-        let library_items = self.db_state.get_from_history()?;
+        // Populate immediately from history plus the cached scan results,
+        // then refresh the cache in the background.
+        self.rebuild_library_entries()?;
+        self.spawn_library_scan();
         let mut state = self.state.borrow_mut();
-        state.ui_state.library_items = library_items;
         state.ui_state.library_selected_index = 0;
         state.ui_state.open_window(WindowType::Library);
         Ok(())
+    }
+
+    /// Rebuild the library window entries from the database (reading history
+    /// merged with scanned on-disk books), keeping the current sort mode.
+    fn rebuild_library_entries(&mut self) -> eyre::Result<()> {
+        let history = self.db_state.get_from_history()?;
+        let scanned = self.db_state.get_scanned_library_files()?;
+        let mut state = self.state.borrow_mut();
+        let sort_mode = state.ui_state.library_sort_mode;
+        state.ui_state.library_items = Self::merge_library_entries(history, scanned, sort_mode);
+        let max_index = state.ui_state.library_items.len().saturating_sub(1);
+        if state.ui_state.library_selected_index > max_index {
+            state.ui_state.library_selected_index = max_index;
+        }
+        Ok(())
+    }
+
+    /// Merge reading history with scanned on-disk books, keyed by canonical
+    /// filepath. History rows carry last-read time and progress; scanned rows
+    /// mark books as present on disk and fill in missing metadata.
+    fn merge_library_entries(
+        history: Vec<LibraryItem>,
+        scanned: Vec<ScannedBook>,
+        sort_mode: LibrarySortMode,
+    ) -> Vec<LibraryEntry> {
+        let mut entries: Vec<LibraryEntry> = Vec::new();
+        let mut index_by_path: HashMap<String, usize> = HashMap::new();
+        for item in history {
+            let on_disk = std::path::Path::new(&item.filepath).exists();
+            index_by_path.insert(item.filepath.clone(), entries.len());
+            entries.push(LibraryEntry {
+                filepath: item.filepath,
+                title: item.title,
+                author: item.author,
+                last_read: Some(item.last_read),
+                reading_progress: item.reading_progress,
+                on_disk,
+            });
+        }
+        for book in scanned {
+            match index_by_path.get(&book.filepath) {
+                Some(&i) => {
+                    let entry = &mut entries[i];
+                    if entry.title.is_none() {
+                        entry.title = book.title;
+                    }
+                    if entry.author.is_none() {
+                        entry.author = book.author;
+                    }
+                    entry.on_disk = true;
+                }
+                None => entries.push(LibraryEntry {
+                    filepath: book.filepath,
+                    title: book.title,
+                    author: book.author,
+                    last_read: None,
+                    reading_progress: None,
+                    on_disk: true,
+                }),
+            }
+        }
+        match sort_mode {
+            LibrarySortMode::Recent => entries.sort_by(|a, b| match (a.last_read, b.last_read) {
+                (Some(x), Some(y)) => y.cmp(&x),
+                (Some(_), None) => std::cmp::Ordering::Less,
+                (None, Some(_)) => std::cmp::Ordering::Greater,
+                (None, None) => a.display_title().cmp(&b.display_title()),
+            }),
+            LibrarySortMode::Title => {
+                entries.sort_by_key(|e| e.display_title());
+            }
+            LibrarySortMode::Author => {
+                entries.sort_by(|a, b| match (&a.author, &b.author) {
+                    (Some(x), Some(y)) => x
+                        .to_lowercase()
+                        .cmp(&y.to_lowercase())
+                        .then_with(|| a.display_title().cmp(&b.display_title())),
+                    (Some(_), None) => std::cmp::Ordering::Less,
+                    (None, Some(_)) => std::cmp::Ordering::Greater,
+                    (None, None) => a.display_title().cmp(&b.display_title()),
+                });
+            }
+            LibrarySortMode::Progress => {
+                entries.sort_by(|a, b| match (a.reading_progress, b.reading_progress) {
+                    (Some(x), Some(y)) => y
+                        .partial_cmp(&x)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                        .then_with(|| a.display_title().cmp(&b.display_title())),
+                    (Some(_), None) => std::cmp::Ordering::Less,
+                    (None, Some(_)) => std::cmp::Ordering::Greater,
+                    (None, None) => a.display_title().cmp(&b.display_title()),
+                });
+            }
+        }
+        entries
+    }
+
+    /// Kick off a background scan of the configured library directories,
+    /// following the TTS worker-thread pattern. The worker opens its own
+    /// SQLite connection and signals completion over a channel polled in the
+    /// main event loop. No-op when a scan is already running or no
+    /// directories are configured.
+    fn spawn_library_scan(&mut self) {
+        if self.library_scan_rx.is_some() {
+            return;
+        }
+        let dirs = self
+            .state
+            .borrow()
+            .config
+            .settings
+            .library_directories
+            .clone();
+        if dirs.is_empty() {
+            return;
+        }
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            match State::new() {
+                Ok(state) => {
+                    if let Err(err) = crate::library::scan_library_directories(&dirs, &state) {
+                        logging::debug(format!("Library scan failed: {}", err));
+                    }
+                }
+                Err(err) => {
+                    logging::debug(format!("Library scan could not open database: {}", err));
+                }
+            }
+            let _ = tx.send(());
+        });
+        self.library_scan_rx = Some(rx);
+        self.state.borrow_mut().ui_state.library_scanning = true;
     }
 
     fn open_metadata_window(&mut self) -> eyre::Result<()> {
@@ -5738,23 +5915,26 @@ where
     }
 
     fn delete_selected_library_item(&mut self) -> eyre::Result<()> {
-        let filepath = {
+        let selected = {
             let state = self.state.borrow();
             state
                 .ui_state
                 .selected_list_index(state.ui_state.library_selected_index)
                 .and_then(|i| state.ui_state.library_items.get(i))
-                .map(|item| item.filepath.clone())
+                .map(|item| (item.filepath.clone(), item.last_read.is_some()))
         };
-        if let Some(path) = filepath {
-            self.db_state.delete_from_library(&path)?;
-            let library_items = self.db_state.get_from_history()?;
-            let mut state = self.state.borrow_mut();
-            state.ui_state.library_items = library_items;
-            if state.ui_state.library_selected_index >= state.ui_state.library_items.len() {
-                state.ui_state.library_selected_index =
-                    state.ui_state.library_items.len().saturating_sub(1);
+        if let Some((path, has_history)) = selected {
+            if !has_history {
+                let mut state = self.state.borrow_mut();
+                state.ui_state.set_message(
+                    "On-disk book without history; remove the file or the scan directory instead"
+                        .to_string(),
+                    MessageType::Warning,
+                );
+                return Ok(());
             }
+            self.db_state.delete_from_library(&path)?;
+            self.rebuild_library_entries()?;
         }
         Ok(())
     }
@@ -7687,7 +7867,7 @@ where
 mod tests {
     use super::{Reader, TtsChunk, WikipediaSearchResponse, WikipediaSummaryResponse};
     use crate::config::Config;
-    use crate::models::{TextStructure, TocEntry};
+    use crate::models::{LibraryItem, LibrarySortMode, ScannedBook, TextStructure, TocEntry};
     use crate::settings::{CfgDefaultKeymaps, Settings};
     use crate::state::State;
     use crate::ui::board::Board;
@@ -7732,6 +7912,7 @@ mod tests {
             chapter_text_structures: Vec::new(),
             current_text_width: None,
             dictionary_res_rx: None,
+            library_scan_rx: None,
             tts_done_rx: None,
             tts_child: None,
             tts_chunks: Vec::new(),
@@ -8231,6 +8412,84 @@ mod tests {
         assert!(re.is_match("exam-\nple"));
         // But a plain in-line hyphen is not silently matched.
         assert!(!re.is_match("exam-ple"));
+    }
+
+    fn history_item(path: &str, title: &str, minutes_ago: i64, progress: f32) -> LibraryItem {
+        LibraryItem {
+            last_read: chrono::Utc::now() - chrono::Duration::minutes(minutes_ago),
+            filepath: path.to_string(),
+            title: Some(title.to_string()),
+            author: Some(format!("{} Author", title)),
+            reading_progress: Some(progress),
+        }
+    }
+
+    fn scanned_book(path: &str, title: &str) -> ScannedBook {
+        ScannedBook {
+            filepath: path.to_string(),
+            title: Some(title.to_string()),
+            author: Some(format!("{} Author", title)),
+        }
+    }
+
+    #[test]
+    fn test_merge_library_entries_recent_history_first() {
+        let history = vec![
+            history_item("/h/older.epub", "Older", 60, 0.5),
+            history_item("/h/newer.epub", "Newer", 5, 0.1),
+        ];
+        let scanned = vec![scanned_book("/d/apple.epub", "Apple")];
+        let entries =
+            TestReader::merge_library_entries(history, scanned, LibrarySortMode::Recent);
+
+        // History entries by last_read desc, then scanned-only books.
+        let titles: Vec<_> = entries.iter().map(|e| e.title.clone().unwrap()).collect();
+        assert_eq!(titles, vec!["Newer", "Older", "Apple"]);
+        // Files at nonexistent history paths are flagged as missing;
+        // scanned books are on disk by definition.
+        assert!(!entries[0].on_disk);
+        assert!(entries[2].on_disk);
+        assert!(entries[2].last_read.is_none());
+    }
+
+    #[test]
+    fn test_merge_library_entries_dedups_by_path() {
+        let history = vec![history_item("/lib/book.epub", "Book", 5, 0.3)];
+        let scanned = vec![scanned_book("/lib/book.epub", "Ignored")];
+        let entries =
+            TestReader::merge_library_entries(history, scanned, LibrarySortMode::Recent);
+
+        assert_eq!(entries.len(), 1);
+        // History metadata wins, but the scan marks the file as on disk.
+        assert_eq!(entries[0].title.as_deref(), Some("Book"));
+        assert!(entries[0].on_disk);
+        assert_eq!(entries[0].reading_progress, Some(0.3));
+    }
+
+    #[test]
+    fn test_merge_library_entries_sort_modes() {
+        let history = vec![
+            history_item("/h/zebra.epub", "Zebra", 5, 0.2),
+            history_item("/h/mango.epub", "Mango", 60, 0.9),
+        ];
+        let scanned = vec![scanned_book("/d/apple.epub", "Apple")];
+
+        let by_title = TestReader::merge_library_entries(
+            history.clone(),
+            scanned.clone(),
+            LibrarySortMode::Title,
+        );
+        let titles: Vec<_> = by_title.iter().map(|e| e.title.clone().unwrap()).collect();
+        assert_eq!(titles, vec!["Apple", "Mango", "Zebra"]);
+
+        let by_progress =
+            TestReader::merge_library_entries(history, scanned, LibrarySortMode::Progress);
+        let titles: Vec<_> = by_progress
+            .iter()
+            .map(|e| e.title.clone().unwrap())
+            .collect();
+        // Progress descending; books without progress sort last.
+        assert_eq!(titles, vec!["Mango", "Zebra", "Apple"]);
     }
 }
 
