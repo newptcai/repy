@@ -13,17 +13,22 @@ use crate::ui::reader::ApplicationState;
 /// Board widget for rendering book text content
 pub struct Board {
     text_structure: Option<TextStructure>,
+    /// Cumulative word counts: `word_prefix_sums[i]` is the number of words
+    /// in `text_lines[..i]`, so range word counts are O(1) lookups.
+    word_prefix_sums: Vec<usize>,
 }
 
 impl Board {
     pub fn new() -> Self {
         Self {
             text_structure: None,
+            word_prefix_sums: Vec::new(),
         }
     }
 
     pub fn with_text_structure(mut self, text_structure: TextStructure) -> Self {
         self.text_structure = Some(text_structure);
+        self.rebuild_word_prefix_sums();
         self
     }
 
@@ -704,6 +709,38 @@ impl Board {
 
     pub fn update_text_structure(&mut self, text_structure: TextStructure) {
         self.text_structure = Some(text_structure);
+        self.rebuild_word_prefix_sums();
+    }
+
+    fn rebuild_word_prefix_sums(&mut self) {
+        let lines = self
+            .text_structure
+            .as_ref()
+            .map(|ts| ts.text_lines.as_slice())
+            .unwrap_or(&[]);
+        let mut sums = Vec::with_capacity(lines.len() + 1);
+        let mut total = 0usize;
+        sums.push(0);
+        for line in lines {
+            if line.as_str() != CHAPTER_BREAK_MARKER {
+                total += line
+                    .split_whitespace()
+                    .filter(|word| word.chars().any(|ch| ch.is_alphanumeric()))
+                    .count();
+            }
+            sums.push(total);
+        }
+        self.word_prefix_sums = sums;
+    }
+
+    /// Number of words in `text_lines[start_row..end_row]`, excluding chapter
+    /// break markers. O(1) via the prefix-sum cache.
+    pub fn words_in_range(&self, start_row: usize, end_row: usize) -> usize {
+        let end = end_row.min(self.word_prefix_sums.len().saturating_sub(1));
+        if start_row >= end {
+            return 0;
+        }
+        self.word_prefix_sums[end] - self.word_prefix_sums[start_row]
     }
 }
 

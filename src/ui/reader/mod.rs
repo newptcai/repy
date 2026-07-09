@@ -9,7 +9,7 @@ use std::rc::Rc;
 use std::sync::LazyLock;
 use std::time::{Duration, Instant};
 
-use chrono::{DateTime, Local, Utc};
+use chrono::{DateTime, Local, NaiveDate, Utc};
 use crossterm::event::{
     Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
 };
@@ -644,6 +644,18 @@ struct ActiveReadingSession {
     words: usize,
 }
 
+/// DB-derived reading statistics cached off the per-keypress path; refreshed
+/// only when a session row is inserted, the book changes, or the Statistics
+/// window opens.
+struct CachedStatistics {
+    book_id: Option<String>,
+    stats: ReadingStatistics,
+    /// Day assumed active for `streaks_with_day` (the running session's day).
+    streak_day: NaiveDate,
+    /// Streaks computed as if `streak_day` were a recorded reading day.
+    streaks_with_day: (usize, usize),
+}
+
 enum TtsWorkerCommand {
     UpdatePlaybackIndex(usize),
     Stop,
@@ -699,6 +711,8 @@ pub struct Reader<B: Backend = CrosstermBackend<io::Stdout>> {
     tts_temp_dir: Option<std::path::PathBuf>,
     /// Active reading-statistics session, flushed on idle, book switch, or quit.
     reading_session: Option<ActiveReadingSession>,
+    /// Cached DB-side reading statistics; see [`CachedStatistics`].
+    cached_statistics: Option<CachedStatistics>,
 }
 
 impl Reader {
@@ -1097,6 +1111,7 @@ where
             tts_current_engine: String::new(),
             tts_temp_dir: None,
             reading_session: None,
+            cached_statistics: None,
         })
     }
 
@@ -1301,6 +1316,8 @@ where
             session.rows,
             session.words,
         )?;
+        // The inserted row changes the DB totals; force a re-query.
+        self.cached_statistics = None;
         self.refresh_statistics_snapshot()?;
         Ok(())
     }
@@ -1380,19 +1397,41 @@ where
             .book_identity
             .as_ref()
             .map(|identity| identity.book_id.clone());
-        let mut stats = self.db_state.get_reading_statistics(book_id.as_deref())?;
+        let session_day = self
+            .reading_session
+            .as_ref()
+            .map(|session| session.started_at.date_naive());
 
+        // Only hit the database when the cache does not apply (book changed,
+        // session day rolled over, or the cache was explicitly invalidated);
+        // the per-keypress path is pure in-memory overlay work.
+        let cache_valid = self.cached_statistics.as_ref().is_some_and(|cache| {
+            cache.book_id == book_id && session_day.is_none_or(|day| day == cache.streak_day)
+        });
+        if !cache_valid {
+            let stats = self.db_state.get_reading_statistics(book_id.as_deref())?;
+            let streak_day = session_day.unwrap_or_else(|| Utc::now().date_naive());
+            let streaks_with_day = self.db_state.reading_streaks_with_day(Some(streak_day))?;
+            self.cached_statistics = Some(CachedStatistics {
+                book_id: book_id.clone(),
+                stats,
+                streak_day,
+                streaks_with_day,
+            });
+        }
+        let cache = self
+            .cached_statistics
+            .as_ref()
+            .expect("statistics cache populated above");
+
+        let mut stats = cache.stats.clone();
         if let Some(session) = self.reading_session.as_ref() {
             let active_seconds = (Utc::now() - session.started_at).num_seconds().max(0);
             stats.global.seconds += active_seconds;
             stats.global.rows += session.rows as i64;
             stats.global.words += session.words as i64;
             stats.global.sessions += 1;
-            let (current_streak, longest_streak) = self
-                .db_state
-                .reading_streaks_with_day(Some(session.started_at.date_naive()))?;
-            stats.current_streak_days = current_streak;
-            stats.longest_streak_days = longest_streak;
+            (stats.current_streak_days, stats.longest_streak_days) = cache.streaks_with_day;
             if book_id.as_deref() == Some(session.book_id.as_str()) {
                 stats.book.seconds += active_seconds;
                 stats.book.rows += session.rows as i64;
@@ -1453,22 +1492,7 @@ where
     }
 
     fn count_words_in_range(&self, start_row: usize, end_row: usize) -> usize {
-        let Some(lines) = self.board.lines() else {
-            return 0;
-        };
-        let end = end_row.min(lines.len());
-        if start_row >= end {
-            return 0;
-        }
-        lines[start_row..end]
-            .iter()
-            .filter(|line| line.as_str() != CHAPTER_BREAK_MARKER)
-            .map(|line| {
-                line.split_whitespace()
-                    .filter(|word| word.chars().any(|ch| ch.is_alphanumeric()))
-                    .count()
-            })
-            .sum()
+        self.board.words_in_range(start_row, end_row)
     }
 
     fn persist_state(&mut self) -> eyre::Result<()> {
@@ -4328,6 +4352,8 @@ where
     }
 
     fn open_statistics_window(&mut self) -> eyre::Result<()> {
+        // Re-query the database so the window reflects the latest totals.
+        self.cached_statistics = None;
         self.refresh_statistics_snapshot()?;
         self.state
             .borrow_mut()
@@ -7712,6 +7738,7 @@ mod tests {
             tts_current_engine: String::new(),
             tts_temp_dir: None,
             reading_session: None,
+            cached_statistics: None,
         }
     }
 
