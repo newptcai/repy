@@ -2,7 +2,7 @@ use crate::models::{
     BookIdentity, Highlight, LibraryItem, ReadingState, ReadingStatistics, ReadingStatsTotals,
 };
 use crate::theme::ColorTheme;
-use chrono::{DateTime, NaiveDate, Utc};
+use chrono::{DateTime, Local, NaiveDate, Utc};
 use eyre::Result;
 use rusqlite::{Connection, OptionalExtension, params};
 use std::collections::BTreeSet;
@@ -802,16 +802,14 @@ impl State {
     }
 
     pub fn reading_streaks_with_day(&self, extra_day: Option<NaiveDate>) -> Result<(usize, usize)> {
-        let mut stmt = self.conn.prepare(
-            "SELECT DISTINCT substr(started_at, 1, 10)
-             FROM reading_sessions
-             ORDER BY 1 ASC",
-        )?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT started_at FROM reading_sessions")?;
         let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
         let mut days = BTreeSet::new();
         for row in rows {
-            if let Ok(day) = NaiveDate::parse_from_str(&row?, "%Y-%m-%d") {
-                days.insert(day);
+            if let Ok(started_at) = DateTime::parse_from_rfc3339(&row?) {
+                days.insert(started_at.with_timezone(&Local).date_naive());
             }
         }
         if let Some(day) = extra_day {
@@ -831,7 +829,7 @@ impl State {
             previous = Some(*day);
         }
 
-        let today = Utc::now().date_naive();
+        let today = Local::now().date_naive();
         let mut current = 0usize;
         let mut day = today;
         while days.contains(&day) {
@@ -1527,7 +1525,13 @@ mod tests {
             .upsert_book_identity("/tmp/book.epub", &identity)
             .unwrap();
 
-        let now = chrono::Utc::now();
+        let now = chrono::Local::now()
+            .date_naive()
+            .and_hms_opt(12, 0, 0)
+            .unwrap()
+            .and_local_timezone(chrono::Local)
+            .unwrap()
+            .with_timezone(&chrono::Utc);
         state
             .insert_reading_session(
                 &identity.book_id,

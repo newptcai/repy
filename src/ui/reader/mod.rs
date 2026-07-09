@@ -1400,7 +1400,7 @@ where
         let session_day = self
             .reading_session
             .as_ref()
-            .map(|session| session.started_at.date_naive());
+            .map(|session| session.started_at.with_timezone(&Local).date_naive());
 
         // Only hit the database when the cache does not apply (book changed,
         // session day rolled over, or the cache was explicitly invalidated);
@@ -1410,7 +1410,7 @@ where
         });
         if !cache_valid {
             let stats = self.db_state.get_reading_statistics(book_id.as_deref())?;
-            let streak_day = session_day.unwrap_or_else(|| Utc::now().date_naive());
+            let streak_day = session_day.unwrap_or_else(|| Local::now().date_naive());
             let streaks_with_day = self.db_state.reading_streaks_with_day(Some(streak_day))?;
             self.cached_statistics = Some(CachedStatistics {
                 book_id: book_id.clone(),
