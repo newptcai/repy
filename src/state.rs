@@ -1,5 +1,6 @@
 use crate::models::{
     BookIdentity, Highlight, LibraryItem, ReadingState, ReadingStatistics, ReadingStatsTotals,
+    ScannedBook,
 };
 use crate::theme::ColorTheme;
 use chrono::{DateTime, Local, NaiveDate, Utc};
@@ -94,6 +95,17 @@ impl State {
             conn.execute_batch("BEGIN IMMEDIATE TRANSACTION;")?;
             if let Err(err) = Self::migrate_v5(conn).and_then(|_| {
                 conn.pragma_update(None, "user_version", 5)
+                    .map_err(Into::into)
+            }) {
+                let _ = conn.execute_batch("ROLLBACK;");
+                return Err(err);
+            }
+            conn.execute_batch("COMMIT;")?;
+        }
+        if current_version < 6 {
+            conn.execute_batch("BEGIN IMMEDIATE TRANSACTION;")?;
+            if let Err(err) = Self::migrate_v6(conn).and_then(|_| {
+                conn.pragma_update(None, "user_version", 6)
                     .map_err(Into::into)
             }) {
                 let _ = conn.execute_batch("ROLLBACK;");
@@ -270,6 +282,98 @@ impl State {
             ",
         )?;
         Ok(())
+    }
+
+    fn migrate_v6(conn: &Connection) -> Result<()> {
+        // Metadata cache for the library scanner: one row per ebook file
+        // found in the configured scan directories, keyed by canonical path.
+        // `mtime` (seconds since epoch) invalidates the cached metadata when
+        // the file changes on disk.
+        conn.execute_batch(
+            "
+            CREATE TABLE IF NOT EXISTS library_files (
+                filepath TEXT PRIMARY KEY,
+                mtime INTEGER NOT NULL,
+                title TEXT,
+                author TEXT,
+                scanned_at DATETIME DEFAULT (datetime('now'))
+            );
+            ",
+        )?;
+        Ok(())
+    }
+
+    /// Return cached (title, author) for a scanned file if the cache row
+    /// matches the file's current modification time.
+    pub fn cached_library_file(
+        &self,
+        filepath: &str,
+        mtime: i64,
+    ) -> Result<Option<(Option<String>, Option<String>)>> {
+        let result = self
+            .conn
+            .query_row(
+                "SELECT title, author FROM library_files WHERE filepath=? AND mtime=?",
+                params![filepath, mtime],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?;
+        Ok(result)
+    }
+
+    pub fn upsert_library_file(
+        &self,
+        filepath: &str,
+        mtime: i64,
+        title: Option<&str>,
+        author: Option<&str>,
+    ) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO library_files (filepath, mtime, title, author, scanned_at)
+             VALUES (?, ?, ?, ?, datetime('now'))
+             ON CONFLICT(filepath) DO UPDATE SET
+                mtime=excluded.mtime,
+                title=excluded.title,
+                author=excluded.author,
+                scanned_at=excluded.scanned_at",
+            params![filepath, mtime, title, author],
+        )?;
+        Ok(())
+    }
+
+    /// Drop cache rows for files that were not seen in the latest scan.
+    pub fn prune_library_files(&self, seen: &[String]) -> Result<()> {
+        if seen.is_empty() {
+            self.conn.execute("DELETE FROM library_files", [])?;
+            return Ok(());
+        }
+        let placeholders = vec!["?"; seen.len()].join(",");
+        let sql = format!(
+            "DELETE FROM library_files WHERE filepath NOT IN ({})",
+            placeholders
+        );
+        self.conn
+            .execute(&sql, rusqlite::params_from_iter(seen.iter()))?;
+        Ok(())
+    }
+
+    /// All scanned on-disk books, from the cache (no filesystem access).
+    pub fn get_scanned_library_files(&self) -> Result<Vec<ScannedBook>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT filepath, title, author FROM library_files ORDER BY filepath")?;
+        let rows = stmt.query_map([], |row| {
+            Ok(ScannedBook {
+                filepath: row.get(0)?,
+                title: row.get(1)?,
+                author: row.get(2)?,
+            })
+        })?;
+        let mut files = Vec::new();
+        for row in rows {
+            files.push(row?);
+        }
+        Ok(files)
     }
 
     /// Record a search query, refreshing its recency. History is capped at
@@ -1253,7 +1357,7 @@ mod tests {
         let version: i64 = conn
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .unwrap();
-        assert_eq!(version, 5);
+        assert_eq!(version, 6);
     }
 
     fn sample_identity(book_id: &str) -> BookIdentity {
@@ -1404,7 +1508,7 @@ mod tests {
         let version: i64 = conn
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .unwrap();
-        assert_eq!(version, 5);
+        assert_eq!(version, 6);
 
         let row: i64 = conn
             .query_row(
@@ -1562,6 +1666,65 @@ mod tests {
         assert_eq!(stats.current_streak_days, 2);
         assert!(stats.longest_streak_days >= 2);
         assert_eq!(stats.book_title.as_deref(), Some("Title"));
+    }
+
+    #[test]
+    fn test_library_files_cache_roundtrip() {
+        let state = State::new_for_test();
+
+        // Empty cache: no hit, listing is empty.
+        assert!(state.cached_library_file("/lib/a.epub", 100).unwrap().is_none());
+        assert!(state.get_scanned_library_files().unwrap().is_empty());
+
+        state
+            .upsert_library_file("/lib/a.epub", 100, Some("Alpha"), Some("Anna"))
+            .unwrap();
+        state
+            .upsert_library_file("/lib/b.epub", 200, None, None)
+            .unwrap();
+
+        // Cache hit only when mtime matches.
+        assert_eq!(
+            state.cached_library_file("/lib/a.epub", 100).unwrap(),
+            Some((Some("Alpha".to_string()), Some("Anna".to_string())))
+        );
+        assert!(state.cached_library_file("/lib/a.epub", 101).unwrap().is_none());
+
+        // Upsert replaces metadata and mtime.
+        state
+            .upsert_library_file("/lib/a.epub", 101, Some("Alpha 2"), None)
+            .unwrap();
+        assert_eq!(
+            state.cached_library_file("/lib/a.epub", 101).unwrap(),
+            Some((Some("Alpha 2".to_string()), None))
+        );
+
+        let files = state.get_scanned_library_files().unwrap();
+        assert_eq!(files.len(), 2);
+        assert_eq!(files[0].filepath, "/lib/a.epub");
+        assert_eq!(files[1].filepath, "/lib/b.epub");
+    }
+
+    #[test]
+    fn test_prune_library_files() {
+        let state = State::new_for_test();
+        state
+            .upsert_library_file("/lib/a.epub", 1, Some("A"), None)
+            .unwrap();
+        state
+            .upsert_library_file("/lib/b.epub", 2, Some("B"), None)
+            .unwrap();
+
+        state
+            .prune_library_files(&["/lib/b.epub".to_string()])
+            .unwrap();
+        let files = state.get_scanned_library_files().unwrap();
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].filepath, "/lib/b.epub");
+
+        // Empty scan clears the cache entirely.
+        state.prune_library_files(&[]).unwrap();
+        assert!(state.get_scanned_library_files().unwrap().is_empty());
     }
 
     #[test]

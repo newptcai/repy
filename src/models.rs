@@ -102,6 +102,70 @@ pub struct LibraryItem {
     pub reading_progress: Option<f32>,
 }
 
+/// An ebook file found by the library directory scanner.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ScannedBook {
+    pub filepath: String,
+    pub title: Option<String>,
+    pub author: Option<String>,
+}
+
+/// A row in the library window: the merge of reading history and on-disk
+/// scanned books, keyed by canonical filepath.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LibraryEntry {
+    pub filepath: String,
+    pub title: Option<String>,
+    pub author: Option<String>,
+    /// Present only for books with reading history.
+    pub last_read: Option<DateTime<Utc>>,
+    pub reading_progress: Option<f32>,
+    /// False for history entries whose file no longer exists on disk.
+    pub on_disk: bool,
+}
+
+impl LibraryEntry {
+    /// Sort key: title if known, otherwise the file name.
+    pub fn display_title(&self) -> String {
+        match &self.title {
+            Some(title) => title.to_lowercase(),
+            None => std::path::Path::new(&self.filepath)
+                .file_name()
+                .map(|n| n.to_string_lossy().to_lowercase())
+                .unwrap_or_else(|| self.filepath.to_lowercase()),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum LibrarySortMode {
+    #[default]
+    Recent,
+    Title,
+    Author,
+    Progress,
+}
+
+impl LibrarySortMode {
+    pub fn next(self) -> Self {
+        match self {
+            Self::Recent => Self::Title,
+            Self::Title => Self::Author,
+            Self::Author => Self::Progress,
+            Self::Progress => Self::Recent,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Recent => "recent",
+            Self::Title => "title",
+            Self::Author => "author",
+            Self::Progress => "progress",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct ReadingState {
     pub content_index: usize,

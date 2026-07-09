@@ -26,12 +26,13 @@ textwrap = { version = "0.16.1", features = ["hyphenation"] }
 reqwest = { version = "0.12.24", default-features = false, features = ["blocking", "json", "rustls-tls"] }
 unicode-segmentation = "1.12.0"
 unicode-width = "0.2.2"
+walkdir = "2.5.0"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
 [dev-dependencies]
 assert_cmd = "2.1.1"
-insta = "1"
+insta = { version = "1", features = ["filters"] }
 predicates = "3.1.3"
 tempfile = "3.23.0"
