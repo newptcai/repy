@@ -181,10 +181,13 @@ Press `?` in the TUI to see the help window at any time (`Help (?)`).
 - `u` — Links on Page (`Enter` previews internal links; `Enter` again jumps)
 - `o` — Images on Page
 - `i` — Metadata
-- `r` — Library (History)
+- `r` — Library (reading history merged with books found on disk)
   - `j`/`k` to select an entry
   - `Enter` to open the selected book
   - `d` to delete the selected history entry
+  - `s` to cycle the sort order: recent / title / author / progress
+  - Books found in `library_directories` but never opened show as `new`/`unread`;
+    history entries whose file has disappeared are marked `[missing]`
 - `R` — Reading Statistics
 - `s` — Settings
   - `Enter`: Activate (toggle boolean, input for dictionary client)
@@ -300,7 +303,8 @@ Example `configuration.json`:
     "seamless_between_chapters": true,
     "color_theme": "Default",
     "preferred_tts_engine": "purr",
-    "tts_engine_args": []
+    "tts_engine_args": [],
+    "library_directories": ["~/Calibre", "~/Books"]
   },
   "Keymap": {
     "scroll_up": "k",
@@ -318,6 +322,27 @@ Example `configuration.json`:
 
 You can modify any setting or keybinding by editing this file. Changes take effect
 on next restart.
+
+### Library directories
+
+Set `"library_directories"` to a list of directories to scan for EPUB files
+(`~` expands to your home directory):
+
+```json
+"library_directories": ["~/Calibre", "~/Books"]
+```
+
+Opening the Library window (`r`) then shows your reading history merged with
+every book found in those directories, and refreshes the list with a
+background scan. Metadata is cached in the database keyed by file path and
+modification time, so repeat scans only read new or changed files.
+
+A [Calibre](https://calibre-ebook.com/) library works as-is: point
+`library_directories` at the Calibre library root and `repy` walks its
+`Author/Title (id)/` folder structure, reading title and author from the
+`metadata.opf` file Calibre keeps next to each book (without opening the
+EPUB itself). The Calibre database is never written to — the directory is
+only read.
 
 ### Mouse support
 
@@ -344,6 +369,9 @@ The database file (`states.db`) is located in the same directory as your config 
 
 - **`library`** — Metadata and reading progress
   - `filepath`, `last_read`, `title`, `author`, `reading_progress`
+
+- **`library_files`** — Metadata cache for books found in `library_directories`
+  - `filepath`, `mtime`, `title`, `author`; refreshed by the background scan
 
 - **`bookmarks`** — Named bookmarks per book
   - `id`, `filepath`, `name`, plus position fields

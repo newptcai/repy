@@ -87,6 +87,7 @@ src/
 ├── config.rs            # Configuration loading/saving (XDG support)
 ├── state.rs             # SQLite database for reading state, library, bookmarks
 ├── ebook.rs             # EPUB parsing and book data structures
+├── library.rs           # Library directory scanning (walkdir, Calibre metadata.opf)
 ├── parser.rs            # HTML-to-text conversion, wrapping, hyphenation
 ├── models.rs            # Data models (ReadingState, SearchData, WindowType, etc.)
 ├── settings.rs          # User settings structure
@@ -194,8 +195,23 @@ When debugging or fixing HTML parsing bugs (links, footnotes, sections, formatti
 - `textwrap` 0.16.1: Text wrapping with hyphenation support
 - `clap` 4.5.53: CLI argument parsing
 - `arboard` 3.6.1: Clipboard access for yank functionality
+- `walkdir` 2.5.0: Recursive library directory scanning
 
 ## Feature Details
+
+### Library
+- Press `r` to open the Library window: reading history merged with books
+  found in the configured `library_directories` (set in `configuration.json`,
+  `~` expands to home)
+- Background scan on a worker thread (own SQLite connection), signalled over
+  an mpsc channel polled in the main event loop; results cached in the
+  `library_files` table keyed by (canonical path, mtime)
+- Calibre libraries work as plain directories: title/author come from the
+  per-book `metadata.opf` when present (avoids unzipping the EPUB); the
+  Calibre database is never touched
+- `s` cycles sorting (recent/title/author/progress), `/` fuzzy-filters,
+  `d` removes a history entry; never-opened books show `unread`, history
+  entries whose file vanished show `[missing]`
 
 ### Image Handling
 - Images are preprocessed to include descriptive alt text (e.g., `[Image: filename.jpg]`).

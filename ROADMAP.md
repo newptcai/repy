@@ -23,11 +23,11 @@ Effort estimates: S = small, M = medium, L = large.
 7. **Mouse + line-number wiring** (S-M) — ✅ done: gutter width fix; `mouse_support` honored (capture only when on, live toggle in Settings, wheel scroll everywhere, click-to-follow links in the reader).
 8. ~~**Double-spread: implement minimally or delete**~~ — resolved by deletion (2026-07): the half-wired settings (`start_with_double_spread`, `double_spread_toggle`, `DoubleSpreadPadding`) were removed. A real two-column mode would perturb the row-keyed coordinate system (visual mode, TTS, highlights, search) for modest value in a TUI; can be revisited as its own project if ever wanted.
 
-## Phase 2 — Data layer: statistics, persistence, library
+## Phase 2 — Data layer: statistics, persistence, library — ✅ complete (2026-07)
 
 1. **Reading statistics** (M) — ✅ done (2026-07): new `reading_sessions` table keyed by stable `book_id`; active sessions close on idle, book switch, and quit; Statistics window shows per-book/global time, rows, words, WPM, estimates, and streaks; the top bar shows estimated chapter time remaining.
 2. **Persist jump history + marks per book** (S) — ✅ done (2026-07): new `jump_history` and `marks` tables; Vim-style `m<c>` / `` `<c> `` marks persist per book; jump history is saved on state persistence.
-3. **Real library** (M-L) — configurable scan directories (`walkdir`), background metadata scan cached in SQLite (path+mtime), sort by recent/title/author/progress, fuzzy filter, distinguish on-disk vs history. Rewrite `src/ui/windows/library.rs`; follow the TTS worker-thread pattern for background scanning.
+3. **Real library** (M-L) — ✅ done (2026-07): `library_directories` setting scanned with `walkdir` (symlinks followed); background scan on a worker thread with its own SQLite connection, cached in `library_files` by path+mtime; Calibre folder structure supported by reading the per-book `metadata.opf` (no EPUB unzip, no Calibre DB writes); library window merges history with on-disk books, sorts by recent/title/author/progress (`s`), keeps fuzzy filter, and marks `unread`/`[missing]` entries.
 4. **Footnote/link popup preview** (S-M) — ✅ done (2026-07): following an internal link opens a ~10-line preview popup (`Enter` jumps, `Esc`/`q` stays), reusing the links-window preview code and covered by TUI snapshots.
 5. **Per-book settings** (S) — ✅ done (2026-07): per-book text width is preserved and `reading_states.color_theme` stores an optional book-specific theme override; null inherits the global config theme.
 
