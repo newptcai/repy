@@ -1329,9 +1329,9 @@ where
         if session.last_activity.elapsed() < READING_IDLE_TIMEOUT {
             return Ok(());
         }
-        let idle_allowance = chrono::Duration::from_std(READING_IDLE_TIMEOUT)
-            .unwrap_or_else(|_| chrono::Duration::seconds(0));
-        let ended_at = session.last_activity_at + idle_allowance;
+        // End at the last recorded activity; the idle gap itself was not
+        // reading time.
+        let ended_at = session.last_activity_at;
         self.finish_reading_session(ended_at)
     }
 
