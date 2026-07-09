@@ -2073,6 +2073,13 @@ where
             return Ok(true);
         };
         self.state.borrow_mut().ui_state.pending_mark_command = None;
+        if !name.is_ascii_alphanumeric() {
+            self.state.borrow_mut().ui_state.set_message(
+                "Invalid mark name (use a-z, A-Z, 0-9)".to_string(),
+                MessageType::Warning,
+            );
+            return Ok(true);
+        }
 
         match command {
             PendingMarkCommand::Set => {

@@ -26,7 +26,7 @@ const HELP_TEXT: &[&str] = &[
     " Jump History:",
     "   Ctrl+o            Jump Back",
     "   Ctrl+i/Tab        Jump Forward",
-    "   m<c>              Set Mark <c>",
+    "   m<c>              Set Mark <c> (a-z, A-Z, 0-9)",
     "   `<c>              Jump To Mark <c>",
     " Search:",
     "   /                 Start Search (matches update as you type)",

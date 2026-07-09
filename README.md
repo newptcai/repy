@@ -175,7 +175,7 @@ Press `?` in the TUI to see the help window at any time (`Help (?)`).
 - `!` — Text-to-Speech (Toggle)
 - `v` — Cursor Mode
 - `t` — Table of Contents
-- `m<char>` — Set a persistent mark
+- `m<char>` — Set a persistent mark (a-z, A-Z, 0-9)
 - `` `<char> `` — Jump to a persistent mark
 - `B` — Bookmarks (`a` to add, `d` to delete, `Enter` to jump)
 - `u` — Links on Page (`Enter` previews internal links; `Enter` again jumps)

@@ -1,5 +1,6 @@
 ---
 source: src/ui/reader/snapshot_tests.rs
+assertion_line: 67
 expression: reader.terminal.backend()
 ---
 "  ┌Help (?)──────────────────────────────────────────────────────────────────┐0%"
@@ -19,7 +20,7 @@ expression: reader.terminal.backend()
 "  │ Jump History:                                                            │  "
 "  │   Ctrl+o            Jump Back                                            │  "
 "  │   Ctrl+i/Tab        Jump Forward                                         │  "
-"  │   m<c>              Set Mark <c>                                         │  "
+"  │   m<c>              Set Mark <c> (a-z, A-Z, 0-9)                         │  "
 "  │   `<c>              Jump To Mark <c>                                     │  "
 "  │ Search:                                                                  │  "
 "  │   /                 Start Search (matches update as you type)            │  "
