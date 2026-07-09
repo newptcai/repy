@@ -1,7 +1,7 @@
 //! Integration-style snapshot tests that drive `Reader<TestBackend>` through
 //! synthetic key events and snapshot the rendered 80x24 screen with insta.
 
-use super::Reader;
+use super::{READING_JUMP_MIN_THRESHOLD_ROWS, Reader};
 use crate::config::Config;
 use crate::settings::{CfgDefaultKeymaps, Settings};
 use crate::state::State;
@@ -114,6 +114,57 @@ fn cursor_mode() {
     let mut reader = test_reader();
     press_char(&mut reader, 'v');
     insta::assert_snapshot!(reader.terminal.backend());
+}
+
+/// Mimic the run loop: handle a key event, then record reading activity
+/// with the row observed before the event.
+fn press_recorded(reader: &mut Reader<TestBackend>, code: KeyCode) {
+    let previous_row = reader.state.borrow().reading_state.row;
+    reader
+        .handle_key_event(KeyEvent::new(code, KeyModifiers::NONE))
+        .expect("key handling failed");
+    reader
+        .record_reading_activity(previous_row)
+        .expect("recording reading activity failed");
+}
+
+#[test]
+fn reading_stats_dedup_and_jump_detection() {
+    let mut reader = test_reader();
+
+    // Linear scrolling counts each row (and its words) exactly once.
+    for _ in 0..3 {
+        press_recorded(&mut reader, KeyCode::Char('j'));
+    }
+    let expected_words = reader.count_words_in_range(0, 3);
+    let session = reader.reading_session.as_ref().expect("session active");
+    assert_eq!(session.rows, 3);
+    assert_eq!(session.words, expected_words);
+
+    // Re-reading the same span (up and back down) must not double-count.
+    for _ in 0..3 {
+        press_recorded(&mut reader, KeyCode::Char('k'));
+    }
+    for _ in 0..3 {
+        press_recorded(&mut reader, KeyCode::Char('j'));
+    }
+    let session = reader.reading_session.as_ref().expect("session active");
+    assert_eq!(session.rows, 3);
+    assert_eq!(session.words, expected_words);
+
+    // A large jump (G = end of book) advances the high-water mark without
+    // counting the skipped span as read.
+    let jump_threshold = reader.page_size().max(READING_JUMP_MIN_THRESHOLD_ROWS);
+    assert!(
+        reader.board.total_lines() > jump_threshold + 3,
+        "fixture must be large enough to trigger jump detection"
+    );
+    press_recorded(&mut reader, KeyCode::Char('G'));
+    let current_row = reader.state.borrow().reading_state.row;
+    let session = reader.reading_session.as_ref().expect("session active");
+    assert_eq!(session.rows, 3);
+    assert_eq!(session.words, expected_words);
+    assert_eq!(session.max_counted_row, current_row);
 }
 
 #[test]

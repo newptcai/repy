@@ -47,6 +47,9 @@ use crate::ui::windows::{
 static RE_TTS_HYPHEN: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"([A-Za-z])-\s+([a-z])").unwrap());
 const READING_IDLE_TIMEOUT: Duration = Duration::from_secs(5 * 60);
+/// Floor for the jump-detection threshold in reading statistics, used when
+/// the terminal size is unknown or smaller than a typical screen.
+const READING_JUMP_MIN_THRESHOLD_ROWS: usize = 50;
 const DEFAULT_READING_WPM: f64 = 250.0;
 
 fn previous_grapheme_boundary(text: &str, cursor: usize) -> usize {
@@ -634,7 +637,9 @@ struct ActiveReadingSession {
     started_at: DateTime<Utc>,
     last_activity: Instant,
     last_activity_at: DateTime<Utc>,
-    last_row: usize,
+    /// High-water mark: rows/words up to this row have already been counted,
+    /// so re-reading (scrolling back up and down) is not double-counted.
+    max_counted_row: usize,
     rows: usize,
     words: usize,
 }
@@ -1279,7 +1284,7 @@ where
             started_at: now,
             last_activity: Instant::now(),
             last_activity_at: now,
-            last_row: row,
+            max_counted_row: row,
             rows: 0,
             words: 0,
         });
@@ -1334,18 +1339,32 @@ where
             self.start_reading_session(book_id, previous_row);
         }
 
-        let words = if current_row > previous_row {
-            self.count_words_in_range(previous_row, current_row)
-        } else {
-            0
-        };
+        // Only count forward movement past the session's high-water mark, so
+        // re-reading the same span is not double-counted.
+        let jump_threshold = self.page_size().max(READING_JUMP_MIN_THRESHOLD_ROWS);
+        let counted = self.reading_session.as_ref().and_then(|session| {
+            if current_row <= previous_row || current_row <= session.max_counted_row {
+                return None;
+            }
+            // Movement larger than one screen is a jump (G, ToC, search,
+            // link, mark): the skipped span was not read, so advance the
+            // mark without counting it.
+            if current_row - previous_row > jump_threshold {
+                return Some((0, 0));
+            }
+            let start = previous_row.max(session.max_counted_row);
+            Some((
+                current_row - start,
+                self.count_words_in_range(start, current_row),
+            ))
+        });
 
         if let Some(session) = self.reading_session.as_mut() {
-            if current_row > previous_row {
-                session.rows += current_row - previous_row;
+            if let Some((rows, words)) = counted {
+                session.rows += rows;
                 session.words += words;
+                session.max_counted_row = current_row;
             }
-            session.last_row = current_row;
             session.last_activity = Instant::now();
             session.last_activity_at = Utc::now();
         }
