@@ -36,6 +36,7 @@ use crate::state::State;
 use crate::theme::{ColorTheme, Theme};
 use crate::ui::board::Board;
 use crate::ui::graphics::Graphics;
+use ratatui_image::protocol::StatefulProtocol;
 use crate::ui::windows::{
     bookmarks::BookmarksWindow, dictionary::DictionaryWindow, fuzzy_filter_indices,
     help::HelpWindow, images::ImagesWindow, library::LibraryWindow, links::LinksWindow,
@@ -52,6 +53,8 @@ const READING_IDLE_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 /// the terminal size is unknown or smaller than a typical screen.
 const READING_JUMP_MIN_THRESHOLD_ROWS: usize = 50;
 const DEFAULT_READING_WPM: f64 = 250.0;
+/// How long the library selection must rest before its cover is loaded.
+const LIBRARY_COVER_DEBOUNCE: Duration = Duration::from_millis(150);
 
 fn previous_grapheme_boundary(text: &str, cursor: usize) -> usize {
     use unicode_segmentation::UnicodeSegmentation;
@@ -728,6 +731,14 @@ pub struct Reader<B: Backend = CrosstermBackend<io::Stdout>> {
     graphics: Graphics,
     /// State of the full-screen in-terminal image viewer, if open.
     image_view: Option<ImageViewState>,
+    /// Decoded cover render protocols for library entries, keyed by book
+    /// filepath. `None` marks entries whose cover could not be loaded, so
+    /// they are not retried.
+    library_covers: HashMap<String, Option<StatefulProtocol>>,
+    /// Library selection whose cover is not cached yet, and when it was
+    /// first seen. Loading is debounced so held-down scrolling through the
+    /// list stays responsive.
+    library_cover_pending: Option<(String, Instant)>,
 }
 
 /// Full-screen in-terminal image viewer state (`WindowType::ImageView`).
@@ -738,7 +749,7 @@ struct ImageViewState {
     /// Image filename, shown in the window title.
     title: String,
     /// Cached encode state for the detected terminal graphics protocol.
-    protocol: ratatui_image::protocol::StatefulProtocol,
+    protocol: StatefulProtocol,
 }
 
 impl Reader {
@@ -1146,16 +1157,31 @@ where
             cached_statistics: None,
             graphics: Graphics::disabled(),
             image_view: None,
+            library_covers: HashMap::new(),
+            library_cover_pending: None,
         })
     }
 
     /// Extract the current UI state into a single frame draw.
     fn draw(&mut self) -> eyre::Result<()> {
         let state = self.state.clone();
+        let library_cover = if self.state.borrow().ui_state.show_library {
+            self.selected_library_path()
+                .and_then(|path| self.library_covers.get_mut(&path))
+                .and_then(|cover| cover.as_mut())
+        } else {
+            None
+        };
         let image_view = &mut self.image_view;
         self.terminal.draw(|f| {
             let state_ref = state.borrow();
-            Self::render_static(f, &state_ref, &self.board, &self.content_start_rows);
+            Self::render_static(
+                f,
+                &state_ref,
+                &self.board,
+                &self.content_start_rows,
+                library_cover,
+            );
             if state_ref.ui_state.active_window == WindowType::ImageView
                 && let Some(view) = image_view.as_mut()
             {
@@ -1655,6 +1681,7 @@ impl Reader {
             }
 
             self.tts_poll_worker()?;
+            self.poll_library_cover();
 
             // Check for TTS paragraph completion → advance to next paragraph
             if self.state.borrow().ui_state.tts_active {
@@ -1673,7 +1700,10 @@ impl Reader {
             self.draw()?;
 
             // Poll with timeout so we can re-render when messages expire or for animation
-            let poll_timeout = {
+            let poll_timeout = if self.library_cover_pending.is_some() {
+                // Wake up soon so the debounced cover load fires.
+                Duration::from_millis(50)
+            } else {
                 let state = self.state.borrow();
                 if state.ui_state.tts_converting {
                     Duration::from_millis(80)
@@ -3417,6 +3447,7 @@ where
         state: &ApplicationState,
         board: &Board,
         content_start_rows: &[usize],
+        library_cover: Option<&mut StatefulProtocol>,
     ) {
         let theme = state.theme();
 
@@ -3521,6 +3552,7 @@ where
                 filter.as_deref(),
                 state.ui_state.library_sort_mode,
                 state.ui_state.library_scanning,
+                library_cover,
                 &theme,
             );
         } else if state.ui_state.show_search {
@@ -6020,15 +6052,72 @@ where
         Ok(())
     }
 
-    fn open_selected_library_item(&mut self) -> eyre::Result<()> {
-        let filepath = {
-            let state = self.state.borrow();
-            state
-                .ui_state
-                .selected_list_index(state.ui_state.library_selected_index)
-                .and_then(|i| state.ui_state.library_items.get(i))
-                .map(|item| item.filepath.clone())
+    /// Filepath of the library entry under the cursor (filter-aware).
+    fn selected_library_path(&self) -> Option<String> {
+        let state = self.state.borrow();
+        state
+            .ui_state
+            .selected_list_index(state.ui_state.library_selected_index)
+            .and_then(|i| state.ui_state.library_items.get(i))
+            .map(|item| item.filepath.clone())
+    }
+
+    /// Cover bytes for a book file: a Calibre-style `cover.jpg` sibling when
+    /// present (avoids unzipping the EPUB), otherwise the EPUB's declared
+    /// cover image.
+    fn load_cover_bytes(path: &str) -> Option<Vec<u8>> {
+        let book = std::path::Path::new(path);
+        if let Some(sibling) = book.parent().map(|dir| dir.join("cover.jpg"))
+            && sibling.is_file()
+        {
+            return std::fs::read(sibling).ok();
+        }
+        let mut epub = Epub::new(path);
+        epub.initialize().ok()?;
+        epub.get_cover().map(|(_mime, bytes)| bytes)
+    }
+
+    /// Debounced cover loading for the library window: the selected entry's
+    /// cover is decoded only once the selection has rested for
+    /// [`LIBRARY_COVER_DEBOUNCE`], so held-down scrolling stays responsive.
+    /// Results (including failures) are cached per filepath.
+    fn poll_library_cover(&mut self) {
+        if !self.state.borrow().ui_state.show_library {
+            self.library_cover_pending = None;
+            return;
+        }
+        let Some(path) = self.selected_library_path() else {
+            self.library_cover_pending = None;
+            return;
         };
+        if self.library_covers.contains_key(&path) {
+            self.library_cover_pending = None;
+            return;
+        }
+        match &self.library_cover_pending {
+            Some((pending, since)) if *pending == path => {
+                if since.elapsed() >= LIBRARY_COVER_DEBOUNCE {
+                    self.library_cover_pending = None;
+                    let protocol = if self.graphics.is_available() {
+                        Self::load_cover_bytes(&path)
+                            .and_then(|bytes| image::load_from_memory(&bytes).ok())
+                            .and_then(|img| self.graphics.new_protocol(img))
+                    } else {
+                        None
+                    };
+                    // Encoded covers are small, but don't grow unboundedly.
+                    if self.library_covers.len() >= 64 {
+                        self.library_covers.clear();
+                    }
+                    self.library_covers.insert(path, protocol);
+                }
+            }
+            _ => self.library_cover_pending = Some((path, Instant::now())),
+        }
+    }
+
+    fn open_selected_library_item(&mut self) -> eyre::Result<()> {
+        let filepath = self.selected_library_path();
         if let Some(path) = filepath {
             if std::path::Path::new(&path).exists() {
                 let already_open = self.ebook.as_ref().map_or(false, |e| e.path() == path);
@@ -8046,6 +8135,8 @@ mod tests {
             cached_statistics: None,
             graphics: crate::ui::graphics::Graphics::disabled(),
             image_view: None,
+            library_covers: HashMap::new(),
+            library_cover_pending: None,
         }
     }
 

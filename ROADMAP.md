@@ -35,7 +35,7 @@ Effort estimates: S = small, M = medium, L = large.
 
 Crates: `ratatui-image` (kitty graphics / iTerm2 / sixel / halfblocks fallback, `Picker::from_query_stdio()` capability detection) + `image`. **Pin a ratatui-0.30-compatible release** — verify at implementation time. Skip SVG initially.
 
-1. **Full-screen image viewer + library covers first** (M) — 🔶 viewer done (2026-07): `Enter` in the images list renders the image full-screen via `ratatui-image` 11 (kitty/iTerm2/sixel/halfblocks; lazy `Picker::from_query_stdio()` in new `src/ui/graphics.rs`), centered with `size_for`; `o` (list or viewer) and SVG fall back to the external viewer; ratatui bumped to 0.30.2 stable. Library covers remain to do (`src/ui/windows/library.rs`).
+1. **Full-screen image viewer + library covers first** (M) — ✅ done (2026-07): `Enter` in the images list renders the image full-screen via `ratatui-image` 11 (kitty/iTerm2/sixel/halfblocks; lazy `Picker::from_query_stdio()` in new `src/ui/graphics.rs`), centered with `size_for`; `o` (list or viewer) and SVG fall back to the external viewer; ratatui bumped to 0.30.2 stable. Library window shows the selected book's cover in a side panel (debounced load in the run loop, per-path cache, Calibre `cover.jpg` fast path).
 2. **Inline images in reading flow** (L) — at parse time reserve N blank rows per image (aspect-corrected, capped at viewport−2); `image_maps` row keying unchanged; render cached protocol into the block's Rect when visible. Policy setting: `off | placeholder | shown-when-fully-visible | always` (start with fully-visible-only — clean on all backends). Mode change triggers re-parse (existing machinery). Highlights survive: they're context-anchored, not row-anchored.
 
 ## Phase 4 — Multi-format support

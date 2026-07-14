@@ -5,9 +5,13 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Borders, Clear, List, ListItem, Paragraph},
 };
+use ratatui_image::{Resize, StatefulImage, protocol::StatefulProtocol};
 
 use crate::models::LibrarySortMode;
 use crate::theme::Theme;
+
+/// Minimum popup width before a cover panel is worth splitting off.
+const COVER_MIN_POPUP_WIDTH: u16 = 50;
 
 pub struct LibraryWindow;
 
@@ -21,6 +25,7 @@ impl LibraryWindow {
         filter: Option<&str>,
         sort_mode: LibrarySortMode,
         scanning: bool,
+        cover: Option<&mut StatefulProtocol>,
         theme: &Theme,
     ) {
         let popup_area = Rect::new(
@@ -87,12 +92,41 @@ impl LibraryWindow {
             .style(Style::default().fg(theme.warning_fg));
         frame.render_widget(hint, hint_area);
 
-        let list_area = Rect {
+        let mut list_area = Rect {
             x: inner_area.x,
             y: inner_area.y + 2,
             width: inner_area.width,
             height: inner_area.height.saturating_sub(2),
         };
+
+        // Selected book's cover in a right-hand panel, when the terminal
+        // supports graphics and the popup is wide enough.
+        if let Some(protocol) = cover
+            && popup_area.width >= COVER_MIN_POPUP_WIDTH
+        {
+            let panel_width = (inner_area.width / 3).min(30);
+            list_area.width = list_area.width.saturating_sub(panel_width);
+            let panel_area = Rect {
+                x: list_area.x + list_area.width,
+                y: list_area.y,
+                width: panel_width,
+                height: list_area.height,
+            };
+            let panel_block = Block::default()
+                .borders(Borders::LEFT)
+                .style(theme.base_style());
+            let panel_inner = panel_block.inner(panel_area);
+            frame.render_widget(panel_block, panel_area);
+            // Center the aspect-fitted cover inside the panel.
+            let fitted = protocol.size_for(Resize::Fit(None), panel_inner.as_size());
+            let cover_area = Rect::new(
+                panel_inner.x + panel_inner.width.saturating_sub(fitted.width) / 2,
+                panel_inner.y + panel_inner.height.saturating_sub(fitted.height) / 2,
+                fitted.width.min(panel_inner.width),
+                fitted.height.min(panel_inner.height),
+            );
+            frame.render_stateful_widget(StatefulImage::default(), cover_area, protocol);
+        }
 
         let items: Vec<ListItem> = entries
             .iter()

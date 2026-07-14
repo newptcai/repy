@@ -58,6 +58,11 @@ impl Graphics {
         }
     }
 
+    /// Whether the terminal can render images (probes on first call).
+    pub fn is_available(&mut self) -> bool {
+        self.picker().is_some()
+    }
+
     /// Human-readable name of the detected protocol, for status messages.
     pub fn protocol_name(&mut self) -> Option<&'static str> {
         self.picker().map(|p| match p.protocol_type() {

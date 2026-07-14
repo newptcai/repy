@@ -215,6 +215,10 @@ When debugging or fixing HTML parsing bugs (links, footnotes, sections, formatti
 - `s` cycles sorting (recent/title/author/progress), `/` fuzzy-filters,
   `d` removes a history entry; never-opened books show `unread`, history
   entries whose file vanished show `[missing]`
+- The selected book's cover renders in a side panel when the terminal
+  supports graphics: loading is debounced (150 ms) in the run loop so
+  scrolling stays responsive, cached per filepath on the `Reader`, and a
+  Calibre-style sibling `cover.jpg` is preferred over unzipping the EPUB
 
 ### Image Handling
 - Images are preprocessed to include descriptive alt text (e.g., `[Image: filename.jpg]`).

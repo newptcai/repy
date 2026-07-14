@@ -231,6 +231,27 @@ fn library_window() {
 }
 
 #[test]
+fn library_cover_panel() {
+    let mut reader = test_reader();
+    reader.graphics = crate::ui::graphics::Graphics::halfblocks_for_test();
+    press_char(&mut reader, 'r');
+    // The run loop drives the debounced cover load; step it manually here.
+    reader.poll_library_cover();
+    std::thread::sleep(super::LIBRARY_COVER_DEBOUNCE);
+    reader.poll_library_cover();
+    assert!(
+        reader
+            .selected_library_path()
+            .is_some_and(|p| matches!(reader.library_covers.get(&p), Some(Some(_)))),
+        "cover protocol should be cached for the selected book"
+    );
+    reader.draw().expect("failed to draw with cover panel");
+    insta::with_settings!({filters => library_snapshot_filters()}, {
+        insta::assert_snapshot!(reader.terminal.backend());
+    });
+}
+
+#[test]
 fn library_window_sorted_by_title() {
     let mut reader = test_reader();
     reader

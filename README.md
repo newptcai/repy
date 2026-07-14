@@ -193,6 +193,9 @@ Press `?` in the TUI to see the help window at any time (`Help (?)`).
   - `s` to cycle the sort order: recent / title / author / progress
   - Books found in `library_directories` but never opened show as `new`/`unread`;
     history entries whose file has disappeared are marked `[missing]`
+  - When the terminal supports graphics, the selected book's cover is shown
+    in a panel beside the list (Calibre-style `cover.jpg` files are used
+    directly; otherwise the cover is read from the EPUB)
 - `R` — Reading Statistics
 - `s` — Settings
   - `Enter`: Activate (toggle boolean, input for dictionary client)
