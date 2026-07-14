@@ -4024,41 +4024,46 @@ where
         content_area
     }
 
+    /// Assemble the top bar: title centered in the space left of the
+    /// right-aligned hints. All arithmetic is in terminal display cells
+    /// (CJK characters occupy two), never bytes.
     fn build_header_line(title: &str, right_text: Option<&str>, width: u16) -> String {
+        use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+
         let width = width as usize;
         if width == 0 {
             return String::new();
         }
 
-        let mut buffer = vec![' '; width];
-        let right_len = right_text.map(|text| text.len()).unwrap_or(0);
-        let content_width = if right_len > 0 {
-            width.saturating_sub(right_len + 1)
+        let right_width = right_text.map(UnicodeWidthStr::width).unwrap_or(0);
+        let content_width = if right_width > 0 {
+            width.saturating_sub(right_width + 1)
         } else {
             width
         };
 
-        let mut title_text = title.to_string();
-        if title_text.len() > content_width {
-            title_text.truncate(content_width);
-        }
-        let title_start = (content_width.saturating_sub(title_text.len())) / 2;
-        for (i, ch) in title_text.chars().enumerate() {
-            if title_start + i < buffer.len() {
-                buffer[title_start + i] = ch;
+        // Truncate the title on a character boundary once its display width
+        // would exceed the available cells.
+        let mut title_text = String::new();
+        let mut title_width = 0;
+        for ch in title.chars() {
+            let ch_width = UnicodeWidthChar::width(ch).unwrap_or(0);
+            if title_width + ch_width > content_width {
+                break;
             }
+            title_text.push(ch);
+            title_width += ch_width;
         }
 
+        let left_pad = content_width.saturating_sub(title_width) / 2;
+        let mut line = " ".repeat(left_pad);
+        line.push_str(&title_text);
         if let Some(right_text) = right_text {
-            let start = width.saturating_sub(right_len);
-            for (i, ch) in right_text.chars().enumerate() {
-                if start + i < buffer.len() {
-                    buffer[start + i] = ch;
-                }
-            }
+            let fill = width.saturating_sub(left_pad + title_width + right_width);
+            line.push_str(&" ".repeat(fill));
+            line.push_str(right_text);
         }
-
-        buffer.into_iter().collect()
+        line
     }
 
     fn format_minutes_compact(minutes: i64) -> String {
@@ -8865,6 +8870,29 @@ mod tests {
         assert_eq!(entries[0].title.as_deref(), Some("Book"));
         assert!(entries[0].on_disk);
         assert_eq!(entries[0].reading_progress, Some(0.3));
+    }
+
+    /// CJK titles must not panic the header builder (it used to byte-truncate
+    /// mid-character) and must align by display cells, not chars.
+    #[test]
+    fn test_build_header_line_cjk_title() {
+        use unicode_width::UnicodeWidthStr;
+
+        let title = "发光的共和国：一部小说"; // 11 chars, 22 cells
+        let line = TestReader::build_header_line(title, Some("~1m left 0%"), 40);
+        assert_eq!(UnicodeWidthStr::width(line.as_str()), 40);
+        assert!(line.contains("发光的共和国"));
+        assert!(line.ends_with("~1m left 0%"));
+
+        // Narrower than the title: truncate on a character boundary and keep
+        // the right-hand hints intact.
+        let narrow = TestReader::build_header_line(title, Some("0%"), 20);
+        assert_eq!(UnicodeWidthStr::width(narrow.as_str()), 20);
+        assert!(narrow.ends_with("0%"));
+
+        // Degenerate widths must not panic.
+        assert_eq!(TestReader::build_header_line(title, None, 0), "");
+        TestReader::build_header_line(title, Some("~1m left 0%"), 3);
     }
 
     #[test]
