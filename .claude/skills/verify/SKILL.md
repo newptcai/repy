@@ -36,6 +36,10 @@ tmux -L repy-verify kill-server        # cleanup
   Captures taken too early race the redraw and mislead.
 - Don't send Escape immediately followed by another key — crossterm can
   parse the pair as Alt+<key>. Sleep between them.
+- Keys sent while the one-time graphics stdio probe is running are
+  swallowed (ratatui-image's response reader consumes stdin). Wait for the
+  first image/cover to actually appear before sending navigation keys, or
+  captures will show a state that doesn't match the keys you sent.
 - Don't press `o` in the images list / image viewer during verification
   unless you want feh popping up on the user's desktop; `open_image_viewer`
   also blocks the TUI until the external viewer exits.

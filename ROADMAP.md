@@ -31,7 +31,7 @@ Effort estimates: S = small, M = medium, L = large.
 4. **Footnote/link popup preview** (S-M) — ✅ done (2026-07): following an internal link opens a ~10-line preview popup (`Enter` jumps, `Esc`/`q` stays), reusing the links-window preview code and covered by TUI snapshots.
 5. **Per-book settings** (S) — ✅ done (2026-07): per-book text width is preserved and `reading_states.color_theme` stores an optional book-specific theme override; null inherits the global config theme.
 
-## Phase 3 — In-terminal images
+## Phase 3 — In-terminal images — ✅ complete (2026-07)
 
 Crates: `ratatui-image` (kitty graphics / iTerm2 / sixel / halfblocks fallback, `Picker::from_query_stdio()` capability detection) + `image`. **Pin a ratatui-0.30-compatible release** — verify at implementation time. Skip SVG initially.
 
