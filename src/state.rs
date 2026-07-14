@@ -1270,6 +1270,7 @@ mod tests {
             _content_id: &str,
             _text_width: usize,
             _starting_line: usize,
+            _inline_image_rows: Option<usize>,
         ) -> Result<TextStructure> {
             Ok(TextStructure::default())
         }
@@ -1278,6 +1279,7 @@ mod tests {
             &mut self,
             _text_width: usize,
             _page_height: Option<usize>,
+            _inline_image_rows: Option<usize>,
         ) -> Result<Vec<TextStructure>> {
             Ok(vec![TextStructure::default()])
         }

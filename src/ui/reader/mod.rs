@@ -31,7 +31,7 @@ use crate::models::{
     HighlightColor, HighlightRange, LibraryEntry, LibraryItem, LibrarySortMode, LinkEntry,
     ReadingState, ReadingStatistics, ScannedBook, SearchData, TextStructure, TocEntry, WindowType,
 };
-use crate::settings::DICT_PRESET_LIST;
+use crate::settings::{DICT_PRESET_LIST, InlineImages};
 use crate::state::State;
 use crate::theme::{ColorTheme, Theme};
 use crate::ui::board::Board;
@@ -580,6 +580,7 @@ enum SettingItem {
     PageScrollAnimation,
     ShowProgressIndicator,
     SeamlessBetweenChapters,
+    InlineImages,
     DictionaryClient,
     TtsEngine,
     Width,
@@ -595,6 +596,7 @@ impl SettingItem {
             SettingItem::PageScrollAnimation,
             SettingItem::ShowProgressIndicator,
             SettingItem::SeamlessBetweenChapters,
+            SettingItem::InlineImages,
             SettingItem::DictionaryClient,
             SettingItem::TtsEngine,
             SettingItem::Width,
@@ -696,6 +698,10 @@ pub struct Reader<B: Backend = CrosstermBackend<io::Stdout>> {
     chapter_text_structures: Vec<TextStructure>,
     /// Text width used for the current chapter structures
     current_text_width: Option<usize>,
+    /// Inline-image row cap used for the current chapter structures
+    /// (`None` = placeholder mode). A mismatch with the desired value
+    /// forces a full re-parse of every chapter.
+    current_inline_image_rows: Option<usize>,
     dictionary_res_rx: Option<std::sync::mpsc::Receiver<DictionaryResult>>,
     /// Signals that the background library scan finished (cache updated).
     library_scan_rx: Option<std::sync::mpsc::Receiver<()>>,
@@ -1139,6 +1145,7 @@ where
             content_start_rows: Vec::new(),
             chapter_text_structures: Vec::new(),
             current_text_width: None,
+            current_inline_image_rows: None,
             dictionary_res_rx: None,
             library_scan_rx: None,
             tts_done_rx: None,
@@ -1294,11 +1301,13 @@ where
         }
 
         let page_height = self.chapter_break_page_height();
-        let all_content = epub.get_all_parsed_content(text_width, page_height)?;
+        let inline_image_rows = self.inline_image_max_rows();
+        let all_content = epub.get_all_parsed_content(text_width, page_height, inline_image_rows)?;
 
         // Store per-chapter structures for incremental rebuilds
         self.chapter_text_structures = all_content;
         self.current_text_width = Some(text_width);
+        self.current_inline_image_rows = inline_image_rows;
 
         let mut combined_text_structure = TextStructure::default();
         let mut content_start_rows = Vec::with_capacity(self.chapter_text_structures.len());
@@ -1322,6 +1331,9 @@ where
             combined_text_structure
                 .pagebreak_map
                 .extend(ts.pagebreak_map.clone());
+            combined_text_structure
+                .image_block_rows
+                .extend(ts.image_block_rows.clone());
         }
 
         self.board.update_text_structure(combined_text_structure);
@@ -3786,6 +3798,9 @@ where
                         settings.seamless_between_chapters
                     )
                 }
+                SettingItem::InlineImages => {
+                    format!("Inline images: {}", settings.inline_images.label())
+                }
                 SettingItem::DictionaryClient => {
                     let client = if settings.dictionary_client.trim().is_empty() {
                         "auto"
@@ -5335,6 +5350,15 @@ where
         Self::page_size_for(show_top_bar)
     }
 
+    /// Row cap for inline image blocks, or `None` when the setting keeps
+    /// one-line placeholders.
+    fn inline_image_max_rows(&self) -> Option<usize> {
+        match self.state.borrow().config.settings.inline_images {
+            InlineImages::Placeholder => None,
+            InlineImages::Shown => Some(self.page_size().saturating_sub(2).max(4)),
+        }
+    }
+
     fn chapter_break_page_height(&self) -> Option<usize> {
         let state = self.state.borrow();
         if state.config.settings.seamless_between_chapters {
@@ -6308,6 +6332,12 @@ where
                     !state.config.settings.seamless_between_chapters;
                 rebuild_chapter_breaks = true;
             }
+            SettingItem::InlineImages => {
+                state.config.settings.inline_images = state.config.settings.inline_images.next();
+                // The rebuild notices the inline-image mismatch and
+                // re-parses every chapter.
+                rebuild_chapter_breaks = true;
+            }
             SettingItem::DictionaryClient => {
                 let current = if state.config.settings.dictionary_client.trim().is_empty() {
                     "auto"
@@ -6472,8 +6502,9 @@ where
             .max(20)
             .min(term_width);
 
-        // Collect page_height before any mutable borrows
+        // Collect page_height and inline options before any mutable borrows
         let page_height = self.chapter_break_page_height();
+        let inline_image_rows = self.inline_image_max_rows();
 
         let epub = match self.ebook.as_mut() {
             Some(epub) => epub,
@@ -6483,7 +6514,14 @@ where
         // Check if we need to rebuild or if width is the same
         let needs_rebuild = self.current_text_width != Some(text_width);
 
-        if needs_rebuild {
+        if inline_image_rows != self.current_inline_image_rows {
+            // The inline-image layout changed: every chapter's rows are
+            // stale, so re-parse the whole book.
+            self.chapter_text_structures =
+                epub.get_all_parsed_content(text_width, page_height, inline_image_rows)?;
+            self.current_text_width = Some(text_width);
+            self.current_inline_image_rows = inline_image_rows;
+        } else if needs_rebuild {
             // Only re-parse the current chapter for performance
             let contents = epub.contents();
             let total_chapters = contents.len();
@@ -6500,8 +6538,12 @@ where
                 };
 
                 // Parse only the current chapter with new width
-                let mut parsed_chapter =
-                    epub.get_parsed_content(&content_id, text_width, starting_line)?;
+                let mut parsed_chapter = epub.get_parsed_content(
+                    &content_id,
+                    text_width,
+                    starting_line,
+                    inline_image_rows,
+                )?;
 
                 // Add chapter break if needed
                 if let Some(ph) = page_height
@@ -6541,6 +6583,9 @@ where
             combined_text_structure
                 .pagebreak_map
                 .extend(ts.pagebreak_map.clone());
+            combined_text_structure
+                .image_block_rows
+                .extend(ts.image_block_rows.clone());
         }
         self.board.update_text_structure(combined_text_structure);
         self.content_start_rows = content_start_rows;
@@ -7095,32 +7140,7 @@ where
     }
 
     fn resolve_relative_href(href: &str, base_content: Option<&str>) -> Option<String> {
-        let href = href.trim();
-        if href.is_empty() {
-            return None;
-        }
-
-        if href.starts_with('/') {
-            return Some(href.trim_start_matches('/').to_string());
-        }
-
-        let base_content = base_content?;
-        let base_path = std::path::Path::new(base_content);
-        let base_dir = base_path
-            .parent()
-            .unwrap_or_else(|| std::path::Path::new(""));
-        let joined = base_dir.join(href);
-        let mut normalized = std::path::PathBuf::new();
-        for component in joined.components() {
-            match component {
-                std::path::Component::ParentDir => {
-                    normalized.pop();
-                }
-                std::path::Component::CurDir => {}
-                _ => normalized.push(component.as_os_str()),
-            }
-        }
-        Some(normalized.to_string_lossy().to_string())
+        crate::ebook::resolve_relative_resource(href, base_content)
     }
 
     fn resolve_anchor_row(&self, fragment: &str) -> Option<usize> {
@@ -8117,6 +8137,7 @@ mod tests {
             content_start_rows: Vec::new(),
             chapter_text_structures: Vec::new(),
             current_text_width: None,
+            current_inline_image_rows: None,
             dictionary_res_rx: None,
             library_scan_rx: None,
             tts_done_rx: None,

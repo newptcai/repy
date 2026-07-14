@@ -65,7 +65,7 @@ fn test_epub_loading() -> Result<(), Box<dyn std::error::Error>> {
     if !contents.is_empty() {
         println!("\n=== FIRST CHAPTER (PARSED) ===");
         let first_chapter = contents[0].clone();
-        match epub.get_parsed_content(&first_chapter, 80, 0) {
+        match epub.get_parsed_content(&first_chapter, 80, 0, None) {
             Ok(parsed) => {
                 println!("Parsed text has {} lines", parsed.text_lines.len());
                 println!("Found {} images", parsed.image_maps.len());
@@ -107,7 +107,7 @@ fn test_epub_loading() -> Result<(), Box<dyn std::error::Error>> {
         println!("\n=== MULTIPLE CHAPTERS TEST ===");
         println!("Parsing first 3 chapters...");
 
-        let all_content = epub.get_all_parsed_content(80, None)?;
+        let all_content = epub.get_all_parsed_content(80, None, None)?;
         println!("Successfully parsed {} chapters", all_content.len());
 
         let mut total_lines = 0;

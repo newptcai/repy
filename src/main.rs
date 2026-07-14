@@ -178,7 +178,7 @@ fn dump_content(filepath: &str) -> Result<()> {
 
     let mut epub = Epub::new(filepath);
     epub.initialize()?;
-    let structures = epub.get_all_parsed_content(80, None)?;
+    let structures = epub.get_all_parsed_content(80, None, None)?;
 
     let stdout = std::io::stdout();
     let mut out = std::io::BufWriter::new(stdout.lock());

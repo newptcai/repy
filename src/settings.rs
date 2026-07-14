@@ -16,6 +16,34 @@ pub const DICT_PRESET_LIST: &[&str] = &["dict", "sdcv", "wkdict"];
 
 pub const TTS_PRESET_LIST: &[&str] = &["purr", "edge-tts", "trans"];
 
+/// Inline image policy for the reading view.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum InlineImages {
+    /// Keep the one-line `[Image: …]` placeholder (default).
+    #[default]
+    Placeholder,
+    /// Reserve space in the text and render the image in the terminal when
+    /// its block is fully visible.
+    Shown,
+}
+
+impl InlineImages {
+    pub fn label(self) -> &'static str {
+        match self {
+            InlineImages::Placeholder => "placeholder",
+            InlineImages::Shown => "shown",
+        }
+    }
+
+    pub fn next(self) -> Self {
+        match self {
+            InlineImages::Placeholder => InlineImages::Shown,
+            InlineImages::Shown => InlineImages::Placeholder,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
@@ -34,6 +62,9 @@ pub struct Settings {
     /// Directories scanned for ebooks by the library window (`~` expands to
     /// the home directory). A Calibre library root works as-is.
     pub library_directories: Vec<String>,
+    /// Whether images render inline in the reading view or stay as one-line
+    /// placeholders.
+    pub inline_images: InlineImages,
 }
 
 impl Settings {
@@ -57,6 +88,7 @@ impl Settings {
         if !other.library_directories.is_empty() {
             self.library_directories = other.library_directories;
         }
+        self.inline_images = other.inline_images;
     }
 }
 
@@ -76,6 +108,7 @@ impl Default for Settings {
             show_line_numbers: false,
             show_top_bar: true,
             library_directories: Vec::new(),
+            inline_images: InlineImages::default(),
         }
     }
 }
@@ -273,6 +306,14 @@ mod tests {
         let serialized = serde_json::to_string(&settings).unwrap();
         let deserialized: Settings = serde_json::from_str(&serialized).unwrap();
         assert_eq!(settings, deserialized);
+    }
+
+    #[test]
+    fn test_inline_images_setting() {
+        assert_eq!(Settings::default().inline_images, InlineImages::Placeholder);
+        let parsed: Settings = serde_json::from_str(r#"{"inline_images": "shown"}"#).unwrap();
+        assert_eq!(parsed.inline_images, InlineImages::Shown);
+        assert_eq!(InlineImages::Shown.next(), InlineImages::Placeholder);
     }
 
     #[test]

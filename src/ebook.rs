@@ -1,6 +1,6 @@
 use crate::css::{StyledClasses, collect_styled_classes};
 use crate::models::{BookMetadata, CHAPTER_BREAK_MARKER, TextStructure, TocEntry};
-use crate::parser::parse_html_with_styles;
+use crate::parser::{InlineImageOptions, parse_html_with_styles};
 use epub::doc::{EpubDoc, NavPoint};
 use eyre::Result;
 use std::collections::{HashMap, HashSet};
@@ -26,12 +26,45 @@ pub trait Ebook {
         content_id: &str,
         text_width: usize,
         starting_line: usize,
+        inline_image_rows: Option<usize>,
     ) -> Result<TextStructure>;
     fn get_all_parsed_content(
         &mut self,
         text_width: usize,
         page_height: Option<usize>,
+        inline_image_rows: Option<usize>,
     ) -> Result<Vec<TextStructure>>;
+}
+
+/// Resolve an href/src relative to a content document path inside the book,
+/// normalizing `.` and `..` components. Leading `/` means book-root-relative.
+pub fn resolve_relative_resource(href: &str, base_content: Option<&str>) -> Option<String> {
+    let href = href.trim();
+    if href.is_empty() {
+        return None;
+    }
+
+    if href.starts_with('/') {
+        return Some(href.trim_start_matches('/').to_string());
+    }
+
+    let base_content = base_content?;
+    let base_path = std::path::Path::new(base_content);
+    let base_dir = base_path
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new(""));
+    let joined = base_dir.join(href);
+    let mut normalized = std::path::PathBuf::new();
+    for component in joined.components() {
+        match component {
+            std::path::Component::ParentDir => {
+                normalized.pop();
+            }
+            std::path::Component::CurDir => {}
+            _ => normalized.push(component.as_os_str()),
+        }
+    }
+    Some(normalized.to_string_lossy().to_string())
 }
 
 fn mime_from_extension(path: &str) -> String {
@@ -73,6 +106,50 @@ impl Epub {
             raw_text_cache: HashMap::new(),
             styled_classes: StyledClasses::default(),
         }
+    }
+
+    /// Pixel dimensions (header-only decode) for every `<img src>` in a
+    /// chapter, keyed by the raw src attribute value. Images that cannot be
+    /// resolved or decoded (e.g. SVG) are simply absent.
+    fn collect_image_dimensions(
+        &mut self,
+        raw_html: &str,
+        content_id: &str,
+    ) -> HashMap<String, (u32, u32)> {
+        let fragment = scraper::Html::parse_fragment(raw_html);
+        let selector = scraper::Selector::parse("img").unwrap();
+        let sources: Vec<String> = fragment
+            .select(&selector)
+            .filter_map(|el| el.value().attr("src").map(str::to_string))
+            .collect();
+        drop(fragment);
+
+        // content ids are spine idrefs; relative srcs resolve against the
+        // chapter document's path.
+        let base_path = self
+            .doc
+            .as_ref()
+            .and_then(|doc| doc.resources.get(content_id))
+            .map(|resource| resource.path.to_string_lossy().to_string());
+
+        let mut dimensions = HashMap::new();
+        for src in sources {
+            if dimensions.contains_key(&src) {
+                continue;
+            }
+            let resolved = resolve_relative_resource(&src, base_path.as_deref())
+                .unwrap_or_else(|| src.clone());
+            let Ok((_mime, bytes)) = self.get_img_bytestr(&resolved) else {
+                continue;
+            };
+            if let Ok(reader) =
+                image::ImageReader::new(std::io::Cursor::new(bytes)).with_guessed_format()
+                && let Ok(dims) = reader.into_dimensions()
+            {
+                dimensions.insert(src, dims);
+            }
+        }
+        dimensions
     }
 
     pub fn content_index_for_href(&self, href: &str) -> Option<usize> {
@@ -291,6 +368,7 @@ impl Ebook for Epub {
         content_id: &str,
         text_width: usize,
         starting_line: usize,
+        inline_image_rows: Option<usize>,
     ) -> Result<TextStructure> {
         let raw_html = self.get_raw_text(content_id)?;
 
@@ -301,13 +379,18 @@ impl Ebook for Epub {
             .filter_map(|entry| entry.section.clone())
             .collect();
 
+        let inline_options = inline_image_rows.map(|max_rows| InlineImageOptions {
+            dimensions: self.collect_image_dimensions(&raw_html, content_id),
+            max_rows,
+        });
+
         parse_html_with_styles(
             &raw_html,
             Some(text_width),
             Some(section_ids),
             starting_line,
             &self.styled_classes,
-            None,
+            inline_options.as_ref(),
         )
     }
 
@@ -315,6 +398,7 @@ impl Ebook for Epub {
         &mut self,
         text_width: usize,
         page_height: Option<usize>,
+        inline_image_rows: Option<usize>,
     ) -> Result<Vec<TextStructure>> {
         let mut all_content = Vec::new();
         let mut starting_line = 0;
@@ -325,7 +409,7 @@ impl Ebook for Epub {
 
         for (index, content_id) in content_ids.into_iter().enumerate() {
             let mut parsed_content =
-                self.get_parsed_content(&content_id, text_width, starting_line)?;
+                self.get_parsed_content(&content_id, text_width, starting_line, inline_image_rows)?;
             if let Some(page_height) = page_height
                 && index + 1 < total_chapters
             {
@@ -524,7 +608,7 @@ mod tests {
         epub.initialize()?;
 
         let content_id = epub.contents()[0].clone();
-        let parsed_content = epub.get_parsed_content(&content_id, 80, 0)?;
+        let parsed_content = epub.get_parsed_content(&content_id, 80, 0, None)?;
 
         // Check text lines
         assert!(!parsed_content.text_lines.is_empty());
@@ -539,12 +623,38 @@ mod tests {
     }
 
     #[test]
+    fn test_epub_inline_image_rows() -> Result<()> {
+        let mut epub = Epub::new("tests/fixtures/small.epub");
+        epub.initialize()?;
+
+        // The first chapter is the cover page with one image.
+        let content_id = epub.contents()[0].clone();
+        let plain = epub.get_parsed_content(&content_id, 80, 0, None)?;
+        let inline = epub.get_parsed_content(&content_id, 80, 0, Some(20))?;
+
+        assert!(plain.image_block_rows.is_empty());
+        let (&row, &rows) = inline
+            .image_block_rows
+            .iter()
+            .next()
+            .expect("cover image should reserve a block");
+        assert!((2..=20).contains(&rows));
+        assert!(inline.image_maps.contains_key(&row));
+        assert_eq!(
+            inline.text_lines.len(),
+            plain.text_lines.len() + rows - 1,
+            "reserved rows extend the chapter"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn test_epub_get_parsed_content_meditations() -> Result<()> {
         let mut epub = Epub::new("tests/fixtures/meditations.epub");
         epub.initialize()?;
 
         let content_id = epub.contents()[0].clone();
-        let parsed_content = epub.get_parsed_content(&content_id, 80, 0)?;
+        let parsed_content = epub.get_parsed_content(&content_id, 80, 0, None)?;
 
         // Check that parsing doesn't crash (content might be empty due to parsing issues)
         let _line_count = parsed_content.text_lines.len(); // Just ensure we can access it
@@ -560,9 +670,9 @@ mod tests {
         let content_id = epub.contents()[0].clone();
 
         // Test with narrow width
-        let narrow_content = epub.get_parsed_content(&content_id, 40, 0)?;
+        let narrow_content = epub.get_parsed_content(&content_id, 40, 0, None)?;
         // Test with wide width
-        let wide_content = epub.get_parsed_content(&content_id, 120, 0)?;
+        let wide_content = epub.get_parsed_content(&content_id, 120, 0, None)?;
 
         // Wrapping should work without crashing - line count comparison is optional
         let _narrow_lines = narrow_content.text_lines.len();
@@ -581,7 +691,7 @@ mod tests {
 
         let content_id = epub.contents()[0].clone();
         let starting_line = 1000;
-        let parsed_content = epub.get_parsed_content(&content_id, 80, starting_line)?;
+        let parsed_content = epub.get_parsed_content(&content_id, 80, starting_line, None)?;
 
         // Should still have content
         assert!(!parsed_content.text_lines.is_empty());
@@ -607,7 +717,7 @@ mod tests {
         let mut epub = Epub::new("tests/fixtures/small.epub");
         epub.initialize()?;
 
-        let all_content = epub.get_all_parsed_content(80, None)?;
+        let all_content = epub.get_all_parsed_content(80, None, None)?;
 
         // Should have content for all chapters
         assert_eq!(all_content.len(), epub.contents().len());
@@ -629,7 +739,7 @@ mod tests {
         let mut epub = Epub::new("tests/fixtures/meditations.epub");
         epub.initialize()?;
 
-        let all_content = epub.get_all_parsed_content(80, None)?;
+        let all_content = epub.get_all_parsed_content(80, None, None)?;
 
         // Should have content for all chapters
         assert_eq!(all_content.len(), epub.contents().len());
@@ -647,7 +757,7 @@ mod tests {
         let mut epub = Epub::new("tests/fixtures/small.epub");
         epub.initialize()?;
 
-        let all_content = epub.get_all_parsed_content(80, None)?;
+        let all_content = epub.get_all_parsed_content(80, None, None)?;
         let mut current_line = 0;
 
         // Check that line numbers are continuous across chapters
@@ -771,7 +881,7 @@ mod tests {
         assert!(meta.title.is_some());
 
         // Get all parsed content
-        let all_content = epub.get_all_parsed_content(80, None)?;
+        let all_content = epub.get_all_parsed_content(80, None, None)?;
         assert!(!all_content.is_empty());
 
         // Test accessing specific content
@@ -783,7 +893,7 @@ mod tests {
             assert!(!raw_text.is_empty());
 
             // Parsed content
-            let parsed = epub.get_parsed_content(&first_content_id, 60, 100)?;
+            let parsed = epub.get_parsed_content(&first_content_id, 60, 100, None)?;
             assert!(!parsed.text_lines.is_empty());
 
             // Check line offset
@@ -824,9 +934,9 @@ mod tests {
             let small_first_id = small_epub.contents()[0].clone();
             let meditations_first_id = meditations_epub.contents()[0].clone();
 
-            let small_content = small_epub.get_parsed_content(&small_first_id, 80, 0)?;
+            let small_content = small_epub.get_parsed_content(&small_first_id, 80, 0, None)?;
             let meditations_content =
-                meditations_epub.get_parsed_content(&meditations_first_id, 80, 0)?;
+                meditations_epub.get_parsed_content(&meditations_first_id, 80, 0, None)?;
 
             // Both should parse without crashing; content may be empty for edge cases
             let _small_lines = small_content.text_lines.len();
@@ -858,7 +968,7 @@ mod tests {
         let start = std::time::Instant::now();
 
         // This should complete reasonably quickly even with the large EPUB
-        let all_content = epub.get_all_parsed_content(80, None)?;
+        let all_content = epub.get_all_parsed_content(80, None, None)?;
 
         let duration = start.elapsed();
         assert!(duration.as_secs() < 10); // Should complete in under 10 seconds

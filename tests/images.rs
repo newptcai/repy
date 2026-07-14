@@ -39,7 +39,7 @@ mod internal_tests {
         let mut epub = Epub::new("tests/fixtures/small.epub");
         epub.initialize().unwrap();
 
-        let all_content = epub.get_all_parsed_content(80, None).unwrap();
+        let all_content = epub.get_all_parsed_content(80, None, None).unwrap();
 
         let mut image_path = String::new();
         // The first content in small.epub that has an image is likely the cover or title page
