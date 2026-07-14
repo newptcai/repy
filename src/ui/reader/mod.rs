@@ -36,13 +36,13 @@ use crate::state::State;
 use crate::theme::{ColorTheme, Theme};
 use crate::ui::board::Board;
 use crate::ui::graphics::Graphics;
-use ratatui_image::protocol::StatefulProtocol;
 use crate::ui::windows::{
     bookmarks::BookmarksWindow, dictionary::DictionaryWindow, fuzzy_filter_indices,
     help::HelpWindow, images::ImagesWindow, library::LibraryWindow, links::LinksWindow,
     metadata::MetadataWindow, search::SearchWindow, settings::SettingsWindow,
     statistics::StatisticsWindow, toc::TocWindow,
 };
+use ratatui_image::protocol::StatefulProtocol;
 
 /// Regex to strip textwrap syllable-split hyphenation artifacts from TTS text.
 /// Matches letter + hyphen + whitespace + lowercase letter (e.g. "ex- ample").
@@ -1274,6 +1274,9 @@ where
     }
 
     pub fn load_ebook(&mut self, path: &str) -> eyre::Result<()> {
+        // Save the outgoing book's position first; otherwise switching books
+        // through the library loses everything read since the last quit.
+        self.persist_state()?;
         self.finish_reading_session(Utc::now())?;
 
         let normalized_path = Self::normalize_ebook_path(path);
@@ -1338,7 +1341,8 @@ where
 
         let page_height = self.chapter_break_page_height();
         let inline_image_rows = self.inline_image_max_rows();
-        let all_content = epub.get_all_parsed_content(text_width, page_height, inline_image_rows)?;
+        let all_content =
+            epub.get_all_parsed_content(text_width, page_height, inline_image_rows)?;
 
         // Store per-chapter structures for incremental rebuilds
         self.chapter_text_structures = all_content;
@@ -3107,8 +3111,7 @@ where
                 KeyCode::Char('s') => {
                     {
                         let mut state = self.state.borrow_mut();
-                        state.ui_state.library_sort_mode =
-                            state.ui_state.library_sort_mode.next();
+                        state.ui_state.library_sort_mode = state.ui_state.library_sort_mode.next();
                         state.ui_state.library_selected_index = 0;
                     }
                     self.rebuild_library_entries()?;
@@ -8839,8 +8842,7 @@ mod tests {
             history_item("/h/newer.epub", "Newer", 5, 0.1),
         ];
         let scanned = vec![scanned_book("/d/apple.epub", "Apple")];
-        let entries =
-            TestReader::merge_library_entries(history, scanned, LibrarySortMode::Recent);
+        let entries = TestReader::merge_library_entries(history, scanned, LibrarySortMode::Recent);
 
         // History entries by last_read desc, then scanned-only books.
         let titles: Vec<_> = entries.iter().map(|e| e.title.clone().unwrap()).collect();
@@ -8856,8 +8858,7 @@ mod tests {
     fn test_merge_library_entries_dedups_by_path() {
         let history = vec![history_item("/lib/book.epub", "Book", 5, 0.3)];
         let scanned = vec![scanned_book("/lib/book.epub", "Ignored")];
-        let entries =
-            TestReader::merge_library_entries(history, scanned, LibrarySortMode::Recent);
+        let entries = TestReader::merge_library_entries(history, scanned, LibrarySortMode::Recent);
 
         assert_eq!(entries.len(), 1);
         // History metadata wins, but the scan marks the file as on disk.

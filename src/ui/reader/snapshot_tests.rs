@@ -296,6 +296,33 @@ fn library_window_sorted_by_title() {
     });
 }
 
+/// Switching books must save the outgoing book's position: reopening it
+/// restores the row reached right before the switch, not the state from the
+/// last quit.
+#[test]
+fn position_persists_across_book_switch() {
+    let mut reader = test_reader();
+    for _ in 0..7 {
+        press_char(&mut reader, 'j');
+    }
+    assert_eq!(reader.state.borrow().reading_state.row, 7);
+
+    let other = format!(
+        "{}/tests/fixtures/meditations.epub",
+        env!("CARGO_MANIFEST_DIR")
+    );
+    reader
+        .load_ebook(&other)
+        .expect("failed to load second book");
+    assert_eq!(reader.state.borrow().reading_state.row, 0);
+
+    let first = format!("{}/tests/fixtures/small.epub", env!("CARGO_MANIFEST_DIR"));
+    reader
+        .load_ebook(&first)
+        .expect("failed to reload first book");
+    assert_eq!(reader.state.borrow().reading_state.row, 7);
+}
+
 /// The shown-when-fully-visible policy: once the block scrolls partially
 /// off-screen the image must disappear, leaving only the reserved rows.
 #[test]
