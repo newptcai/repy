@@ -785,6 +785,7 @@ mod tests {
             formatting: vec![],
             links: vec![],
             pagebreak_map: HashMap::new(),
+            image_block_rows: HashMap::new(),
         };
 
         let board = Board::new().with_text_structure(text_structure.clone());
@@ -808,6 +809,7 @@ mod tests {
             formatting: vec![],
             links: vec![],
             pagebreak_map: HashMap::new(),
+            image_block_rows: HashMap::new(),
         };
 
         board.update_text_structure(text_structure);
@@ -826,6 +828,7 @@ mod tests {
             formatting: vec![],
             links: vec![],
             pagebreak_map: HashMap::new(),
+            image_block_rows: HashMap::new(),
         };
 
         board.update_text_structure(text_structure);
@@ -846,6 +849,7 @@ mod tests {
             formatting: vec![],
             links: vec![],
             pagebreak_map: HashMap::new(),
+            image_block_rows: HashMap::new(),
         };
 
         board.update_text_structure(text_structure);
@@ -865,6 +869,7 @@ mod tests {
             formatting: vec![],
             links: vec![],
             pagebreak_map: HashMap::new(),
+            image_block_rows: HashMap::new(),
         };
 
         board.update_text_structure(text_structure.clone());

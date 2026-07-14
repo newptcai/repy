@@ -307,6 +307,7 @@ impl Ebook for Epub {
             Some(section_ids),
             starting_line,
             &self.styled_classes,
+            None,
         )
     }
 

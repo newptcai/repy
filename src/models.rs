@@ -340,6 +340,11 @@ pub struct TextStructure {
     pub formatting: Vec<InlineStyle>,
     pub links: Vec<LinkEntry>,
     pub pagebreak_map: HashMap<usize, String>,
+    /// Rows reserved for rendering an image inline, keyed by the image's
+    /// placeholder row (same key as `image_maps`). The value is the total
+    /// block height in rows, placeholder line included. Empty when inline
+    /// images are off or the image's dimensions were unknown at parse time.
+    pub image_block_rows: HashMap<usize, usize>,
 }
 
 pub const CHAPTER_BREAK_MARKER: &str = "<repy:chapter-break>";
@@ -669,6 +674,7 @@ mod tests {
                 target_row: None,
             }],
             pagebreak_map: std::collections::HashMap::new(),
+            image_block_rows: std::collections::HashMap::new(),
         };
 
         assert_eq!(text_structure.text_lines.len(), 2);

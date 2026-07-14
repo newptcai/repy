@@ -44,6 +44,22 @@ static HYPHENATION_DICTIONARY: LazyLock<Standard> =
     LazyLock::new(|| Standard::from_embedded(Language::EnglishUS).unwrap());
 const MIN_DICTIONARY_HYPHENATION_CHARS: usize = 8;
 
+/// Approximate width of a terminal cell in image pixels, used to guess how
+/// many columns an image will span before the real font size is known.
+const APPROX_CELL_PIXEL_WIDTH: u32 = 8;
+/// Terminal cells are roughly twice as tall as they are wide.
+const CELL_WIDTH_TO_HEIGHT: f64 = 0.5;
+
+/// Options for reserving vertical space under image placeholders so images
+/// can later be rendered inline in the terminal.
+pub struct InlineImageOptions {
+    /// Pixel dimensions keyed by the raw `<img src>` attribute value.
+    /// Images without an entry keep their single placeholder line.
+    pub dimensions: HashMap<String, (u32, u32)>,
+    /// Upper bound for a reserved block, in rows (typically viewport − 2).
+    pub max_rows: usize,
+}
+
 /// Simple HTML parser for ebook content
 /// This uses html2text for the heavy lifting and adds some basic structure tracking
 pub fn parse_html(
@@ -58,6 +74,7 @@ pub fn parse_html(
         section_ids,
         starting_line,
         &StyledClasses::default(),
+        None,
     )
 }
 
@@ -69,6 +86,7 @@ pub fn parse_html_with_styles(
     section_ids: Option<HashSet<String>>,
     starting_line: usize,
     styled_classes: &StyledClasses,
+    inline_images: Option<&InlineImageOptions>,
 ) -> Result<TextStructure> {
     let text_width = text_width.unwrap_or(80);
     let html_src = preprocess_inline_annotations(html_src);
@@ -104,6 +122,21 @@ pub fn parse_html_with_styles(
     indent_blockquote_lines(&fragment, &mut raw_lines);
 
     let mut plain_text = wrap_text(raw_lines, text_width);
+
+    // Reserve blank rows under image placeholders BEFORE any row-keyed
+    // structure extraction, so all recovered coordinates already account
+    // for the inserted lines.
+    let image_block_rows = match inline_images {
+        Some(options) => reserve_image_rows(
+            &mut plain_text,
+            &fragment,
+            starting_line,
+            text_width,
+            options,
+        ),
+        None => HashMap::new(),
+    };
+
     let pagebreak_map = extract_pagebreak_map(&mut plain_text, starting_line);
 
     // Extract structure information using the parsed fragment
@@ -125,7 +158,60 @@ pub fn parse_html_with_styles(
         formatting,
         links,
         pagebreak_map,
+        image_block_rows,
     })
+}
+
+/// Insert blank lines after each image placeholder so the image can be
+/// rendered into the reserved block, and return the block heights keyed by
+/// the placeholder's absolute row (matching `image_maps` keys).
+///
+/// The height estimate assumes ~8 px per cell horizontally and 1:2 cell
+/// aspect; the renderer aspect-fits the image inside the block, so an
+/// estimate that is slightly too tall only costs blank space.
+fn reserve_image_rows(
+    text_lines: &mut Vec<String>,
+    fragment: &Html,
+    starting_line: usize,
+    text_width: usize,
+    options: &InlineImageOptions,
+) -> HashMap<usize, usize> {
+    let img_selector = Selector::parse("img").unwrap();
+    let image_sources: Vec<String> = fragment
+        .select(&img_selector)
+        .filter_map(|element| element.value().attr("src").map(str::to_string))
+        .collect();
+
+    // Placeholder rows in document order, matching extract_images' scan.
+    let placeholder_rows: Vec<usize> = text_lines
+        .iter()
+        .enumerate()
+        .filter(|(_, line)| line.contains("[Image:") || line.contains("[[Image:"))
+        .map(|(row, _)| row)
+        .take(image_sources.len())
+        .collect();
+
+    let mut block_rows = HashMap::new();
+    let mut shift = 0usize;
+    for (row, src) in placeholder_rows.iter().zip(&image_sources) {
+        let Some(&(width_px, height_px)) = options.dimensions.get(src) else {
+            continue;
+        };
+        if width_px == 0 || height_px == 0 {
+            continue;
+        }
+        let columns = (text_width as u32).min(width_px.div_ceil(APPROX_CELL_PIXEL_WIDTH));
+        let estimated = (columns as f64) * (height_px as f64 / width_px as f64)
+            * CELL_WIDTH_TO_HEIGHT;
+        let rows = (estimated.ceil() as usize).clamp(2, options.max_rows.max(2));
+
+        let placeholder_row = row + shift;
+        let insert_at = (placeholder_row + 1).min(text_lines.len());
+        text_lines.splice(insert_at..insert_at, std::iter::repeat_n(String::new(), rows - 1));
+        block_rows.insert(starting_line + placeholder_row, rows);
+        shift += rows - 1;
+    }
+    block_rows
 }
 
 fn wrap_text(lines: Vec<String>, width: usize) -> Vec<String> {
@@ -1217,6 +1303,131 @@ mod tests {
         assert!(result.formatting.iter().any(|s| s.attr == 2)); // italic
     }
 
+    fn inline_options(dims: &[(&str, (u32, u32))], max_rows: usize) -> InlineImageOptions {
+        InlineImageOptions {
+            dimensions: dims
+                .iter()
+                .map(|(src, wh)| (src.to_string(), *wh))
+                .collect(),
+            max_rows,
+        }
+    }
+
+    #[test]
+    fn test_reserve_image_rows_inserts_blank_block() {
+        let html = r#"
+        <p>Before the image.</p>
+        <p><img src="pic.jpg" alt="A picture"></p>
+        <p>After the image.</p>
+        "#;
+        let options = inline_options(&[("pic.jpg", (800, 600))], 20);
+        let with = parse_html_with_styles(
+            html,
+            Some(80),
+            None,
+            0,
+            &StyledClasses::default(),
+            Some(&options),
+        )
+        .unwrap();
+        let without = parse_html(html, Some(80), None, 0).unwrap();
+
+        // 800 px wide caps at the 80-col text width; 80 * (600/800) * 0.5 = 30,
+        // clamped to max_rows = 20.
+        let (&row, &rows) = with.image_block_rows.iter().next().expect("block reserved");
+        assert_eq!(rows, 20);
+        assert!(with.image_maps.contains_key(&row));
+        assert_eq!(
+            with.text_lines.len(),
+            without.text_lines.len() + rows - 1,
+            "block adds rows-1 blank lines"
+        );
+        // The reserved lines are blank; following content is shifted intact.
+        for offset in 1..rows {
+            assert_eq!(with.text_lines[row + offset], "");
+        }
+        assert!(with.text_lines[row].contains("[Image:"));
+        let after_with = with
+            .text_lines
+            .iter()
+            .position(|l| l.contains("After the image."))
+            .unwrap();
+        let after_without = without
+            .text_lines
+            .iter()
+            .position(|l| l.contains("After the image."))
+            .unwrap();
+        assert_eq!(
+            after_with,
+            after_without + rows - 1,
+            "following content shifts by exactly the inserted rows"
+        );
+        assert!(without.image_block_rows.is_empty());
+    }
+
+    #[test]
+    fn test_reserve_image_rows_small_image_and_missing_dims() {
+        let html = r#"
+        <p><img src="icon.png" alt="icon"></p>
+        <p><img src="unknown.png" alt="mystery"></p>
+        "#;
+        // 64 px icon → 8 columns → 8 * 1.0 * 0.5 = 4 rows; unknown.png has
+        // no dimensions so it keeps its single placeholder line.
+        let options = inline_options(&[("icon.png", (64, 64))], 20);
+        let result = parse_html_with_styles(
+            html,
+            Some(80),
+            None,
+            0,
+            &StyledClasses::default(),
+            Some(&options),
+        )
+        .unwrap();
+        assert_eq!(result.image_block_rows.len(), 1);
+        assert_eq!(result.image_block_rows.values().copied().next(), Some(4));
+        assert_eq!(result.image_maps.len(), 2);
+    }
+
+    #[test]
+    fn test_reserve_image_rows_shifts_later_structures() {
+        let html = r#"
+        <p><img src="pic.jpg" alt="A picture"></p>
+        <h1 id="after">After Heading</h1>
+        <p>Some text with a <a href="ch02.xhtml">link</a>.</p>
+        "#;
+        let mut section_ids = HashSet::new();
+        section_ids.insert("after".to_string());
+        let options = inline_options(&[("pic.jpg", (400, 400))], 30);
+        let result = parse_html_with_styles(
+            html,
+            Some(80),
+            Some(section_ids),
+            0,
+            &StyledClasses::default(),
+            Some(&options),
+        )
+        .unwrap();
+
+        let (&img_row, &rows) = result.image_block_rows.iter().next().unwrap();
+        // 400 px → 50 cols → 50 * 1.0 * 0.5 = 25 rows.
+        assert_eq!(rows, 25);
+        let section_row = *result.section_rows.get("after").unwrap();
+        assert!(
+            section_row > img_row + rows - 1,
+            "section row {section_row} must land below the reserved block"
+        );
+        assert_eq!(
+            result.text_lines[section_row],
+            "# After Heading",
+            "section row points at the heading text after shifting"
+        );
+        let link = result.links.first().expect("link extracted");
+        assert!(
+            result.text_lines[link.row].contains("link"),
+            "link row realigned to shifted text"
+        );
+    }
+
     #[test]
     fn test_html_to_plain_text() {
         let html = "<p>Hello, world!</p>";
@@ -1995,7 +2206,7 @@ mod tests {
         // wrapping the entire visible text.
         let html = r#"<p class="body"><span class="ital">Great perplexity, great awakening.</span></p>"#;
         let styled = make_styled(&["ital"], &[]);
-        let result = parse_html_with_styles(html, Some(80), None, 0, &styled).unwrap();
+        let result = parse_html_with_styles(html, Some(80), None, 0, &styled, None).unwrap();
         let italic_styles: Vec<_> = result.formatting.iter().filter(|s| s.attr == 2).collect();
         assert!(
             !italic_styles.is_empty(),
@@ -2009,7 +2220,7 @@ mod tests {
     fn test_class_driven_bold_and_italic_combined() {
         let html = r#"<p><span class="emph">word</span></p>"#;
         let styled = make_styled(&["emph"], &["emph"]);
-        let result = parse_html_with_styles(html, Some(80), None, 0, &styled).unwrap();
+        let result = parse_html_with_styles(html, Some(80), None, 0, &styled, None).unwrap();
         let attrs: Vec<u32> = result.formatting.iter().map(|s| s.attr).collect();
         assert!(attrs.contains(&1), "expected bold attr, got {:?}", attrs);
         assert!(attrs.contains(&2), "expected italic attr, got {:?}", attrs);
@@ -2025,7 +2236,7 @@ mod tests {
             <p>Outro paragraph.</p>
         "#;
         let styled = make_styled(&["ital"], &[]);
-        let result = parse_html_with_styles(html, Some(120), None, 0, &styled).unwrap();
+        let result = parse_html_with_styles(html, Some(120), None, 0, &styled, None).unwrap();
         let lines = &result.text_lines;
         // Locate the three verse lines.
         let i_great = lines
@@ -2051,7 +2262,7 @@ mod tests {
             <p>Second normal paragraph.</p>
         "#;
         let styled = make_styled(&["ital"], &[]);
-        let result = parse_html_with_styles(html, Some(120), None, 0, &styled).unwrap();
+        let result = parse_html_with_styles(html, Some(120), None, 0, &styled, None).unwrap();
         // Paragraphs should remain separated by a blank line.
         let i = result
             .text_lines
@@ -2125,7 +2336,7 @@ mod tests {
         // The italic span text must not match a substring inside `vipassanā`.
         let html = r#"<p class="body">Take the word vipassanā. The prefix vi- is an intensifier, while <span class="ital">passanā</span> comes from <span class="ital">passati</span> in Pali.</p>"#;
         let styled = make_styled(&["ital"], &[]);
-        let result = parse_html_with_styles(html, Some(120), None, 0, &styled).unwrap();
+        let result = parse_html_with_styles(html, Some(120), None, 0, &styled, None).unwrap();
         let italics: Vec<_> = result.formatting.iter().filter(|s| s.attr == 2).collect();
         assert_eq!(italics.len(), 2, "expected two italic spans");
         let segments: Vec<String> = italics
