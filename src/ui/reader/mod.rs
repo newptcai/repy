@@ -4726,6 +4726,30 @@ where
         Ok(())
     }
 
+    /// A full-page move that would start the window inside a reserved
+    /// inline-image block leaves the page mostly blank: images render only
+    /// when their whole block is visible, and paging can step right over
+    /// the few window positions where that holds. Snap such starts so the
+    /// block lands fully on the page — forward moves align its first row
+    /// with the window top, backward moves align its last row with the
+    /// window bottom. `None` when no adjustment is needed.
+    fn snap_page_start_for_image_block(
+        &self,
+        start: usize,
+        page: usize,
+        forward: bool,
+    ) -> Option<usize> {
+        let (block_start, rows) = self.board.image_block_containing(start)?;
+        if rows > page {
+            return None;
+        }
+        Some(if forward {
+            block_start
+        } else {
+            (block_start + rows).saturating_sub(page)
+        })
+    }
+
     // Navigation methods
     fn move_cursor(&mut self, direction: AppDirection) {
         let (seamless, show_top_bar) = {
@@ -4766,6 +4790,10 @@ where
                             let last_start = prev_end
                                 .saturating_sub(page.saturating_sub(1))
                                 .max(prev_start);
+                            let last_start = self
+                                .snap_page_start_for_image_block(last_start, page, false)
+                                .map(|snapped| snapped.max(prev_start))
+                                .unwrap_or(last_start);
                             state.reading_state.row = Self::row_from_start(last_start);
                             return;
                         }
@@ -4779,10 +4807,21 @@ where
                     } else {
                         new_start
                     };
+                    let clamped = self
+                        .snap_page_start_for_image_block(clamped, page, false)
+                        .map(|snapped| snapped.max(chapter_start))
+                        .unwrap_or(clamped);
                     state.reading_state.row = Self::row_from_start(clamped);
                     return;
                 }
-                state.reading_state.row = current_row.saturating_sub(page);
+                let prev = current_row.saturating_sub(page);
+                if let Some(snapped) =
+                    self.snap_page_start_for_image_block(prev.saturating_sub(1), page, false)
+                {
+                    state.reading_state.row = Self::row_from_start(snapped);
+                } else {
+                    state.reading_state.row = prev;
+                }
             }
             AppDirection::PageDown => {
                 if !seamless
@@ -4809,11 +4848,22 @@ where
                     } else {
                         new_start
                     };
+                    let clamped = self
+                        .snap_page_start_for_image_block(clamped, page, true)
+                        .unwrap_or(clamped);
                     state.reading_state.row = Self::row_from_start(clamped);
                     return;
                 }
-                let next = current_row.saturating_add(page);
-                state.reading_state.row = next.min(total_lines.saturating_sub(1));
+                let next = current_row
+                    .saturating_add(page)
+                    .min(total_lines.saturating_sub(1));
+                if let Some(snapped) =
+                    self.snap_page_start_for_image_block(next.saturating_sub(1), page, true)
+                {
+                    state.reading_state.row = Self::row_from_start(snapped);
+                } else {
+                    state.reading_state.row = next;
+                }
             }
             AppDirection::HalfPageUp => {
                 let half_page = (page / 2).max(1);

@@ -229,9 +229,17 @@ When debugging or fixing HTML parsing bugs (links, footnotes, sections, formatti
   (`TextStructure.image_block_rows`, capped at viewport−2) using pixel
   dimensions prescanned per chapter, and the reader decodes visible images
   one per run-loop pass (cached by resolved path) and renders them into
-  their blocks — only when the block is fully on screen. Toggling the
-  setting (or a viewport-height change while `shown`) re-parses all
-  chapters; width changes keep the single-chapter fast path.
+  their blocks — only when the block is fully on screen. A partially
+  visible block shows its placeholder line as a marker instead. Page
+  up/down moves that would start the window inside a block snap so the
+  block lands fully on the page (forward: block top at window top;
+  backward: block bottom at window bottom), so full-page images are never
+  skipped over as blank screens. Toggling the setting (or a
+  viewport-height change while `shown`) re-parses all chapters; width
+  changes keep the single-chapter fast path.
+- SVG-wrapped raster images (`<svg><image xlink:href=…/></svg>`, the
+  common Calibre cover pattern) are normalized to plain `<img>` tags and
+  flow through the same pipeline.
 - Pressing `o` opens an image list for the current page.
 - `Enter` shows the selected image full-screen in the terminal via
   `ratatui-image` (kitty / iTerm2 / sixel, halfblocks fallback); the terminal

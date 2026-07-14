@@ -163,7 +163,11 @@ impl Board {
                         continue;
                     }
                     let start_char = if line_num == s_line { s_col } else { 0 };
-                    let end_char = if line_num == e_line { e_col } else { line_chars };
+                    let end_char = if line_num == e_line {
+                        e_col
+                    } else {
+                        line_chars
+                    };
                     let start_char = start_char.min(line_chars);
                     let end_char = end_char.min(line_chars);
                     if start_char >= end_char {
@@ -213,10 +217,9 @@ impl Board {
                         .get(&line_num)
                         .and_then(|ranges| ranges.first());
                     spans.push(match marker {
-                        Some(range) => Span::styled(
-                            "▎",
-                            Style::default().fg(theme.annotation_bg(range.color)),
-                        ),
+                        Some(range) => {
+                            Span::styled("▎", Style::default().fg(theme.annotation_bg(range.color)))
+                        }
                         None => Span::raw(" "),
                     });
                 }
@@ -242,13 +245,12 @@ impl Board {
                     }
                     merged
                 };
-                let search_ranges_arg: Option<&[(usize, usize)]> = if combined_search_ranges
-                    .is_empty()
-                {
-                    None
-                } else {
-                    Some(combined_search_ranges.as_slice())
-                };
+                let search_ranges_arg: Option<&[(usize, usize)]> =
+                    if combined_search_ranges.is_empty() {
+                        None
+                    } else {
+                        Some(combined_search_ranges.as_slice())
+                    };
 
                 // Check for TTS character-level underline on this line
                 let tts_col_range = state.ui_state.tts_underline_ranges.get(&line_num);
@@ -513,7 +515,9 @@ impl Board {
                 })
             {
                 style = if is_current_hit {
-                    style.fg(theme.search_current_fg).bg(theme.search_current_bg)
+                    style
+                        .fg(theme.search_current_fg)
+                        .bg(theme.search_current_bg)
                 } else {
                     style.fg(theme.search_fg).bg(theme.search_bg)
                 };
@@ -675,6 +679,19 @@ impl Board {
             .copied()
     }
 
+    /// The inline-image block that strictly contains `row` — i.e. `row` is
+    /// one of the block's reserved lines but not its placeholder row —
+    /// returned as `(block_start, rows)`. Empty when inline images are off
+    /// (no blocks are reserved then).
+    pub fn image_block_containing(&self, row: usize) -> Option<(usize, usize)> {
+        self.text_structure
+            .as_ref()?
+            .image_block_rows
+            .iter()
+            .find(|&(&start, &rows)| start < row && row < start + rows)
+            .map(|(&start, &rows)| (start, rows))
+    }
+
     pub fn image_src(&self, line: usize) -> Option<String> {
         self.text_structure
             .as_ref()
@@ -827,6 +844,31 @@ mod tests {
         let board = Board::new().with_text_structure(text_structure.clone());
 
         assert!(board.text_structure.is_some());
+    }
+
+    #[test]
+    fn test_image_block_containing() {
+        let mut image_block_rows = HashMap::new();
+        image_block_rows.insert(10, 5); // block spans rows 10..15
+        let text_structure = TextStructure {
+            text_lines: vec![String::new(); 30],
+            image_maps: HashMap::new(),
+            section_rows: HashMap::new(),
+            formatting: vec![],
+            links: vec![],
+            pagebreak_map: HashMap::new(),
+            image_block_rows,
+        };
+        let board = Board::new().with_text_structure(text_structure);
+
+        // The placeholder row itself is not "inside" (a window starting
+        // there shows the whole block).
+        assert_eq!(board.image_block_containing(10), None);
+        assert_eq!(board.image_block_containing(11), Some((10, 5)));
+        assert_eq!(board.image_block_containing(14), Some((10, 5)));
+        // First row past the block.
+        assert_eq!(board.image_block_containing(15), None);
+        assert_eq!(board.image_block_containing(9), None);
     }
 
     #[test]
@@ -1050,10 +1092,27 @@ mod tests {
             2,
         );
 
-        assert_eq!(cursor_spans[0].style.bg, Some(theme.annotation_highlight_bg));
-        assert_eq!(cursor_spans[1].style.bg, Some(theme.annotation_highlight_bg));
-        assert_eq!(cursor_spans[2].style.bg, Some(theme.annotation_highlight_bg));
-        assert!(cursor_spans[2].style.add_modifier.contains(Modifier::REVERSED));
-        assert_eq!(cursor_spans[3].style.bg, Some(theme.annotation_highlight_bg));
+        assert_eq!(
+            cursor_spans[0].style.bg,
+            Some(theme.annotation_highlight_bg)
+        );
+        assert_eq!(
+            cursor_spans[1].style.bg,
+            Some(theme.annotation_highlight_bg)
+        );
+        assert_eq!(
+            cursor_spans[2].style.bg,
+            Some(theme.annotation_highlight_bg)
+        );
+        assert!(
+            cursor_spans[2]
+                .style
+                .add_modifier
+                .contains(Modifier::REVERSED)
+        );
+        assert_eq!(
+            cursor_spans[3].style.bg,
+            Some(theme.annotation_highlight_bg)
+        );
     }
 }

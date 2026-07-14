@@ -323,6 +323,42 @@ fn position_persists_across_book_switch() {
     assert_eq!(reader.state.borrow().reading_state.row, 7);
 }
 
+/// Paging must never start the window inside a reserved image block (the
+/// image would be hidden and the page mostly blank): forward moves snap to
+/// the block's first row, backward moves bottom-align the block.
+#[test]
+fn page_moves_snap_around_image_blocks() {
+    let mut settings = Settings::default();
+    settings.inline_images = crate::settings::InlineImages::Shown;
+    let reader = test_reader_with_settings(settings);
+
+    // small.epub's cover block starts at row 0.
+    let rows = reader
+        .board
+        .image_block_rows(0)
+        .expect("cover image block reserved");
+    assert!(rows > 2, "cover block should span several rows");
+    let page = reader.page_size();
+    assert!(rows <= page, "block must fit a page for the snap to apply");
+
+    // A window starting inside the block snaps to the block start (forward)
+    // or to a start that bottom-aligns the block (backward).
+    assert_eq!(
+        reader.snap_page_start_for_image_block(1, page, true),
+        Some(0)
+    );
+    assert_eq!(
+        reader.snap_page_start_for_image_block(rows - 1, page, false),
+        Some(rows.saturating_sub(page))
+    );
+    // Starts outside the block (or on the placeholder row) need no snap.
+    assert_eq!(reader.snap_page_start_for_image_block(0, page, true), None);
+    assert_eq!(
+        reader.snap_page_start_for_image_block(rows, page, true),
+        None
+    );
+}
+
 /// The shown-when-fully-visible policy: once the block scrolls partially
 /// off-screen the image must disappear, leaving only the reserved rows.
 #[test]
