@@ -24,6 +24,10 @@ static RE_IMG_ALT: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r#"alt=["']([^"']*)["']"#).unwrap());
 static RE_IMG_TITLE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r#"title=["']([^"']*)["']"#).unwrap());
+static RE_SVG_BLOCK: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?is)<svg[\s>].*?</svg>").unwrap());
+static RE_SVG_IMAGE_HREF: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r#"(?is)<image[^>]*?href=["']([^"']+)["']"#).unwrap());
 
 // Pagebreak sentinel regexes
 static RE_PAGEBREAK_SELF: LazyLock<Regex> = LazyLock::new(|| {
@@ -90,6 +94,7 @@ pub fn parse_html_with_styles(
 ) -> Result<TextStructure> {
     let text_width = text_width.unwrap_or(80);
     let html_src = preprocess_inline_annotations(html_src);
+    let html_src = preprocess_svg_images(&html_src);
     let html_src = preprocess_images(&html_src);
     let html_src = preprocess_pagebreaks(&html_src);
 
@@ -201,13 +206,16 @@ fn reserve_image_rows(
             continue;
         }
         let columns = (text_width as u32).min(width_px.div_ceil(APPROX_CELL_PIXEL_WIDTH));
-        let estimated = (columns as f64) * (height_px as f64 / width_px as f64)
-            * CELL_WIDTH_TO_HEIGHT;
+        let estimated =
+            (columns as f64) * (height_px as f64 / width_px as f64) * CELL_WIDTH_TO_HEIGHT;
         let rows = (estimated.ceil() as usize).clamp(2, options.max_rows.max(2));
 
         let placeholder_row = row + shift;
         let insert_at = (placeholder_row + 1).min(text_lines.len());
-        text_lines.splice(insert_at..insert_at, std::iter::repeat_n(String::new(), rows - 1));
+        text_lines.splice(
+            insert_at..insert_at,
+            std::iter::repeat_n(String::new(), rows - 1),
+        );
         block_rows.insert(starting_line + placeholder_row, rows);
         shift += rows - 1;
     }
@@ -303,8 +311,8 @@ fn tighten_italic_paragraph_runs(
 
     let mut i = 0;
     while i + 2 < raw_lines.len() {
-        let prev_match = !raw_lines[i].trim().is_empty()
-            && italic_texts.contains(&normalize(&raw_lines[i]));
+        let prev_match =
+            !raw_lines[i].trim().is_empty() && italic_texts.contains(&normalize(&raw_lines[i]));
         let blank = raw_lines[i + 1].trim().is_empty();
         let next_match = !raw_lines[i + 2].trim().is_empty()
             && italic_texts.contains(&normalize(&raw_lines[i + 2]));
@@ -1417,14 +1425,60 @@ mod tests {
             "section row {section_row} must land below the reserved block"
         );
         assert_eq!(
-            result.text_lines[section_row],
-            "# After Heading",
+            result.text_lines[section_row], "# After Heading",
             "section row points at the heading text after shifting"
         );
         let link = result.links.first().expect("link extracted");
         assert!(
             result.text_lines[link.row].contains("link"),
             "link row realigned to shifted text"
+        );
+    }
+
+    #[test]
+    fn test_preprocess_svg_images_calibre_cover() {
+        // The Calibre/KF8 cover pattern: a raster image wrapped in inline SVG.
+        let html = r#"
+        <div>
+            <svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" version="1.1" width="100%" height="100%" viewBox="0 0 898 1499" preserveAspectRatio="none">
+                <image width="898" height="1499" xlink:href="cover.jpeg"/>
+            </svg>
+        </div>
+        "#;
+        let processed = preprocess_svg_images(html);
+        assert!(processed.contains(r#"<img src="cover.jpeg">"#));
+        assert!(!processed.contains("<svg"));
+
+        // Pure vector SVG (no wrapped raster image) is left untouched.
+        let vector = r#"<svg viewBox="0 0 10 10"><rect width="10" height="10"/></svg>"#;
+        assert_eq!(preprocess_svg_images(vector), vector);
+    }
+
+    #[test]
+    fn test_svg_wrapped_cover_gets_placeholder_and_block() {
+        let html = r#"
+        <div><svg viewBox="0 0 898 1499"><image width="898" height="1499" xlink:href="cover.jpeg"/></svg></div>
+        "#;
+        let options = inline_options(&[("cover.jpeg", (898, 1499))], 20);
+        let result = parse_html_with_styles(
+            html,
+            Some(80),
+            None,
+            0,
+            &StyledClasses::default(),
+            Some(&options),
+        )
+        .unwrap();
+        let (&row, &rows) = result
+            .image_block_rows
+            .iter()
+            .next()
+            .expect("block reserved for the svg-wrapped cover");
+        assert_eq!(rows, 20);
+        assert!(result.text_lines[row].contains("[Image: cover.jpeg]"));
+        assert_eq!(
+            result.image_maps.get(&row).map(String::as_str),
+            Some("cover.jpeg")
         );
     }
 
@@ -1632,7 +1686,8 @@ mod tests {
         let html = "<p>This is <strong>bold</strong> and <em>italic</em>.</p>";
         let fragment = Html::parse_fragment(html);
         let text_lines = vec!["This is **bold** and *italic*.".to_string()];
-        let formatting = extract_formatting(&fragment, 0, &text_lines, &StyledClasses::default()).unwrap();
+        let formatting =
+            extract_formatting(&fragment, 0, &text_lines, &StyledClasses::default()).unwrap();
         assert_eq!(formatting.len(), 2);
         assert!(formatting.iter().any(|s| s.n_letters == 4 && s.attr == 1)); // bold
         assert!(formatting.iter().any(|s| s.n_letters == 6 && s.attr == 2)); // italic
@@ -1651,7 +1706,8 @@ mod tests {
             "Paragraph content.".to_string(),
             "## Header 2".to_string(),
         ];
-        let formatting = extract_formatting(&fragment, 0, &text_lines, &StyledClasses::default()).unwrap();
+        let formatting =
+            extract_formatting(&fragment, 0, &text_lines, &StyledClasses::default()).unwrap();
         assert_eq!(formatting.len(), 2);
 
         // Check header 1 - html2text might format differently than expected
@@ -1672,7 +1728,8 @@ mod tests {
         let html = "<p>This has <strong>bold</strong> text.</p>";
         let fragment = Html::parse_fragment(html);
         let text_lines = vec!["Completely different text content.".to_string()];
-        let formatting = extract_formatting(&fragment, 0, &text_lines, &StyledClasses::default()).unwrap();
+        let formatting =
+            extract_formatting(&fragment, 0, &text_lines, &StyledClasses::default()).unwrap();
         assert_eq!(formatting.len(), 0);
     }
 
@@ -1681,7 +1738,8 @@ mod tests {
         let html = "";
         let fragment = Html::parse_fragment(html);
         let text_lines = vec!["Plain text content.".to_string()];
-        let formatting = extract_formatting(&fragment, 0, &text_lines, &StyledClasses::default()).unwrap();
+        let formatting =
+            extract_formatting(&fragment, 0, &text_lines, &StyledClasses::default()).unwrap();
         assert_eq!(formatting.len(), 0);
     }
 
@@ -1947,27 +2005,29 @@ mod tests {
         let fragment = Html::parse_fragment(html);
         let mut italic = std::collections::HashSet::new();
         italic.insert("quote".to_string());
-        let styled = StyledClasses { italic, bold: std::collections::HashSet::new() };
-        let text_lines = vec![
-            "The quote ends here.".to_string(),
-            "[22]".to_string(),
-        ];
+        let styled = StyledClasses {
+            italic,
+            bold: std::collections::HashSet::new(),
+        };
+        let text_lines = vec!["The quote ends here.".to_string(), "[22]".to_string()];
         let formatting = extract_formatting(&fragment, 0, &text_lines, &styled).unwrap();
-        assert!(formatting.iter().any(|s| s.row == 0 && s.attr == 2),
-            "italic styling should land on row 0");
+        assert!(
+            formatting.iter().any(|s| s.row == 0 && s.attr == 2),
+            "italic styling should land on row 0"
+        );
     }
 
     #[test]
     fn test_extract_formatting_spans_hyphenated_word() {
         let html = "<p><em>alpha beta entangled gamma</em></p>";
         let fragment = Html::parse_fragment(html);
-        let text_lines = vec![
-            "alpha beta entan-".to_string(),
-            "gled gamma".to_string(),
-        ];
+        let text_lines = vec!["alpha beta entan-".to_string(), "gled gamma".to_string()];
         let formatting =
             extract_formatting(&fragment, 0, &text_lines, &StyledClasses::default()).unwrap();
-        assert!(!formatting.is_empty(), "italic span across hyphen should be detected");
+        assert!(
+            !formatting.is_empty(),
+            "italic span across hyphen should be detected"
+        );
         assert!(formatting.iter().any(|s| s.row == 0 && s.attr == 2));
         assert!(formatting.iter().any(|s| s.row == 1 && s.attr == 2));
     }
@@ -1977,7 +2037,8 @@ mod tests {
         let html = "<p>This has <strong>nested <em>bold italic</em> text</strong>.</p>";
         let fragment = Html::parse_fragment(html);
         let text_lines = vec!["This has **nested *bold italic* text**.".to_string()];
-        let formatting = extract_formatting(&fragment, 0, &text_lines, &StyledClasses::default()).unwrap();
+        let formatting =
+            extract_formatting(&fragment, 0, &text_lines, &StyledClasses::default()).unwrap();
 
         // Should extract at least one formatting element (the parser might not handle nested well)
         assert!(!formatting.is_empty());
@@ -2204,7 +2265,8 @@ mod tests {
     fn test_class_driven_italic_via_span() {
         // Mirrors the *What is this?* book: <p> with a class-styled <span>
         // wrapping the entire visible text.
-        let html = r#"<p class="body"><span class="ital">Great perplexity, great awakening.</span></p>"#;
+        let html =
+            r#"<p class="body"><span class="ital">Great perplexity, great awakening.</span></p>"#;
         let styled = make_styled(&["ital"], &[]);
         let result = parse_html_with_styles(html, Some(80), None, 0, &styled, None).unwrap();
         let italic_styles: Vec<_> = result.formatting.iter().filter(|s| s.attr == 2).collect();
@@ -2213,7 +2275,10 @@ mod tests {
             "expected at least one italic style, got formatting = {:?}",
             result.formatting
         );
-        assert_eq!(italic_styles[0].n_letters, "Great perplexity, great awakening.".len() as u16);
+        assert_eq!(
+            italic_styles[0].n_letters,
+            "Great perplexity, great awakening.".len() as u16
+        );
     }
 
     #[test]
@@ -2349,11 +2414,24 @@ mod tests {
                 chars[start..end].iter().collect()
             })
             .collect();
-        assert_eq!(
-            segments,
-            vec!["passanā".to_string(), "passati".to_string()]
-        );
+        assert_eq!(segments, vec!["passanā".to_string(), "passati".to_string()]);
     }
+}
+
+/// Rewrite SVG-wrapped raster images (`<svg><image xlink:href="…"/></svg>`,
+/// the common Calibre/KF8 cover-page pattern) into plain `<img src="…">`
+/// tags so the rest of the pipeline (placeholder generation, dimension
+/// prescan, inline rendering, images list) treats them like any other
+/// image. SVG blocks without an `<image>` child are left untouched.
+pub(crate) fn preprocess_svg_images(html: &str) -> String {
+    RE_SVG_BLOCK
+        .replace_all(html, |caps: &Captures| {
+            match RE_SVG_IMAGE_HREF.captures(&caps[0]) {
+                Some(image) => format!(r#"<img src="{}">"#, &image[1]),
+                None => caps[0].to_string(),
+            }
+        })
+        .to_string()
 }
 
 fn preprocess_images(html: &str) -> String {

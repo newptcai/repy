@@ -110,13 +110,16 @@ impl Epub {
 
     /// Pixel dimensions (header-only decode) for every `<img src>` in a
     /// chapter, keyed by the raw src attribute value. Images that cannot be
-    /// resolved or decoded (e.g. SVG) are simply absent.
+    /// resolved or decoded (e.g. SVG) are simply absent. SVG-wrapped raster
+    /// images are normalized first, matching the parser's preprocessing, so
+    /// the keys line up with the srcs the parser extracts.
     fn collect_image_dimensions(
         &mut self,
         raw_html: &str,
         content_id: &str,
     ) -> HashMap<String, (u32, u32)> {
-        let fragment = scraper::Html::parse_fragment(raw_html);
+        let raw_html = crate::parser::preprocess_svg_images(raw_html);
+        let fragment = scraper::Html::parse_fragment(&raw_html);
         let selector = scraper::Selector::parse("img").unwrap();
         let sources: Vec<String> = fragment
             .select(&selector)
