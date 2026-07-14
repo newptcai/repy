@@ -341,20 +341,28 @@ fn page_moves_snap_around_image_blocks() {
     let page = reader.page_size();
     assert!(rows <= page, "block must fit a page for the snap to apply");
 
-    // A window starting inside the block snaps to the block start (forward)
-    // or to a start that bottom-aligns the block (backward).
+    // A forward move from above the block that lands inside it snaps to the
+    // block start; a backward one bottom-aligns the block.
+    // (small.epub's block starts at row 0, so "above" is impossible; the
+    // freeze-avoidance branch below is the reachable forward case here.)
     assert_eq!(
-        reader.snap_page_start_for_image_block(1, page, true),
-        Some(0)
-    );
-    assert_eq!(
-        reader.snap_page_start_for_image_block(rows - 1, page, false),
+        reader.snap_page_start_for_image_block(rows - 1, page, rows + 5, false),
         Some(rows.saturating_sub(page))
     );
-    // Starts outside the block (or on the placeholder row) need no snap.
-    assert_eq!(reader.snap_page_start_for_image_block(0, page, true), None);
+    // A forward move already aligned on the block (current_start == block
+    // start) must continue past it, not re-snap in place — re-snapping froze
+    // paging when a chapter's clamped last page began inside the block.
     assert_eq!(
-        reader.snap_page_start_for_image_block(rows, page, true),
+        reader.snap_page_start_for_image_block(1, page, 0, true),
+        Some(rows)
+    );
+    // Starts outside the block (or on the placeholder row) need no snap.
+    assert_eq!(
+        reader.snap_page_start_for_image_block(0, page, 0, true),
+        None
+    );
+    assert_eq!(
+        reader.snap_page_start_for_image_block(rows, page, 0, true),
         None
     );
 }

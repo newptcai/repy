@@ -4732,11 +4732,17 @@ where
     /// the few window positions where that holds. Snap such starts so the
     /// block lands fully on the page — forward moves align its first row
     /// with the window top, backward moves align its last row with the
-    /// window bottom. `None` when no adjustment is needed.
+    /// window bottom. When a forward move is already at (or past) the
+    /// block's start — e.g. the chapter's clamped last page begins inside
+    /// the block currently on screen — re-aligning would freeze paging, so
+    /// continue just past the block instead. `None` when no adjustment is
+    /// needed. Backward moves cannot freeze: the bottom-aligned target is
+    /// always above a window start that landed inside the block.
     fn snap_page_start_for_image_block(
         &self,
         start: usize,
         page: usize,
+        current_start: usize,
         forward: bool,
     ) -> Option<usize> {
         let (block_start, rows) = self.board.image_block_containing(start)?;
@@ -4744,7 +4750,11 @@ where
             return None;
         }
         Some(if forward {
-            block_start
+            if block_start > current_start {
+                block_start
+            } else {
+                block_start + rows
+            }
         } else {
             (block_start + rows).saturating_sub(page)
         })
@@ -4791,7 +4801,12 @@ where
                                 .saturating_sub(page.saturating_sub(1))
                                 .max(prev_start);
                             let last_start = self
-                                .snap_page_start_for_image_block(last_start, page, false)
+                                .snap_page_start_for_image_block(
+                                    last_start,
+                                    page,
+                                    current_start,
+                                    false,
+                                )
                                 .map(|snapped| snapped.max(prev_start))
                                 .unwrap_or(last_start);
                             state.reading_state.row = Self::row_from_start(last_start);
@@ -4808,16 +4823,19 @@ where
                         new_start
                     };
                     let clamped = self
-                        .snap_page_start_for_image_block(clamped, page, false)
+                        .snap_page_start_for_image_block(clamped, page, current_start, false)
                         .map(|snapped| snapped.max(chapter_start))
                         .unwrap_or(clamped);
                     state.reading_state.row = Self::row_from_start(clamped);
                     return;
                 }
                 let prev = current_row.saturating_sub(page);
-                if let Some(snapped) =
-                    self.snap_page_start_for_image_block(prev.saturating_sub(1), page, false)
-                {
+                if let Some(snapped) = self.snap_page_start_for_image_block(
+                    prev.saturating_sub(1),
+                    page,
+                    current_row.saturating_sub(1),
+                    false,
+                ) {
                     state.reading_state.row = Self::row_from_start(snapped);
                 } else {
                     state.reading_state.row = prev;
@@ -4849,7 +4867,8 @@ where
                         new_start
                     };
                     let clamped = self
-                        .snap_page_start_for_image_block(clamped, page, true)
+                        .snap_page_start_for_image_block(clamped, page, current_start, true)
+                        .map(|snapped| snapped.min(chapter_end))
                         .unwrap_or(clamped);
                     state.reading_state.row = Self::row_from_start(clamped);
                     return;
@@ -4857,10 +4876,14 @@ where
                 let next = current_row
                     .saturating_add(page)
                     .min(total_lines.saturating_sub(1));
-                if let Some(snapped) =
-                    self.snap_page_start_for_image_block(next.saturating_sub(1), page, true)
-                {
-                    state.reading_state.row = Self::row_from_start(snapped);
+                if let Some(snapped) = self.snap_page_start_for_image_block(
+                    next.saturating_sub(1),
+                    page,
+                    current_row.saturating_sub(1),
+                    true,
+                ) {
+                    state.reading_state.row =
+                        Self::row_from_start(snapped).min(total_lines.saturating_sub(1));
                 } else {
                     state.reading_state.row = next;
                 }
