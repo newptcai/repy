@@ -36,7 +36,7 @@ impl ImagesWindow {
         let list = List::new(items)
             .block(
                 Block::default()
-                    .title("Images on Page")
+                    .title("Images on Page (Enter view, o external viewer)")
                     .borders(Borders::ALL)
                     .style(theme.base_style()),
             )

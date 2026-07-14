@@ -33,6 +33,7 @@ pub enum WindowType {
     Metadata,
     Settings,
     Images,
+    ImageView,
     Statistics,
     Visual,
     DictionaryCommandInput,

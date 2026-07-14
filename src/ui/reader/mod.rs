@@ -35,6 +35,7 @@ use crate::settings::DICT_PRESET_LIST;
 use crate::state::State;
 use crate::theme::{ColorTheme, Theme};
 use crate::ui::board::Board;
+use crate::ui::graphics::Graphics;
 use crate::ui::windows::{
     bookmarks::BookmarksWindow, dictionary::DictionaryWindow, fuzzy_filter_indices,
     help::HelpWindow, images::ImagesWindow, library::LibraryWindow, links::LinksWindow,
@@ -490,6 +491,9 @@ impl UiState {
             WindowType::Search => self.show_search = true,
             WindowType::Links => self.show_links = true,
             WindowType::Images => self.show_images = true,
+            WindowType::ImageView => {
+                self.show_images = false;
+            }
             WindowType::Metadata => self.show_metadata = true,
             WindowType::Statistics => self.show_statistics = true,
             WindowType::Dictionary => {
@@ -720,12 +724,32 @@ pub struct Reader<B: Backend = CrosstermBackend<io::Stdout>> {
     reading_session: Option<ActiveReadingSession>,
     /// Cached DB-side reading statistics; see [`CachedStatistics`].
     cached_statistics: Option<CachedStatistics>,
+    /// Terminal graphics capability (kitty/iTerm2/sixel/halfblocks), probed lazily.
+    graphics: Graphics,
+    /// State of the full-screen in-terminal image viewer, if open.
+    image_view: Option<ImageViewState>,
+}
+
+/// Full-screen in-terminal image viewer state (`WindowType::ImageView`).
+///
+/// Lives on `Reader` rather than `UiState` because the render protocol is
+/// neither `Clone` nor `Debug` and needs `&mut` access during drawing.
+struct ImageViewState {
+    /// Image filename, shown in the window title.
+    title: String,
+    /// Cached encode state for the detected terminal graphics protocol.
+    protocol: ratatui_image::protocol::StatefulProtocol,
 }
 
 impl Reader {
     /// Create a new Reader instance
     pub fn new(config: Config) -> eyre::Result<Self> {
-        Self::with_backend(config, CrosstermBackend::new(io::stdout()), State::new()?)
+        let mut reader =
+            Self::with_backend(config, CrosstermBackend::new(io::stdout()), State::new()?)?;
+        // Only a real terminal can answer the graphics capability query;
+        // `with_backend` (used by tests) leaves graphics disabled.
+        reader.graphics = Graphics::new();
+        Ok(reader)
     }
 }
 
@@ -1120,17 +1144,54 @@ where
             tts_temp_dir: None,
             reading_session: None,
             cached_statistics: None,
+            graphics: Graphics::disabled(),
+            image_view: None,
         })
     }
 
     /// Extract the current UI state into a single frame draw.
     fn draw(&mut self) -> eyre::Result<()> {
         let state = self.state.clone();
+        let image_view = &mut self.image_view;
         self.terminal.draw(|f| {
             let state_ref = state.borrow();
             Self::render_static(f, &state_ref, &self.board, &self.content_start_rows);
+            if state_ref.ui_state.active_window == WindowType::ImageView
+                && let Some(view) = image_view.as_mut()
+            {
+                Self::render_image_view(f, &state_ref, view);
+            }
         })?;
         Ok(())
+    }
+
+    /// Render the full-screen in-terminal image viewer over the whole frame.
+    fn render_image_view(frame: &mut Frame, state: &ApplicationState, view: &mut ImageViewState) {
+        let theme = state.theme();
+        let area = frame.area();
+        frame.render_widget(Clear, area);
+        let block = Block::default()
+            .title(format!(" {} ", view.title))
+            .title_bottom(" Esc/q/Enter close · o external viewer ")
+            .borders(Borders::ALL)
+            .style(theme.base_style());
+        let inner = block.inner(area);
+        frame.render_widget(block, area);
+        // Center the fitted image instead of anchoring it top-left.
+        let fitted = view
+            .protocol
+            .size_for(ratatui_image::Resize::Fit(None), inner.as_size());
+        let image_area = Rect::new(
+            inner.x + inner.width.saturating_sub(fitted.width) / 2,
+            inner.y + inner.height.saturating_sub(fitted.height) / 2,
+            fitted.width.min(inner.width),
+            fitted.height.min(inner.height),
+        );
+        frame.render_stateful_widget(
+            ratatui_image::StatefulImage::default(),
+            image_area,
+            &mut view.protocol,
+        );
     }
 
     /// Load the most recently read ebook, if any, using the database
@@ -1783,6 +1844,7 @@ where
             WindowType::Links => self.handle_links_mode_keys(key, repeat_count)?,
             WindowType::LinkPreview => self.handle_link_preview_mode_keys(key)?,
             WindowType::Images => self.handle_images_mode_keys(key, repeat_count)?,
+            WindowType::ImageView => self.handle_image_view_keys(key)?,
             WindowType::Help => self.handle_help_mode_keys(key, repeat_count)?,
             WindowType::Metadata => self.handle_modal_close_keys(key)?,
             WindowType::Statistics => self.handle_modal_close_keys(key)?,
@@ -2912,10 +2974,29 @@ where
                 KeyCode::Enter => {
                     self.open_selected_image()?;
                 }
+                KeyCode::Char('o') => {
+                    self.open_selected_image_externally()?;
+                }
                 _ => {}
             }
         } else {
             self.state.borrow_mut().ui_state.images_selected_index = index;
+        }
+        Ok(())
+    }
+
+    fn handle_image_view_keys(&mut self, key: KeyEvent) -> eyre::Result<()> {
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('q') | KeyCode::Enter => {
+                self.image_view = None;
+                let mut state = self.state.borrow_mut();
+                state.ui_state.open_window(WindowType::Images);
+            }
+            KeyCode::Char('o') => {
+                self.image_view = None;
+                self.open_selected_image_externally()?;
+            }
+            _ => {}
         }
         Ok(())
     }
@@ -5970,67 +6051,103 @@ where
         Ok(())
     }
 
-    fn open_selected_image(&mut self) -> eyre::Result<()> {
-        let image_src = {
+    /// Extract the selected image's source path, MIME type, and raw bytes,
+    /// reporting extraction failures as a status message.
+    fn selected_image_data(&mut self) -> Option<(String, String, Vec<u8>)> {
+        let src = {
             let state = self.state.borrow();
             state
                 .ui_state
                 .images_list
                 .get(state.ui_state.images_selected_index)
                 .map(|(_, src)| src.clone())
+        }?;
+        let epub = self.ebook.as_mut()?;
+
+        // Resolve relative path
+        let current_index = self.state.borrow().reading_state.content_index;
+        let base_path = epub.resource_path_for_content_index(current_index);
+        let resolved_path = if let Some(base) = base_path {
+            Self::resolve_relative_href(&src, Some(&base)).unwrap_or(src.clone())
+        } else {
+            src.clone()
         };
 
-        if let Some(src) = image_src
-            && let Some(epub) = self.ebook.as_mut()
-        {
-            // Resolve relative path
-            let current_index = self.state.borrow().reading_state.content_index;
-            let base_path = epub.resource_path_for_content_index(current_index);
-            let resolved_path = if let Some(base) = base_path {
-                Self::resolve_relative_href(&src, Some(&base)).unwrap_or(src.clone())
-            } else {
-                src.clone()
-            };
-
-            match epub.get_img_bytestr(&resolved_path) {
-                Ok((mime, bytes)) => {
-                    // Create a temporary file with the correct extension
-                    let extension = match mime.as_str() {
-                        "image/jpeg" => "jpg",
-                        "image/png" => "png",
-                        "image/gif" => "gif",
-                        "image/svg+xml" => "svg",
-                        "image/webp" => "webp",
-                        "image/bmp" => "bmp",
-                        _ => "jpg", // Fallback
-                    };
-
-                    let temp_dir = std::env::temp_dir();
-                    let filename = std::path::Path::new(&src)
-                        .file_name()
-                        .and_then(|n| n.to_str())
-                        .unwrap_or("image");
-                    let temp_path =
-                        temp_dir.join(format!("{}_{}.{}", "repy_img", filename, extension));
-
-                    std::fs::write(&temp_path, bytes)?;
-
-                    self.open_image_viewer(&temp_path.to_string_lossy())?;
-
-                    let mut state = self.state.borrow_mut();
-                    state
-                        .ui_state
-                        .set_message("Opened image".to_string(), MessageType::Info);
-                    state.ui_state.open_window(WindowType::Reader);
-                }
-                Err(e) => {
-                    let mut state = self.state.borrow_mut();
-                    state
-                        .ui_state
-                        .set_message(format!("Failed to load image: {}", e), MessageType::Error);
-                }
+        match epub.get_img_bytestr(&resolved_path) {
+            Ok((mime, bytes)) => Some((src, mime, bytes)),
+            Err(e) => {
+                let mut state = self.state.borrow_mut();
+                state
+                    .ui_state
+                    .set_message(format!("Failed to load image: {}", e), MessageType::Error);
+                None
             }
         }
+    }
+
+    /// Show the selected image in-terminal when the graphics protocol and
+    /// decoder allow it; otherwise fall back to an external viewer (always
+    /// the case for SVG, which the `image` crate cannot decode).
+    fn open_selected_image(&mut self) -> eyre::Result<()> {
+        let Some((src, mime, bytes)) = self.selected_image_data() else {
+            return Ok(());
+        };
+
+        if mime != "image/svg+xml"
+            && let Ok(decoded) = image::load_from_memory(&bytes)
+            && let Some(protocol) = self.graphics.new_protocol(decoded)
+        {
+            let title = std::path::Path::new(&src)
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("image")
+                .to_string();
+            self.image_view = Some(ImageViewState { title, protocol });
+            let mut state = self.state.borrow_mut();
+            state.ui_state.open_window(WindowType::ImageView);
+            return Ok(());
+        }
+
+        self.open_image_externally(&src, &mime, &bytes)
+    }
+
+    /// Open the selected image with the configured external viewer.
+    fn open_selected_image_externally(&mut self) -> eyre::Result<()> {
+        let Some((src, mime, bytes)) = self.selected_image_data() else {
+            return Ok(());
+        };
+        self.open_image_externally(&src, &mime, &bytes)
+    }
+
+    /// Write the image to a temp file and hand it to an external viewer.
+    fn open_image_externally(&mut self, src: &str, mime: &str, bytes: &[u8]) -> eyre::Result<()> {
+        // Create a temporary file with the correct extension
+        let extension = match mime {
+            "image/jpeg" => "jpg",
+            "image/png" => "png",
+            "image/gif" => "gif",
+            "image/svg+xml" => "svg",
+            "image/webp" => "webp",
+            "image/bmp" => "bmp",
+            _ => "jpg", // Fallback
+        };
+
+        let temp_dir = std::env::temp_dir();
+        let filename = std::path::Path::new(src)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("image");
+        let temp_path = temp_dir.join(format!("{}_{}.{}", "repy_img", filename, extension));
+
+        std::fs::write(&temp_path, bytes)?;
+
+        self.open_image_viewer(&temp_path.to_string_lossy())?;
+
+        let mut state = self.state.borrow_mut();
+        state
+            .ui_state
+            .set_message("Opened image".to_string(), MessageType::Info);
+        state.ui_state.open_window(WindowType::Reader);
         Ok(())
     }
 
@@ -7927,6 +8044,8 @@ mod tests {
             tts_temp_dir: None,
             reading_session: None,
             cached_statistics: None,
+            graphics: crate::ui::graphics::Graphics::disabled(),
+            image_view: None,
         }
     }
 

@@ -110,6 +110,30 @@ fn internal_link_preview() {
 }
 
 #[test]
+fn images_window() {
+    let mut reader = test_reader();
+    // The first page shows the cover image placeholder.
+    press_char(&mut reader, 'o');
+    insta::assert_snapshot!(reader.terminal.backend());
+}
+
+#[test]
+fn image_view_window() {
+    let mut reader = test_reader();
+    // A fixed halfblocks picker stands in for terminal capability detection.
+    reader.graphics = crate::ui::graphics::Graphics::halfblocks_for_test();
+    press_char(&mut reader, 'o');
+    press(&mut reader, KeyCode::Enter);
+    assert!(reader.image_view.is_some(), "image viewer should be open");
+    insta::assert_snapshot!("image_view_window", reader.terminal.backend());
+
+    // Esc returns to the images list and drops the render state.
+    press(&mut reader, KeyCode::Esc);
+    assert!(reader.image_view.is_none());
+    insta::assert_snapshot!("image_view_window_closed", reader.terminal.backend());
+}
+
+#[test]
 fn cursor_mode() {
     let mut reader = test_reader();
     press_char(&mut reader, 'v');

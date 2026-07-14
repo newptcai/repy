@@ -98,6 +98,7 @@ src/
 │   ├── reader/
 │   │   └── mod.rs       # Main reader state, event handling, and TTS pipeline
 │   ├── board.rs         # Rendering logic for the reading view
+│   ├── graphics.rs      # Terminal graphics detection (ratatui-image Picker)
 │   └── windows/
 │       ├── mod.rs       # Windows module root, shared helpers (centered_popup_area)
 │       ├── bookmarks.rs
@@ -186,7 +187,9 @@ When debugging or fixing HTML parsing bugs (links, footnotes, sections, formatti
 - Add a snapshot test whenever a new window or reader-mode rendering path is introduced.
 
 ### Dependencies
-- `ratatui` 0.30.0-beta.0: Terminal UI framework
+- `ratatui` 0.30.2: Terminal UI framework
+- `ratatui-image` 11 (no default features — avoids the chafa C dependency): In-terminal image rendering
+- `image` 0.25: Image decoding for the in-terminal viewer
 - `crossterm` 0.29.0: Cross-platform terminal manipulation
 - `epub` 2.1.5: EPUB file parsing
 - `rusqlite` 0.37.0 (bundled): SQLite database
@@ -217,11 +220,15 @@ When debugging or fixing HTML parsing bugs (links, footnotes, sections, formatti
 - Images are preprocessed to include descriptive alt text (e.g., `[Image: filename.jpg]`).
 - Image placeholders are centered in the reader view.
 - Pressing `o` opens an image list for the current page.
-- Selecting an image extracts it to a temporary file.
-- The viewer attempts to open the image using:
+- `Enter` shows the selected image full-screen in the terminal via
+  `ratatui-image` (kitty / iTerm2 / sixel, halfblocks fallback); the terminal
+  is queried for its protocol lazily on first use (`src/ui/graphics.rs`).
+- `o` in the list (or in the viewer) opens the image externally instead:
+  it is extracted to a temporary file and handed to:
     1. The user-configured `default_viewer`.
     2. `feh` (if installed).
     3. The system default (`xdg-open`).
+- SVG images always use the external viewer (the `image` crate cannot decode them).
 - Relative paths for images are resolved against the content document path.
 
 ### Page Width Adjustment

@@ -1,0 +1,28 @@
+---
+source: src/ui/reader/snapshot_tests.rs
+expression: reader.terminal.backend()
+---
+"                         Accessible EPUB 3                           ~1m left 0%"
+"                                                                                "
+"                                                                                "
+"                            [[Image: First Edition]]                            "
+"                                                                                "
+"                ┌Images on Page (Enter view, o external viewer)┐                "
+"                │Line 1: 9781449328030_lrg.jpg                 │                "
+"                │                                              │                "
+"                │                                              │                "
+"                │                                              │                "
+"                │                                              │                "
+"                │                                              │                "
+"                │                                              │                "
+"                │                                              │                "
+"                │                                              │                "
+"                │                                              │                "
+"                │                                              │                "
+"                │                                              │                "
+"                └──────────────────────────────────────────────┘                "
+"                                                                                "
+"                                                                                "
+"                                                                                "
+"                                                                                "
+"                                                                                "

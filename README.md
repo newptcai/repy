@@ -180,6 +180,11 @@ Press `?` in the TUI to see the help window at any time (`Help (?)`).
 - `B` — Bookmarks (`a` to add, `d` to delete, `Enter` to jump)
 - `u` — Links on Page (`Enter` previews internal links; `Enter` again jumps)
 - `o` — Images on Page
+  - `Enter` shows the selected image in the terminal (kitty, iTerm2, or sixel
+    graphics when the terminal supports them, halfblocks otherwise);
+    `Esc`/`q` returns to the list
+  - `o` opens it with the external viewer instead (`default_viewer` setting,
+    then `feh`, then `xdg-open`); SVG images always use the external viewer
 - `i` — Metadata
 - `r` — Library (reading history merged with books found on disk)
   - `j`/`k` to select an entry

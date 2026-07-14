@@ -48,7 +48,7 @@ const HELP_TEXT: &[&str] = &[
     "   t                 Table Of Contents",
     "   B                 Bookmarks",
     "   u                 Links on Page (Enter previews internal links)",
-    "   o                 Images on Page",
+    "   o                 Images on Page (Enter shows in-terminal, o external)",
     "   i                 Metadata",
     "   r                 Library (history + scanned directories)",
     "   R                 Reading Statistics",
