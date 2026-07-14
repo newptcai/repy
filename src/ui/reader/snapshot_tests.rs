@@ -9,7 +9,11 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::backend::TestBackend;
 
 fn test_reader() -> Reader<TestBackend> {
-    let config = Config::with_settings(Settings::default(), CfgDefaultKeymaps::default()).unwrap();
+    test_reader_with_settings(Settings::default())
+}
+
+fn test_reader_with_settings(settings: Settings) -> Reader<TestBackend> {
+    let config = Config::with_settings(settings, CfgDefaultKeymaps::default()).unwrap();
     let mut reader = Reader::with_backend(config, TestBackend::new(80, 24), State::new_for_test())
         .expect("failed to construct test reader");
 
@@ -106,6 +110,27 @@ fn internal_link_preview() {
 
     press_char(&mut reader, 'u');
     press(&mut reader, KeyCode::Enter);
+    insta::assert_snapshot!(reader.terminal.backend());
+}
+
+#[test]
+fn inline_image_rendering() {
+    let mut settings = Settings::default();
+    settings.inline_images = crate::settings::InlineImages::Shown;
+    let mut reader = test_reader_with_settings(settings);
+    reader.graphics = crate::ui::graphics::Graphics::halfblocks_for_test();
+    // The cover image block starts at row 0, so it is fully visible on the
+    // initial page (the policy renders fully-visible blocks only).
+    // The run loop drives decoding; step it manually here.
+    reader.poll_inline_images();
+    while reader.inline_images_pending {
+        reader.poll_inline_images();
+    }
+    assert!(
+        reader.inline_image_protocols.values().any(|p| p.is_some()),
+        "the visible inline image should have decoded"
+    );
+    reader.draw().expect("failed to draw inline image");
     insta::assert_snapshot!(reader.terminal.backend());
 }
 
@@ -269,4 +294,30 @@ fn library_window_sorted_by_title() {
     insta::with_settings!({filters => library_snapshot_filters()}, {
         insta::assert_snapshot!(reader.terminal.backend());
     });
+}
+
+/// The shown-when-fully-visible policy: once the block scrolls partially
+/// off-screen the image must disappear, leaving only the reserved rows.
+#[test]
+fn inline_image_hidden_when_partially_visible() {
+    let mut settings = Settings::default();
+    settings.inline_images = crate::settings::InlineImages::Shown;
+    let mut reader = test_reader_with_settings(settings);
+    reader.graphics = crate::ui::graphics::Graphics::halfblocks_for_test();
+    reader.poll_inline_images();
+    while reader.inline_images_pending {
+        reader.poll_inline_images();
+    }
+    for _ in 0..4 {
+        press_char(&mut reader, 'j');
+    }
+    assert!(
+        reader.visible_inline_image_blocks().is_empty(),
+        "partially visible block must not be scheduled"
+    );
+    reader.draw().expect("failed to draw after scroll");
+    assert!(
+        !format!("{}", reader.terminal.backend()).contains('▄'),
+        "partially visible block must not render"
+    );
 }

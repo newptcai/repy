@@ -54,18 +54,27 @@ impl Board {
         }
     }
 
-    fn render_content(
+    /// The `[start, end)` line window the reader view draws for the current
+    /// state and viewport height, accounting for chapter clamping when
+    /// `seamless_between_chapters` is off. `(0, 0)` without a loaded book.
+    pub fn visible_window(
         &self,
-        frame: &mut Frame,
-        area: Rect,
+        state: &ApplicationState,
+        content_start_rows: Option<&[usize]>,
+        height: usize,
+    ) -> (usize, usize) {
+        match &self.text_structure {
+            Some(ts) => Self::visible_window_for(ts, state, content_start_rows, height),
+            None => (0, 0),
+        }
+    }
+
+    fn visible_window_for(
         text_structure: &TextStructure,
         state: &ApplicationState,
         content_start_rows: Option<&[usize]>,
-        theme: &Theme,
-    ) {
-        let height = area.height as usize;
-        let _width = area.width as usize;
-
+        height: usize,
+    ) -> (usize, usize) {
         let mut start_line = state.reading_state.row.saturating_sub(1);
         let mut chapter_end = text_structure.text_lines.len().saturating_sub(1);
         if let Some(content_start_rows) = content_start_rows {
@@ -102,6 +111,23 @@ impl Board {
         } else {
             end_line.min(chapter_end.saturating_add(1))
         };
+        (start_line, end_line)
+    }
+
+    fn render_content(
+        &self,
+        frame: &mut Frame,
+        area: Rect,
+        text_structure: &TextStructure,
+        state: &ApplicationState,
+        content_start_rows: Option<&[usize]>,
+        theme: &Theme,
+    ) {
+        let height = area.height as usize;
+        let _width = area.width as usize;
+
+        let (start_line, end_line) =
+            Self::visible_window_for(text_structure, state, content_start_rows, height);
 
         let selection_range: Option<((usize, usize), (usize, usize))> =
             match (state.ui_state.visual_anchor, state.ui_state.visual_cursor) {
@@ -637,6 +663,16 @@ impl Board {
         self.text_structure
             .as_ref()
             .and_then(|ts| ts.section_rows.get(id).copied())
+    }
+
+    /// Rows reserved for rendering the image whose placeholder is on `line`
+    /// (placeholder row included), when inline images are enabled.
+    pub fn image_block_rows(&self, line: usize) -> Option<usize> {
+        self.text_structure
+            .as_ref()?
+            .image_block_rows
+            .get(&line)
+            .copied()
     }
 
     pub fn image_src(&self, line: usize) -> Option<String> {

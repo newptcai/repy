@@ -185,6 +185,9 @@ Press `?` in the TUI to see the help window at any time (`Help (?)`).
     `Esc`/`q` returns to the list
   - `o` opens it with the external viewer instead (`default_viewer` setting,
     then `feh`, then `xdg-open`); SVG images always use the external viewer
+  - With `"inline_images": "shown"` (also toggleable in Settings), images
+    render directly in the reading flow: space is reserved under each
+    placeholder and the image appears once its block is fully on screen
 - `i` — Metadata
 - `r` — Library (reading history merged with books found on disk)
   - `j`/`k` to select an entry
@@ -312,7 +315,8 @@ Example `configuration.json`:
     "color_theme": "Default",
     "preferred_tts_engine": "purr",
     "tts_engine_args": [],
-    "library_directories": ["~/Calibre", "~/Books"]
+    "library_directories": ["~/Calibre", "~/Books"],
+    "inline_images": "placeholder"
   },
   "Keymap": {
     "scroll_up": "k",

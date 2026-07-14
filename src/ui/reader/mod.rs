@@ -737,6 +737,12 @@ pub struct Reader<B: Backend = CrosstermBackend<io::Stdout>> {
     graphics: Graphics,
     /// State of the full-screen in-terminal image viewer, if open.
     image_view: Option<ImageViewState>,
+    /// Decoded inline-image protocols keyed by resolved resource path.
+    /// `None` marks images that failed to decode, so they are not retried.
+    inline_image_protocols: HashMap<String, Option<StatefulProtocol>>,
+    /// True while a visible inline image still awaits decoding, so the run
+    /// loop wakes up soon to decode the next one.
+    inline_images_pending: bool,
     /// Decoded cover render protocols for library entries, keyed by book
     /// filepath. `None` marks entries whose cover could not be loaded, so
     /// they are not retried.
@@ -1164,6 +1170,8 @@ where
             cached_statistics: None,
             graphics: Graphics::disabled(),
             image_view: None,
+            inline_image_protocols: HashMap::new(),
+            inline_images_pending: false,
             library_covers: HashMap::new(),
             library_cover_pending: None,
         })
@@ -1172,6 +1180,23 @@ where
     /// Extract the current UI state into a single frame draw.
     fn draw(&mut self) -> eyre::Result<()> {
         let state = self.state.clone();
+        // Precompute inline-image placements while `self` is still free
+        // (the closure below holds disjoint field borrows).
+        let reader_visible = matches!(
+            self.state.borrow().ui_state.active_window,
+            WindowType::Reader | WindowType::Visual
+        );
+        let inline_blocks = if reader_visible {
+            self.visible_inline_image_blocks()
+        } else {
+            Vec::new()
+        };
+        let visible_start = {
+            let state_ref = self.state.borrow();
+            self.board
+                .visible_window(&state_ref, Some(&self.content_start_rows), self.page_size())
+                .0
+        };
         let library_cover = if self.state.borrow().ui_state.show_library {
             self.selected_library_path()
                 .and_then(|path| self.library_covers.get_mut(&path))
@@ -1179,16 +1204,27 @@ where
         } else {
             None
         };
+        let inline_protocols = &mut self.inline_image_protocols;
         let image_view = &mut self.image_view;
         self.terminal.draw(|f| {
             let state_ref = state.borrow();
-            Self::render_static(
+            let content_area = Self::render_static(
                 f,
                 &state_ref,
                 &self.board,
                 &self.content_start_rows,
                 library_cover,
             );
+            if !inline_blocks.is_empty() {
+                Self::render_inline_images(
+                    f,
+                    &state_ref.theme(),
+                    content_area,
+                    visible_start,
+                    &inline_blocks,
+                    inline_protocols,
+                );
+            }
             if state_ref.ui_state.active_window == WindowType::ImageView
                 && let Some(view) = image_view.as_mut()
             {
@@ -1694,6 +1730,7 @@ impl Reader {
 
             self.tts_poll_worker()?;
             self.poll_library_cover();
+            self.poll_inline_images();
 
             // Check for TTS paragraph completion → advance to next paragraph
             if self.state.borrow().ui_state.tts_active {
@@ -1712,8 +1749,10 @@ impl Reader {
             self.draw()?;
 
             // Poll with timeout so we can re-render when messages expire or for animation
-            let poll_timeout = if self.library_cover_pending.is_some() {
-                // Wake up soon so the debounced cover load fires.
+            let poll_timeout = if self.library_cover_pending.is_some() || self.inline_images_pending
+            {
+                // Wake up soon: a debounced cover load or the next inline
+                // image decode is due.
                 Duration::from_millis(50)
             } else {
                 let state = self.state.borrow();
@@ -3453,14 +3492,15 @@ where
         Ok(())
     }
 
-    /// Static render method that can be called from a closure
+    /// Static render method that can be called from a closure. Returns the
+    /// content area the reader text was drawn into, for overlays.
     fn render_static(
         frame: &mut Frame,
         state: &ApplicationState,
         board: &Board,
         content_start_rows: &[usize],
         library_cover: Option<&mut StatefulProtocol>,
-    ) {
+    ) -> Rect {
         let theme = state.theme();
 
         // Fill the terminal background for light/dark themes
@@ -3475,7 +3515,8 @@ where
         }
 
         // Main reader view
-        Self::render_reader_static(frame, state, board, content_start_rows, &theme);
+        let content_area =
+            Self::render_reader_static(frame, state, board, content_start_rows, &theme);
 
         // Render overlays/modals if active
         if state.ui_state.show_help {
@@ -3688,6 +3729,8 @@ where
                 frame.render_widget(Paragraph::new(text).style(bar_style), bar);
             }
         }
+
+        content_area
     }
 
     /// Keep only the entries selected by the active list filter, in
@@ -3842,7 +3885,7 @@ where
         board: &Board,
         content_start_rows: &[usize],
         theme: &Theme,
-    ) {
+    ) -> Rect {
         let frame_area = frame.area();
         let percent_text = if state.config.settings.show_progress_indicator {
             let total_lines = board.total_lines();
@@ -3975,6 +4018,7 @@ where
         }
 
         board.render(frame, content_area, state, Some(content_start_rows), theme);
+        content_area
     }
 
     fn build_header_line(title: &str, right_text: Option<&str>, width: u16) -> String {
@@ -5347,7 +5391,15 @@ where
 
     fn page_size(&self) -> usize {
         let show_top_bar = self.state.borrow().config.settings.show_top_bar;
-        Self::page_size_for(show_top_bar)
+        // Prefer the backend's size (also correct under TestBackend);
+        // fall back to querying the terminal directly.
+        match self.terminal.size() {
+            Ok(size) => {
+                let chrome: u16 = if show_top_bar { 1 + 2 + 2 } else { 2 };
+                size.height.saturating_sub(chrome) as usize
+            }
+            Err(_) => Self::page_size_for(show_top_bar),
+        }
     }
 
     /// Row cap for inline image blocks, or `None` when the setting keeps
@@ -6099,6 +6151,121 @@ where
         let mut epub = Epub::new(path);
         epub.initialize().ok()?;
         epub.get_cover().map(|(_mime, bytes)| bytes)
+    }
+
+    /// Inline-image blocks fully visible on the current page:
+    /// `(placeholder row, block rows, resolved resource path)`.
+    fn visible_inline_image_blocks(&self) -> Vec<(usize, usize, String)> {
+        if self.state.borrow().config.settings.inline_images != InlineImages::Shown {
+            return Vec::new();
+        }
+        let Some(ebook) = self.ebook.as_ref() else {
+            return Vec::new();
+        };
+        let (start, end) = {
+            let state = self.state.borrow();
+            self.board
+                .visible_window(&state, Some(&self.content_start_rows), self.page_size())
+        };
+        let mut blocks = Vec::new();
+        for row in start..end {
+            let Some(rows) = self.board.image_block_rows(row) else {
+                continue;
+            };
+            if row + rows > end {
+                // Only fully visible blocks render (clean on all backends).
+                continue;
+            }
+            let Some(src) = self.board.image_src(row) else {
+                continue;
+            };
+            let base = self
+                .content_index_for_row(row)
+                .and_then(|index| ebook.resource_path_for_content_index(index));
+            let resolved = Self::resolve_relative_href(&src, base.as_deref()).unwrap_or(src);
+            blocks.push((row, rows, resolved));
+        }
+        blocks
+    }
+
+    /// Decode at most one visible inline image per run-loop pass (so a page
+    /// full of images cannot freeze input); decoded protocols are cached by
+    /// resolved path and failures are never retried.
+    fn poll_inline_images(&mut self) {
+        self.inline_images_pending = false;
+        if !matches!(
+            self.state.borrow().ui_state.active_window,
+            WindowType::Reader | WindowType::Visual
+        ) {
+            return;
+        }
+        let mut todo: Vec<String> = self
+            .visible_inline_image_blocks()
+            .into_iter()
+            .map(|(_, _, path)| path)
+            .filter(|path| !self.inline_image_protocols.contains_key(path))
+            .collect();
+        todo.dedup();
+        let Some(path) = todo.first().cloned() else {
+            return;
+        };
+        let protocol = if self.graphics.is_available() {
+            self.ebook
+                .as_mut()
+                .and_then(|ebook| ebook.get_img_bytestr(&path).ok())
+                .and_then(|(_mime, bytes)| image::load_from_memory(&bytes).ok())
+                .and_then(|decoded| self.graphics.new_protocol(decoded))
+        } else {
+            None
+        };
+        if self.inline_image_protocols.len() >= 128 {
+            self.inline_image_protocols.clear();
+        }
+        self.inline_image_protocols.insert(path, protocol);
+        self.inline_images_pending = todo.len() > 1;
+    }
+
+    /// Render decoded inline images over their reserved blocks. The block is
+    /// blanked first so the placeholder text never peeks out around an image
+    /// narrower than the text column.
+    fn render_inline_images(
+        frame: &mut Frame,
+        theme: &Theme,
+        content_area: Rect,
+        visible_start: usize,
+        blocks: &[(usize, usize, String)],
+        protocols: &mut HashMap<String, Option<StatefulProtocol>>,
+    ) {
+        for (row, rows, key) in blocks {
+            let Some(Some(protocol)) = protocols.get_mut(key) else {
+                continue;
+            };
+            let offset = row.saturating_sub(visible_start) as u16;
+            let height = *rows as u16;
+            if offset + height > content_area.height {
+                continue;
+            }
+            let block_area = Rect {
+                x: content_area.x,
+                y: content_area.y + offset,
+                width: content_area.width,
+                height,
+            };
+            frame.render_widget(Clear, block_area);
+            frame.render_widget(Block::default().style(theme.base_style()), block_area);
+            let fitted = protocol.size_for(ratatui_image::Resize::Fit(None), block_area.as_size());
+            let image_area = Rect::new(
+                block_area.x + block_area.width.saturating_sub(fitted.width) / 2,
+                block_area.y + block_area.height.saturating_sub(fitted.height) / 2,
+                fitted.width.min(block_area.width),
+                fitted.height.min(block_area.height),
+            );
+            frame.render_stateful_widget(
+                ratatui_image::StatefulImage::default(),
+                image_area,
+                protocol,
+            );
+        }
     }
 
     /// Debounced cover loading for the library window: the selected entry's
@@ -8156,6 +8323,8 @@ mod tests {
             cached_statistics: None,
             graphics: crate::ui::graphics::Graphics::disabled(),
             image_view: None,
+            inline_image_protocols: HashMap::new(),
+            inline_images_pending: false,
             library_covers: HashMap::new(),
             library_cover_pending: None,
         }

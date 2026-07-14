@@ -223,6 +223,15 @@ When debugging or fixing HTML parsing bugs (links, footnotes, sections, formatti
 ### Image Handling
 - Images are preprocessed to include descriptive alt text (e.g., `[Image: filename.jpg]`).
 - Image placeholders are centered in the reader view.
+- With `"inline_images": "shown"` (settable in the Settings window; default
+  `"placeholder"`), images render inline in the reading flow: the parser
+  reserves aspect-corrected blank rows under each placeholder
+  (`TextStructure.image_block_rows`, capped at viewport−2) using pixel
+  dimensions prescanned per chapter, and the reader decodes visible images
+  one per run-loop pass (cached by resolved path) and renders them into
+  their blocks — only when the block is fully on screen. Toggling the
+  setting (or a viewport-height change while `shown`) re-parses all
+  chapters; width changes keep the single-chapter fast path.
 - Pressing `o` opens an image list for the current page.
 - `Enter` shows the selected image full-screen in the terminal via
   `ratatui-image` (kitty / iTerm2 / sixel, halfblocks fallback); the terminal
