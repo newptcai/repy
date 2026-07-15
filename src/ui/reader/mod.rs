@@ -272,6 +272,9 @@ pub struct UiState {
     pub library_items: Vec<LibraryEntry>,
     pub library_selected_index: usize,
     pub library_sort_mode: LibrarySortMode,
+    /// Whether the selected book's cover is shown in the Library window.
+    /// Covers are opt-in because decoding them can make navigation sluggish.
+    pub library_cover_visible: bool,
     /// True while a background library scan is running.
     pub library_scanning: bool,
     pub metadata: Option<BookMetadata>,
@@ -380,6 +383,7 @@ impl UiState {
             library_items: Vec::new(),
             library_selected_index: 0,
             library_sort_mode: LibrarySortMode::default(),
+            library_cover_visible: false,
             library_scanning: false,
             metadata: None,
             statistics: ReadingStatistics::default(),
@@ -752,6 +756,10 @@ pub struct Reader<B: Backend = CrosstermBackend<io::Stdout>> {
     /// first seen. Loading is debounced so held-down scrolling through the
     /// list stays responsive.
     library_cover_pending: Option<(String, Instant)>,
+    /// Requests one extra frame after a newly created cover protocol is first
+    /// rendered. Some terminal graphics protocols do not become visible until
+    /// the following draw.
+    library_cover_redraw_pending: bool,
 }
 
 /// Full-screen in-terminal image viewer state (`WindowType::ImageView`).
@@ -1175,6 +1183,7 @@ where
             inline_images_pending: false,
             library_covers: HashMap::new(),
             library_cover_pending: None,
+            library_cover_redraw_pending: false,
         })
     }
 
@@ -1198,7 +1207,9 @@ where
                 .visible_window(&state_ref, Some(&self.content_start_rows), self.page_size())
                 .0
         };
-        let library_cover = if self.state.borrow().ui_state.show_library {
+        let library_cover = if self.state.borrow().ui_state.show_library
+            && self.state.borrow().ui_state.library_cover_visible
+        {
             self.selected_library_path()
                 .and_then(|path| self.library_covers.get_mut(&path))
                 .and_then(|cover| cover.as_mut())
@@ -1759,7 +1770,9 @@ impl Reader {
             self.draw()?;
 
             // Poll with timeout so we can re-render when messages expire or for animation
-            let poll_timeout = if self.library_cover_pending.is_some() || self.inline_images_pending
+            let poll_timeout = if self.library_cover_pending.is_some()
+                || self.library_cover_redraw_pending
+                || self.inline_images_pending
             {
                 // Wake up soon: a debounced cover load or the next inline
                 // image decode is due.
@@ -3123,6 +3136,14 @@ where
                     }
                     self.rebuild_library_entries()?;
                     self.reset_list_filter_after_change();
+                }
+                KeyCode::Char('c') => {
+                    let mut state = self.state.borrow_mut();
+                    state.ui_state.library_cover_visible = !state.ui_state.library_cover_visible;
+                    if !state.ui_state.library_cover_visible {
+                        self.library_cover_pending = None;
+                        self.library_cover_redraw_pending = false;
+                    }
                 }
                 KeyCode::Enter => {
                     self.open_selected_library_item()?;
@@ -4578,6 +4599,7 @@ where
         self.spawn_library_scan();
         let mut state = self.state.borrow_mut();
         state.ui_state.library_selected_index = 0;
+        state.ui_state.library_cover_visible = false;
         state.ui_state.open_window(WindowType::Library);
         Ok(())
     }
@@ -6360,7 +6382,12 @@ where
     /// [`LIBRARY_COVER_DEBOUNCE`], so held-down scrolling stays responsive.
     /// Results (including failures) are cached per filepath.
     fn poll_library_cover(&mut self) {
-        if !self.state.borrow().ui_state.show_library {
+        // A newly created terminal-image protocol gets one follow-up frame.
+        // Clear the request here so the next draw is the final extra frame.
+        self.library_cover_redraw_pending = false;
+        if !self.state.borrow().ui_state.show_library
+            || !self.state.borrow().ui_state.library_cover_visible
+        {
             self.library_cover_pending = None;
             return;
         }
@@ -6388,6 +6415,7 @@ where
                         self.library_covers.clear();
                     }
                     self.library_covers.insert(path, protocol);
+                    self.library_cover_redraw_pending = true;
                 }
             }
             _ => self.library_cover_pending = Some((path, Instant::now())),
@@ -8412,6 +8440,7 @@ mod tests {
             inline_images_pending: false,
             library_covers: HashMap::new(),
             library_cover_pending: None,
+            library_cover_redraw_pending: false,
         }
     }
 

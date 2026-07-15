@@ -56,6 +56,7 @@ const HELP_TEXT: &[&str] = &[
     "   /                 Fuzzy-filter list windows (Esc clears, Enter picks)",
     " Library Window:",
     "   Enter             Open book",
+    "   c                 Toggle selected book cover",
     "   d                 Remove from history",
     "   s                 Cycle sort (recent/title/author/progress)",
     " Text-to-Speech:",

@@ -1,13 +1,12 @@
 ---
 source: src/ui/reader/snapshot_tests.rs
-assertion_line: 225
 expression: reader.terminal.backend()
 ---
 "                         Accessible EPUB 3                           ~1m left 0%"
 "                                                                                "
 "                                                                                "
 "             ┌Library — by title─────────────────────────────────┐              "
-"             │HINT: Enter: open  d: delete  s: sort  /: filter   │              "
+"             │HINT: Enter open  c cover  d delete  s sort  / filt│              "
 "             │                                                   │              "
 "             │ new         unread: A Scanned Book - Some Author (│              "
 "             │  0% [time]: Accessible EPUB 3 - Matt Garri│              "

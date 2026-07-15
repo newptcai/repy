@@ -260,6 +260,12 @@ fn library_cover_panel() {
     let mut reader = test_reader();
     reader.graphics = crate::ui::graphics::Graphics::halfblocks_for_test();
     press_char(&mut reader, 'r');
+    reader.poll_library_cover();
+    assert!(
+        reader.library_cover_pending.is_none(),
+        "cover loading should remain idle until explicitly enabled"
+    );
+    press_char(&mut reader, 'c');
     // The run loop drives the debounced cover load; step it manually here.
     reader.poll_library_cover();
     std::thread::sleep(super::LIBRARY_COVER_DEBOUNCE);
@@ -269,6 +275,10 @@ fn library_cover_panel() {
             .selected_library_path()
             .is_some_and(|p| matches!(reader.library_covers.get(&p), Some(Some(_)))),
         "cover protocol should be cached for the selected book"
+    );
+    assert!(
+        reader.library_cover_redraw_pending,
+        "a newly decoded cover should schedule a follow-up frame"
     );
     reader.draw().expect("failed to draw with cover panel");
     insta::with_settings!({filters => library_snapshot_filters()}, {

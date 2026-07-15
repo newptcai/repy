@@ -88,7 +88,7 @@ impl LibraryWindow {
             height: 1,
         };
 
-        let hint = Paragraph::new("HINT: Enter: open  d: delete  s: sort  /: filter")
+        let hint = Paragraph::new("HINT: Enter open  c cover  d delete  s sort  / filter")
             .style(Style::default().fg(theme.warning_fg));
         frame.render_widget(hint, hint_area);
 
