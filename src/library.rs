@@ -49,9 +49,20 @@ pub fn scan_library_directories(dirs: &[String], state: &State) -> Result<Vec<Sc
             if !entry.file_type().is_file() {
                 continue;
             }
-            let is_book = entry.path().extension().is_some_and(|ext| {
-                ext.eq_ignore_ascii_case("epub") || ext.eq_ignore_ascii_case("cbz")
+            let is_fb2_zip = entry.path().file_name().is_some_and(|name| {
+                name.to_string_lossy()
+                    .to_ascii_lowercase()
+                    .ends_with(".fb2.zip")
             });
+            let is_book = is_fb2_zip
+                || entry.path().extension().is_some_and(|ext| {
+                    ext.eq_ignore_ascii_case("epub")
+                        || ext.eq_ignore_ascii_case("cbz")
+                        || ext.eq_ignore_ascii_case("fb2")
+                        || ext.eq_ignore_ascii_case("mobi")
+                        || ext.eq_ignore_ascii_case("azw")
+                        || ext.eq_ignore_ascii_case("azw3")
+                });
             if !is_book {
                 continue;
             }

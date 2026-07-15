@@ -7,10 +7,14 @@
 
 pub mod cbz;
 pub mod epub;
+pub mod fb2;
+pub mod mobi;
 pub mod text;
 
 pub use cbz::Cbz;
 pub use epub::Epub;
+pub use fb2::Fb2;
+pub use mobi::MobiBook;
 pub use text::{TextBook, TextKind};
 
 use crate::css::StyledClasses;
@@ -93,6 +97,9 @@ pub fn open(path: &str) -> Result<Box<dyn Ebook>> {
         "txt" | "text" => Box::new(TextBook::new(path, TextKind::Plain)),
         "md" | "markdown" => Box::new(TextBook::new(path, TextKind::Markdown)),
         "cbz" => Box::new(Cbz::new(path)),
+        "fb2" => Box::new(Fb2::new(path)),
+        "zip" if path.to_ascii_lowercase().ends_with(".fb2.zip") => Box::new(Fb2::new(path)),
+        "mobi" | "azw" | "azw3" => Box::new(MobiBook::new(path)),
         _ if has_zip_magic(path) => Box::new(Epub::new(path)),
         _ => eyre::bail!("Unsupported ebook format: {}", path),
     };
@@ -138,6 +145,20 @@ pub fn resolve_relative_resource(href: &str, base_content: Option<&str>) -> Opti
         }
     }
     Some(normalized.to_string_lossy().to_string())
+}
+
+pub(crate) fn escape_html(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for ch in text.chars() {
+        match ch {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            _ => out.push(ch),
+        }
+    }
+    out
 }
 
 pub(crate) fn mime_from_extension(path: &str) -> String {

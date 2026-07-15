@@ -3,7 +3,7 @@
 //! Non-HTML payloads are converted to minimal HTML first so every format
 //! flows through the same wrapping, styling, and image machinery.
 
-use crate::formats::{ChapterContent, Ebook, resolve_relative_resource};
+use crate::formats::{ChapterContent, Ebook, escape_html, resolve_relative_resource};
 use crate::models::{CHAPTER_BREAK_MARKER, TextStructure};
 use crate::parser::{InlineImageOptions, parse_html_with_styles};
 use eyre::Result;
@@ -113,20 +113,6 @@ fn markdown_to_html(text: &str) -> String {
     let mut html_out = String::with_capacity(text.len() * 2);
     html::push_html(&mut html_out, parser);
     html_out
-}
-
-fn escape_html(text: &str) -> String {
-    let mut out = String::with_capacity(text.len());
-    for ch in text.chars() {
-        match ch {
-            '&' => out.push_str("&amp;"),
-            '<' => out.push_str("&lt;"),
-            '>' => out.push_str("&gt;"),
-            '"' => out.push_str("&quot;"),
-            _ => out.push(ch),
-        }
-    }
-    out
 }
 
 /// Pixel dimensions (header-only decode) for every `<img src>` in a chapter,

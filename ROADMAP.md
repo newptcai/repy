@@ -38,15 +38,15 @@ Crates: `ratatui-image` (kitty graphics / iTerm2 / sixel / halfblocks fallback, 
 1. **Full-screen image viewer + library covers first** (M) — ✅ done (2026-07): `Enter` in the images list renders the image full-screen via `ratatui-image` 11 (kitty/iTerm2/sixel/halfblocks; lazy `Picker::from_query_stdio()` in new `src/ui/graphics.rs`), centered with `size_for`; `o` (list or viewer) and SVG fall back to the external viewer; ratatui bumped to 0.30.2 stable. Library window shows the selected book's cover in a side panel (debounced load in the run loop, per-path cache, Calibre `cover.jpg` fast path).
 2. **Inline images in reading flow** (L) — ✅ done (2026-07): parser reserves aspect-corrected blank rows per image (capped viewport−2) via per-chapter pixel-dimension prescan; `image_maps` keying unchanged, new `image_block_rows`; reader decodes one visible image per run-loop pass (cached by resolved path) and renders into the block only when fully visible. Setting `inline_images: placeholder | shown` (default placeholder) toggles in the Settings window and re-parses all chapters. `off`/`always` policy variants remain possible follow-ups.
 
-## Phase 4 — Multi-format support
+## Phase 4 — Multi-format support — ✅ complete (2026-07)
 
 **4.0 Refactor `Ebook` trait first** (M) — ✅ done (2026-07): trait slimmed to format access (metadata/toc/`get_chapter(index) -> ChapterContent`/`get_resource`/`get_cover`/`content_index_for_href`/`styled_classes`); new `enum ChapterContent { Html, PlainText, Markdown, ImagePage }`; parse orchestration moved to `src/renderer.rs` (`parse_chapter`/`parse_book`, chapter breaks, image-dimension prescan); factory `open(path)` by extension + zip-magic fallback in `src/formats/mod.rs`; `Epub` moved to `src/formats/epub.rs`; reader holds `Box<dyn Ebook>`. `spine_href` kept as the stable chapter ID (content fingerprints unchanged, so book identity is preserved).
 
 Priority order:
 
 1. **Plain text + Markdown** (S) — ✅ done (2026-07): new `src/formats/text.rs` backend (one chapter per file; title from first `# heading` for md, file stem otherwise; Markdown image links resolve against the file's directory). Markdown renders via `pulldown-cmark` (tables/footnotes/strikethrough/tasklists) → HTML → existing pipeline; plain text becomes escaped `<p>` paragraphs split on blank lines. Wired into `formats::open` for `.txt`/`.text`/`.md`/`.markdown`.
-2. **FB2** (M) — `quick-xml` walk emitting HTML-ish chapters; base64 inline images through `get_resource`.
-3. **MOBI6** (M-L) — crate `mobi`; AZW3/KF8 documented as best-effort.
+2. **FB2** (M) — ✅ done (2026-07): `quick-xml` walk emits top-level sections as HTML chapters, extracts metadata/TOC, supports legacy XML encodings and `.fb2.zip`, and serves base64 inline images and covers through `get_resource`.
+3. **MOBI6** (M-L) — ✅ done (2026-07): `mobi` crate backend exposes metadata and HTML content through the shared renderer, maps MOBI `recindex` images to resources, and extracts covers when declared; AZW/AZW3 are documented as best-effort because KF8-only content is outside the crate's MOBI6 support.
 4. **CBZ** (M) — ✅ done (2026-07): new `src/formats/cbz.rs` (`zip` crate, deflate only); natural-sorted image entries become one `ImagePage` chapter each, rendered as book-root-relative `<img>` through the existing inline-image pipeline (`inline_images: shown` + graphics terminal to actually see pages); `ComicInfo.xml` supplies title (`Series #Number`) and writer; first page doubles as the cover; `.cbz` included in library scans. CBR skipped (unrar licensing).
 5. **PDF — explicitly out of scope** (reflow is a research problem; document "convert with Calibre").
 

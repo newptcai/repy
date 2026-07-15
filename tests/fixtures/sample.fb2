@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<FictionBook xmlns="http://www.gribuser.ru/xml/fictionbook/2.0" xmlns:l="http://www.w3.org/1999/xlink">
+  <description>
+    <title-info>
+      <genre>prose</genre>
+      <author>
+        <first-name>Alexei</first-name>
+        <last-name>Testov</last-name>
+      </author>
+      <book-title>The Test Book</book-title>
+      <annotation>
+        <p>A tiny FictionBook fixture for repy tests.</p>
+      </annotation>
+      <date>2026</date>
+      <coverpage>
+        <image l:href="#pic1"/>
+      </coverpage>
+      <lang>en</lang>
+    </title-info>
+    <document-info>
+      <id>fb2-sample-0001</id>
+    </document-info>
+    <publish-info>
+      <publisher>Sample House</publisher>
+    </publish-info>
+  </description>
+  <body>
+    <title><p>The Test Book</p></title>
+    <section>
+      <title><p>Chapter One</p></title>
+      <p>Plain text with <emphasis>emphasised</emphasis> and <strong>strong</strong> words, plus an ampersand &amp; entity.</p>
+      <empty-line/>
+      <p>Second paragraph before an image.</p>
+      <image l:href="#pic1"/>
+      <poem>
+        <stanza>
+          <v>A verse line</v>
+          <v>And another verse line</v>
+        </stanza>
+        <text-author>Anonymous</text-author>
+      </poem>
+    </section>
+    <section>
+      <title><p>Chapter Two</p></title>
+      <epigraph>
+        <p>An epigraph quotation.</p>
+      </epigraph>
+      <p>The second chapter refers to a note<a l:href="#note1" type="note">[1]</a>.</p>
+      <cite>
+        <p>A cited passage.</p>
+      </cite>
+    </section>
+  </body>
+  <body name="notes">
+    <section id="note1">
+      <title><p>1</p></title>
+      <p>The text of the first footnote.</p>
+    </section>
+  </body>
+  <binary id="pic1" content-type="image/png">iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNgYGBgAAAABQAB
+h6FO1AAAAABJRU5ErkJggg==</binary>
+</FictionBook>
