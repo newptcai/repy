@@ -16,6 +16,11 @@ pub struct Board {
     /// Cumulative word counts: `word_prefix_sums[i]` is the number of words
     /// in `text_lines[..i]`, so range word counts are O(1) lookups.
     word_prefix_sums: Vec<usize>,
+    /// Cumulative character counts: `char_prefix_sums[i]` is the number of
+    /// characters in `text_lines[..i]` (chapter-break markers excluded). This
+    /// is a width-independent measure of reading progress, used for KOReader
+    /// sync percentages.
+    char_prefix_sums: Vec<usize>,
 }
 
 impl Board {
@@ -23,12 +28,13 @@ impl Board {
         Self {
             text_structure: None,
             word_prefix_sums: Vec::new(),
+            char_prefix_sums: Vec::new(),
         }
     }
 
     pub fn with_text_structure(mut self, text_structure: TextStructure) -> Self {
         self.text_structure = Some(text_structure);
-        self.rebuild_word_prefix_sums();
+        self.rebuild_prefix_sums();
         self
     }
 
@@ -762,28 +768,34 @@ impl Board {
 
     pub fn update_text_structure(&mut self, text_structure: TextStructure) {
         self.text_structure = Some(text_structure);
-        self.rebuild_word_prefix_sums();
+        self.rebuild_prefix_sums();
     }
 
-    fn rebuild_word_prefix_sums(&mut self) {
+    fn rebuild_prefix_sums(&mut self) {
         let lines = self
             .text_structure
             .as_ref()
             .map(|ts| ts.text_lines.as_slice())
             .unwrap_or(&[]);
-        let mut sums = Vec::with_capacity(lines.len() + 1);
-        let mut total = 0usize;
-        sums.push(0);
+        let mut word_sums = Vec::with_capacity(lines.len() + 1);
+        let mut char_sums = Vec::with_capacity(lines.len() + 1);
+        let mut word_total = 0usize;
+        let mut char_total = 0usize;
+        word_sums.push(0);
+        char_sums.push(0);
         for line in lines {
             if line.as_str() != CHAPTER_BREAK_MARKER {
-                total += line
+                word_total += line
                     .split_whitespace()
                     .filter(|word| word.chars().any(|ch| ch.is_alphanumeric()))
                     .count();
+                char_total += line.chars().count();
             }
-            sums.push(total);
+            word_sums.push(word_total);
+            char_sums.push(char_total);
         }
-        self.word_prefix_sums = sums;
+        self.word_prefix_sums = word_sums;
+        self.char_prefix_sums = char_sums;
     }
 
     /// Number of words in `text_lines[start_row..end_row]`, excluding chapter
@@ -794,6 +806,38 @@ impl Board {
             return 0;
         }
         self.word_prefix_sums[end] - self.word_prefix_sums[start_row]
+    }
+
+    /// Fraction of the book's characters that precede `row` — a
+    /// width-independent reading-progress measure in `[0.0, 1.0]`. Matches how
+    /// KOReader derives an EPUB's content-proportional percentage, so it can be
+    /// exchanged over kosync. Returns `0.0` for an empty book.
+    pub fn content_fraction(&self, row: usize) -> f64 {
+        let total = self.char_prefix_sums.last().copied().unwrap_or(0);
+        if total == 0 {
+            return 0.0;
+        }
+        let idx = row.min(self.char_prefix_sums.len().saturating_sub(1));
+        self.char_prefix_sums[idx] as f64 / total as f64
+    }
+
+    /// Inverse of [`content_fraction`](Self::content_fraction): the row that
+    /// begins at (or contains) the character at `fraction` through the book.
+    /// Clamped to a valid row index; returns `0` for an empty book.
+    pub fn row_for_fraction(&self, fraction: f64) -> usize {
+        let total_lines = self.total_lines();
+        if total_lines == 0 {
+            return 0;
+        }
+        let total = self.char_prefix_sums.last().copied().unwrap_or(0);
+        if total == 0 {
+            return 0;
+        }
+        let target = (fraction.clamp(0.0, 1.0) * total as f64).round() as usize;
+        // `char_prefix_sums[k + 1]` is the cumulative char count through row
+        // `k`; the first row whose cumulative reaches `target` contains it.
+        let row = self.char_prefix_sums[1..].partition_point(|&cum| cum <= target);
+        row.min(total_lines - 1)
     }
 }
 
@@ -1114,5 +1158,86 @@ mod tests {
             cursor_spans[3].style.bg,
             Some(theme.annotation_highlight_bg)
         );
+    }
+
+    fn board_from_lines(lines: &[&str]) -> Board {
+        let text_structure = TextStructure {
+            text_lines: lines.iter().map(|s| s.to_string()).collect(),
+            image_maps: HashMap::new(),
+            section_rows: HashMap::new(),
+            formatting: vec![],
+            links: vec![],
+            pagebreak_map: HashMap::new(),
+            image_block_rows: HashMap::new(),
+        };
+        Board::new().with_text_structure(text_structure)
+    }
+
+    #[test]
+    fn test_content_fraction_endpoints_and_monotonic() {
+        let board = board_from_lines(&["alpha", "bravo", "charlie", "delta"]);
+        assert_eq!(board.content_fraction(0), 0.0);
+        // The last row starts after everything before it; still < 1.0 because
+        // the final line's own characters are not yet "behind" the reader.
+        let last = board.content_fraction(board.total_lines() - 1);
+        assert!(last > 0.0 && last < 1.0);
+        // Non-decreasing across rows.
+        let mut previous = 0.0;
+        for row in 0..board.total_lines() {
+            let fraction = board.content_fraction(row);
+            assert!(fraction >= previous, "fraction decreased at row {row}");
+            previous = fraction;
+        }
+        // A row past the end clamps to the full-book total (all chars behind).
+        assert_eq!(board.content_fraction(board.total_lines()), 1.0);
+    }
+
+    #[test]
+    fn test_content_fraction_skips_markers_and_blanks() {
+        // Chapter-break markers and blank padding rows contribute no
+        // characters, so the fraction is unchanged across them.
+        let board = board_from_lines(&["alpha", CHAPTER_BREAK_MARKER, "", "bravo"]);
+        assert_eq!(board.content_fraction(1), board.content_fraction(2));
+        assert_eq!(board.content_fraction(2), board.content_fraction(3));
+        // "alpha" (5) precedes row 3; "bravo" (5) is the remaining half.
+        assert!((board.content_fraction(3) - 0.5).abs() < 1e-9);
+    }
+
+    #[test]
+    fn test_row_for_fraction_round_trips() {
+        let board = board_from_lines(&["alpha", "bravo", "charlie", "delta", "echo"]);
+        for row in 0..board.total_lines() {
+            let fraction = board.content_fraction(row);
+            assert_eq!(
+                board.row_for_fraction(fraction),
+                row,
+                "round trip failed at row {row}"
+            );
+        }
+        assert_eq!(board.row_for_fraction(0.0), 0);
+        assert_eq!(board.row_for_fraction(1.0), board.total_lines() - 1);
+    }
+
+    #[test]
+    fn test_content_fraction_width_independent() {
+        // Re-wrapping the same text into different rows preserves the fraction
+        // at a shared content boundary, because the measure counts characters
+        // rather than rows. (Space-free tokens here isolate the invariant; real
+        // wrapping additionally drops one space per break, a bounded skew.)
+        let narrow = board_from_lines(&["alpha", "bravo", "charlie", "delta"]);
+        let wide = board_from_lines(&["alphabravo", "charliedelta"]);
+        assert_eq!(
+            *narrow.char_prefix_sums.last().unwrap(),
+            *wide.char_prefix_sums.last().unwrap()
+        );
+        // Boundary before "charlie" is 10/22 of the book in both layouts.
+        assert!((narrow.content_fraction(2) - wide.content_fraction(1)).abs() < 1e-9);
+    }
+
+    #[test]
+    fn test_content_fraction_empty_book() {
+        let board = Board::new();
+        assert_eq!(board.content_fraction(0), 0.0);
+        assert_eq!(board.row_for_fraction(0.5), 0);
     }
 }

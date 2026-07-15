@@ -392,3 +392,17 @@ fn inline_image_hidden_when_partially_visible() {
         "partially visible block must not render"
     );
 }
+
+#[test]
+fn confirm_sync_progress_prompt() {
+    let mut reader = test_reader();
+    {
+        let mut state = reader.state.borrow_mut();
+        state.ui_state.pending_sync_progress = Some((0.42, "KOReader (kobo)".to_string()));
+        state
+            .ui_state
+            .open_window(crate::models::WindowType::ConfirmSyncProgress);
+    }
+    reader.draw().expect("failed to draw sync prompt");
+    insta::assert_snapshot!(reader.terminal.backend());
+}

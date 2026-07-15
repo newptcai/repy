@@ -52,7 +52,7 @@ Priority order:
 
 ## Phase 5 — Sync and ecosystem
 
-1. **KOReader sync (kosync) client** (M) — experimental implementation preserved on a feature branch: authentication, KOReader partial-MD5 document IDs, background pull, percentage prompt, settings UI, and push plumbing are implemented. **Known blocker:** KOReader EPUB pushes require a CREngine XPointer in `progress`; a wrapped `repy` row/percentage cannot supply one, and the current percentage string makes KOReader jump to the beginning. Treat the implementation as pull-only research until row-to-DOM-to-XPointer mapping exists.
+1. **KOReader sync (kosync) client** (M) — shipped **pull-only**: authentication, KOReader partial-MD5 document IDs, background pull, a confirm-jump prompt, and the settings UI. Position is exchanged as a width-independent **content (character) fraction** (`Board::content_fraction`/`row_for_fraction`), which matches KOReader's content-proportional EPUB percentage so a pulled position lands accurately. **Deferred:** KOReader-compatible push needs a CREngine XPointer in `progress` that a wrapped `repy` row cannot supply (it would require reproducing crengine's DOM normalization); until then `repy` never pushes, so it can't corrupt a KOReader bookmark.
 2. **Calibre library read** (S-M) — detect `metadata.db` in library paths, read books/authors/series/tags via bundled `rusqlite` (read-only + immutable flag). Never write.
 3. **OPDS catalog browsing** (M, optional) — Atom via `quick-xml`, download + open; parity with Thorium.
 

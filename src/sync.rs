@@ -3,7 +3,7 @@
 use eyre::{Result, WrapErr, eyre};
 use md5::{Digest, Md5};
 use reqwest::blocking::Client;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
@@ -48,15 +48,6 @@ pub struct RemoteProgress {
     pub device_id: String,
     #[serde(default)]
     pub timestamp: i64,
-}
-
-#[derive(Serialize)]
-struct ProgressUpdate<'a> {
-    document: &'a str,
-    progress: String,
-    percentage: f64,
-    device: &'a str,
-    device_id: &'a str,
 }
 
 pub fn password_key(password: &str) -> String {
@@ -124,52 +115,6 @@ pub fn pull(config: &KosyncConfig, document: &str) -> Result<Option<RemoteProgre
             .json()
             .wrap_err("invalid kosync progress response")?,
     ))
-}
-
-pub fn push(
-    config: &KosyncConfig,
-    document: &str,
-    percentage: f64,
-    device: &str,
-    device_id: &str,
-) -> Result<()> {
-    let client = client()?;
-    let url = format!("{}/syncs/progress", config.server);
-    // repy has no KOReader XPointer. The percentage string is deliberately
-    // portable and repy consumers use `percentage`; KOReader retains the
-    // numeric percentage alongside this opaque position value.
-    let body = ProgressUpdate {
-        document,
-        progress: format!("{:.8}", percentage.clamp(0.0, 1.0)),
-        percentage: percentage.clamp(0.0, 1.0),
-        device,
-        device_id,
-    };
-    let response = request(&client, config, reqwest::Method::PUT, url)
-        .json(&body)
-        .send()?;
-    if !response.status().is_success() {
-        return Err(eyre!("kosync push failed: HTTP {}", response.status()));
-    }
-    Ok(())
-}
-
-/// Push only when doing so cannot move the shared percentage backward.
-/// Returns `false` when a farther-ahead remote record was preserved.
-pub fn push_forward_only(
-    config: &KosyncConfig,
-    document: &str,
-    percentage: f64,
-    device: &str,
-    device_id: &str,
-) -> Result<bool> {
-    if let Some(remote) = pull(config, document)?
-        && remote.percentage > percentage + 0.000_001
-    {
-        return Ok(false);
-    }
-    push(config, document, percentage, device, device_id)?;
-    Ok(true)
 }
 
 #[cfg(test)]

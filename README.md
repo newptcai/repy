@@ -346,26 +346,28 @@ on next restart.
 
 ### KOReader progress sync
 
-> **Experimental limitation:** pulling a KOReader EPUB position into `repy`
-> works approximately by percentage, but pushing from `repy` is not compatible
-> with KOReader EPUB navigation. KOReader requires a CREngine XPointer in the
-> `progress` field; `repy` currently sends a percentage string, which can make
-> KOReader jump to the beginning. Do not enable or manually push sync progress
-> from this experimental implementation until row-to-XPointer mapping exists.
+> **Pull-only.** `repy` follows the reading position saved by KOReader but never
+> writes its own back to the server. KOReader repositions EPUBs from a CREngine
+> XPointer that `repy` cannot generate, so pushing would only overwrite
+> KOReader's bookmark and send a KOReader user to the start of the book. `repy`
+> therefore reads progress and leaves the server record untouched.
 
-`repy` can pull the reading percentage of an identical ebook file from
-KOReader's progress-sync service. Register the account in KOReader. The server
-defaults to the official public service at
-`https://sync.koreader.rocks`, so normally you only need to set
-`kosync_username` and `kosync_password`. The password is stored as plaintext in `configuration.json`; on Unix, `repy`
-restricts that file to the current user (`0600`). `repy` derives the MD5 kosync
-authentication key in memory. It pulls progress on open, prompts before jumping
-forward, and pushes progress asynchronously while reading and when switching
-books. On quit, a sync popup waits for success for at most five seconds; Esc
-skips the wait. The Settings window also provides **Pull KOReader progress
-now** and **Push KOReader progress now** actions for manual synchronization.
-The sync service receives only the KOReader document fingerprint, percentage,
-device label, and timestamp—not the ebook, filename, highlights, or notes.
+`repy` can pull the reading position of an identical ebook file from KOReader's
+progress-sync service. Register the account in KOReader. The server defaults to
+the official public service at `https://sync.koreader.rocks`, so normally you
+only need to set `kosync_username` and `kosync_password`. The password is stored
+as plaintext in `configuration.json`; on Unix, `repy` restricts that file to the
+current user (`0600`). `repy` derives the MD5 kosync authentication key in
+memory.
+
+The position is exchanged as a **content percentage** — the fraction of the
+book's characters before your current line. This is width-independent and lines
+up with KOReader's own content-proportional percentage, so a pulled position
+lands at the matching spot rather than drifting. `repy` pulls on open and
+prompts before jumping when KOReader is further ahead; the Settings window also
+offers a **Pull KOReader progress now** action. The sync service receives only
+the KOReader document fingerprint, percentage, device label, and timestamp — not
+the ebook, filename, highlights, or notes.
 
 KOReader identifies a document using sampled bytes from the file. Both devices
 must therefore use the same unmodified ebook file; reconversion or metadata

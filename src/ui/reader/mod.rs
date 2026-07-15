@@ -599,7 +599,6 @@ enum SettingItem {
     ShowTopBar,
     ColorTheme,
     KosyncPullNow,
-    KosyncPushNow,
     KosyncServer,
     KosyncUsername,
     KosyncPassword,
@@ -620,7 +619,6 @@ impl SettingItem {
             SettingItem::ShowTopBar,
             SettingItem::ColorTheme,
             SettingItem::KosyncPullNow,
-            SettingItem::KosyncPushNow,
             SettingItem::KosyncServer,
             SettingItem::KosyncUsername,
             SettingItem::KosyncPassword,
@@ -775,12 +773,7 @@ pub struct Reader<B: Backend = CrosstermBackend<io::Stdout>> {
     library_cover_pending: Option<(String, Instant)>,
     kosync_pull_rx:
         Option<std::sync::mpsc::Receiver<(String, eyre::Result<Option<RemoteProgress>>)>>,
-    kosync_pushes: Vec<std::thread::JoinHandle<()>>,
-    /// Row most recently handed to a kosync worker. Progress is pushed while
-    /// reading so quit never has to wait for a slow server.
-    kosync_last_queued_row: Option<usize>,
     kosync_pull_is_manual: bool,
-    kosync_manual_push_rx: Option<std::sync::mpsc::Receiver<eyre::Result<()>>>,
 }
 
 /// Full-screen in-terminal image viewer state (`WindowType::ImageView`).
@@ -1205,10 +1198,7 @@ where
             library_covers: HashMap::new(),
             library_cover_pending: None,
             kosync_pull_rx: None,
-            kosync_pushes: Vec::new(),
-            kosync_last_queued_row: None,
             kosync_pull_is_manual: false,
-            kosync_manual_push_rx: None,
         })
     }
 
@@ -1312,7 +1302,6 @@ where
         // Save the outgoing book's position first; otherwise switching books
         // through the library loses everything read since the last quit.
         self.persist_state()?;
-        self.start_kosync_push();
         self.finish_reading_session(Utc::now())?;
 
         let normalized_path = Self::normalize_ebook_path(path);
@@ -1489,17 +1478,6 @@ where
         KosyncConfig::from_password(server, username, password)
     }
 
-    fn kosync_device(&self, config: &KosyncConfig) -> (String, String) {
-        let name = format!("repy ({})", std::env::consts::OS);
-        let seed = format!(
-            "{}:{}:{}",
-            config.username,
-            std::env::consts::OS,
-            self.state.borrow().config.filepath().display()
-        );
-        (name, sync::password_key(&seed))
-    }
-
     fn start_kosync_pull(&mut self, manual: bool) {
         let Some(config) = self.kosync_config() else {
             return;
@@ -1524,139 +1502,6 @@ where
         self.kosync_pull_is_manual = manual;
     }
 
-    fn start_kosync_push(&mut self) {
-        let Some(config) = self.kosync_config() else {
-            return;
-        };
-        let Some(path) = self.ebook.as_ref().map(|book| book.path().to_string()) else {
-            return;
-        };
-        let total = self.board.total_lines();
-        if total == 0 {
-            return;
-        }
-        let percentage = self.state.borrow().reading_state.row as f64 / total as f64;
-        let Ok(document) = sync::document_id(&path) else {
-            return;
-        };
-        let (device, device_id) = self.kosync_device(&config);
-        self.kosync_pushes.push(std::thread::spawn(move || {
-            let _ = sync::push_forward_only(&config, &document, percentage, &device, &device_id);
-        }));
-        self.kosync_last_queued_row = Some(self.state.borrow().reading_state.row);
-    }
-
-    fn push_kosync_on_quit(&mut self, timeout: Duration) -> eyre::Result<()> {
-        let Some(config) = self.kosync_config() else {
-            return Ok(());
-        };
-        let Some(path) = self.ebook.as_ref().map(|book| book.path().to_string()) else {
-            return Ok(());
-        };
-        let total = self.board.total_lines();
-        if total == 0 {
-            return Ok(());
-        }
-        let percentage = self.state.borrow().reading_state.row as f64 / total as f64;
-        let Ok(document) = sync::document_id(&path) else {
-            return Ok(());
-        };
-        let (device, device_id) = self.kosync_device(&config);
-        let (tx, rx) = std::sync::mpsc::channel();
-        std::thread::spawn(move || {
-            let result =
-                sync::push_forward_only(&config, &document, percentage, &device, &device_id)
-                    .map(|_| ());
-            let _ = tx.send(result);
-        });
-
-        let started = Instant::now();
-        let spinner = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
-        let mut frame_index = 0usize;
-        while started.elapsed() < timeout {
-            match rx.try_recv() {
-                Ok(Ok(())) => return Ok(()),
-                Ok(Err(_)) | Err(std::sync::mpsc::TryRecvError::Disconnected) => return Ok(()),
-                Err(std::sync::mpsc::TryRecvError::Empty) => {}
-            }
-            let remaining = timeout.saturating_sub(started.elapsed()).as_secs_f32();
-            let label = format!(
-                "  {} Uploading reading progress… {:.1}s  ",
-                spinner[frame_index % spinner.len()],
-                remaining
-            );
-            self.terminal.draw(|frame| {
-                let area = frame.area();
-                let width = (label.chars().count() as u16 + 2).min(area.width);
-                let height = 5u16.min(area.height);
-                let popup = Rect::new(
-                    area.x + area.width.saturating_sub(width) / 2,
-                    area.y + area.height.saturating_sub(height) / 2,
-                    width,
-                    height,
-                );
-                frame.render_widget(Clear, popup);
-                frame.render_widget(
-                    Paragraph::new(vec![Line::from(""), Line::from(label.as_str())]).block(
-                        Block::default()
-                            .title("KOReader Sync — Esc skips")
-                            .borders(Borders::ALL),
-                    ),
-                    popup,
-                );
-            })?;
-            frame_index += 1;
-            if crossterm::event::poll(Duration::from_millis(100))?
-                && let Ok(Event::Key(key)) = crossterm::event::read()
-                && key.kind == KeyEventKind::Press
-                && key.code == KeyCode::Esc
-            {
-                return Ok(());
-            }
-        }
-        Ok(())
-    }
-
-    fn push_kosync_if_progress_changed(&mut self) {
-        let row = self.state.borrow().reading_state.row;
-        if self.kosync_last_queued_row != Some(row) && self.kosync_pushes.is_empty() {
-            self.start_kosync_push();
-        }
-    }
-
-    fn start_manual_kosync_push(&mut self) {
-        let Some(config) = self.kosync_config() else {
-            self.state.borrow_mut().ui_state.set_message(
-                "Configure KOReader sync username and password first".into(),
-                MessageType::Warning,
-            );
-            return;
-        };
-        let Some(path) = self.ebook.as_ref().map(|book| book.path().to_string()) else {
-            return;
-        };
-        let total = self.board.total_lines();
-        if total == 0 {
-            return;
-        }
-        let percentage = self.state.borrow().reading_state.row as f64 / total as f64;
-        let Ok(document) = sync::document_id(path) else {
-            return;
-        };
-        let (device, device_id) = self.kosync_device(&config);
-        let (tx, rx) = std::sync::mpsc::channel();
-        std::thread::spawn(move || {
-            let _ = tx.send(sync::push(
-                &config, &document, percentage, &device, &device_id,
-            ));
-        });
-        self.kosync_manual_push_rx = Some(rx);
-        self.state
-            .borrow_mut()
-            .ui_state
-            .set_message("Pushing KOReader progress…".into(), MessageType::Info);
-    }
-
     fn poll_kosync(&mut self) {
         let result = self
             .kosync_pull_rx
@@ -1676,12 +1521,8 @@ where
         let manual = std::mem::take(&mut self.kosync_pull_is_manual);
         match result {
             Ok(Some(remote)) => {
-                let total = self.board.total_lines();
-                let local = if total == 0 {
-                    0.0
-                } else {
-                    self.state.borrow().reading_state.row as f64 / total as f64
-                };
+                let row = self.state.borrow().reading_state.row;
+                let local = self.board.content_fraction(row);
                 if manual || remote.percentage > local + 0.000_001 {
                     let mut state = self.state.borrow_mut();
                     state.ui_state.pending_sync_progress = Some((remote.percentage, remote.device));
@@ -1699,22 +1540,6 @@ where
                 .ui_state
                 .set_message(format!("KOReader sync: {error}"), MessageType::Warning),
         }
-    }
-
-    fn poll_manual_kosync_push(&mut self) {
-        let result = self
-            .kosync_manual_push_rx
-            .as_ref()
-            .and_then(|rx| rx.try_recv().ok());
-        let Some(result) = result else {
-            return;
-        };
-        self.kosync_manual_push_rx = None;
-        let (message, kind) = match result {
-            Ok(()) => ("KOReader progress pushed".to_string(), MessageType::Info),
-            Err(error) => (format!("KOReader sync: {error}"), MessageType::Warning),
-        };
-        self.state.borrow_mut().ui_state.set_message(message, kind);
     }
 
     fn start_reading_session(&mut self, book_id: String, row: usize) {
@@ -2013,8 +1838,6 @@ impl Reader {
 
             self.tts_poll_worker()?;
             self.poll_kosync();
-            self.poll_manual_kosync_push();
-            self.kosync_pushes.retain(|handle| !handle.is_finished());
             self.poll_library_cover();
             self.poll_inline_images();
 
@@ -2079,7 +1902,6 @@ impl Reader {
                             let previous_row = self.state.borrow().reading_state.row;
                             self.handle_key_event(key)?;
                             self.record_reading_activity(previous_row)?;
-                            self.push_kosync_if_progress_changed();
                         }
                     }
                     Event::Paste(text) => {
@@ -2132,7 +1954,6 @@ impl Reader {
 
         // Persist current reading state to the database before cleaning up
         self.persist_state()?;
-        self.push_kosync_on_quit(Duration::from_secs(5))?;
 
         // Cleanup terminal
         self.terminal.clear()?;
@@ -2809,9 +2630,7 @@ where
                     .pending_sync_progress
                     .take();
                 if let Some((percentage, _)) = pending {
-                    let total = self.board.total_lines();
-                    let row = ((percentage.clamp(0.0, 1.0) * total as f64).round() as usize)
-                        .min(total.saturating_sub(1));
+                    let row = self.board.row_for_fraction(percentage);
                     let mut state = self.state.borrow_mut();
                     state.record_jump();
                     state.reading_state.row = row;
@@ -4300,7 +4119,6 @@ where
                     }
                 ),
                 SettingItem::KosyncPullNow => "Pull KOReader progress now".to_string(),
-                SettingItem::KosyncPushNow => "Push KOReader progress now".to_string(),
             })
             .collect()
     }
@@ -7150,15 +6968,6 @@ where
                     .set_message("Pulling KOReader progress…".into(), MessageType::Info);
                 return Ok(());
             }
-            SettingItem::KosyncPushNow => {
-                drop(state);
-                self.start_manual_kosync_push();
-                self.state
-                    .borrow_mut()
-                    .ui_state
-                    .open_window(WindowType::Reader);
-                return Ok(());
-            }
         }
         let _ = state.config.save();
         if rebuild_chapter_breaks {
@@ -8952,10 +8761,7 @@ mod tests {
             library_covers: HashMap::new(),
             library_cover_pending: None,
             kosync_pull_rx: None,
-            kosync_pushes: Vec::new(),
-            kosync_last_queued_row: None,
             kosync_pull_is_manual: false,
-            kosync_manual_push_rx: None,
         }
     }
 
