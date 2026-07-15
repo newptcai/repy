@@ -14,7 +14,7 @@ fn test_image_handling_cli() {
 
 #[cfg(test)]
 mod internal_tests {
-    use repy::ebook::{Ebook, Epub};
+    use repy::formats::{Ebook, Epub};
     use repy::parser::parse_html;
 
     #[test]
@@ -39,7 +39,7 @@ mod internal_tests {
         let mut epub = Epub::new("tests/fixtures/small.epub");
         epub.initialize().unwrap();
 
-        let all_content = epub.get_all_parsed_content(80, None, None).unwrap();
+        let all_content = repy::renderer::parse_book(&mut epub, 80, None, None).unwrap();
 
         let mut image_path = String::new();
         // The first content in small.epub that has an image is likely the cover or title page
@@ -63,7 +63,7 @@ mod internal_tests {
         }
 
         if !image_path.is_empty() {
-            let (mime, bytes) = epub.get_img_bytestr(&image_path).unwrap();
+            let (mime, bytes) = epub.get_resource(&image_path).unwrap();
             assert!(!bytes.is_empty());
             assert!(mime.starts_with("image/"));
         }

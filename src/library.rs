@@ -13,7 +13,6 @@ use std::path::{Path, PathBuf};
 use eyre::Result;
 use walkdir::WalkDir;
 
-use crate::ebook::{Ebook, Epub};
 use crate::models::ScannedBook;
 use crate::state::State;
 
@@ -111,12 +110,12 @@ fn extract_metadata(path: &Path) -> (Option<String>, Option<String>) {
             return (title, author);
         }
     }
-    let mut epub = Epub::new(&path.to_string_lossy());
-    if epub.initialize().is_ok() {
-        let meta = epub.get_meta();
-        (meta.title.clone(), meta.creator.clone())
-    } else {
-        (None, None)
+    match crate::formats::open(&path.to_string_lossy()) {
+        Ok(book) => {
+            let meta = book.get_meta();
+            (meta.title.clone(), meta.creator.clone())
+        }
+        Err(_) => (None, None),
     }
 }
 
@@ -203,10 +202,7 @@ mod tests {
     fn test_expand_tilde() {
         let home = std::env::var("HOME").unwrap();
         assert_eq!(expand_tilde("~"), PathBuf::from(&home));
-        assert_eq!(
-            expand_tilde("~/Calibre"),
-            Path::new(&home).join("Calibre")
-        );
+        assert_eq!(expand_tilde("~/Calibre"), Path::new(&home).join("Calibre"));
         assert_eq!(expand_tilde("/abs/path"), PathBuf::from("/abs/path"));
     }
 
@@ -228,11 +224,8 @@ mod tests {
     fn test_scan_calibre_directory_uses_opf() {
         let dir = make_calibre_dir();
         let state = State::new_for_test();
-        let books = scan_library_directories(
-            &[dir.path().to_string_lossy().to_string()],
-            &state,
-        )
-        .unwrap();
+        let books =
+            scan_library_directories(&[dir.path().to_string_lossy().to_string()], &state).unwrap();
         assert_eq!(books.len(), 1);
         assert_eq!(books[0].title.as_deref(), Some("War & Peace"));
         assert_eq!(books[0].author.as_deref(), Some("Leo Tolstoy"));
@@ -247,17 +240,10 @@ mod tests {
     #[test]
     fn test_scan_falls_back_to_epub_metadata() {
         let dir = tempfile::TempDir::new().unwrap();
-        std::fs::copy(
-            "tests/fixtures/small.epub",
-            dir.path().join("small.epub"),
-        )
-        .unwrap();
+        std::fs::copy("tests/fixtures/small.epub", dir.path().join("small.epub")).unwrap();
         let state = State::new_for_test();
-        let books = scan_library_directories(
-            &[dir.path().to_string_lossy().to_string()],
-            &state,
-        )
-        .unwrap();
+        let books =
+            scan_library_directories(&[dir.path().to_string_lossy().to_string()], &state).unwrap();
         assert_eq!(books.len(), 1);
         // No metadata.opf, so metadata must come from inside the EPUB.
         assert!(books[0].title.is_some());

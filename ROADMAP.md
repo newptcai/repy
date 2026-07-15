@@ -40,7 +40,7 @@ Crates: `ratatui-image` (kitty graphics / iTerm2 / sixel / halfblocks fallback, 
 
 ## Phase 4 — Multi-format support
 
-**4.0 Refactor `Ebook` trait first** (M) — split format access from rendering: trait keeps metadata/toc/`get_chapter(index) -> ChapterContent`/`get_resource`/`cover`; new `enum ChapterContent { Html, PlainText, Markdown, ImagePage }`; move parse orchestration into a renderer layer; factory `open(path)` by extension+magic in new `src/formats/mod.rs`, move `Epub` to `src/formats/epub.rs`. Keep `spine_href` as the stable chapter ID (highlight anchoring and book identity depend on it).
+**4.0 Refactor `Ebook` trait first** (M) — ✅ done (2026-07): trait slimmed to format access (metadata/toc/`get_chapter(index) -> ChapterContent`/`get_resource`/`get_cover`/`content_index_for_href`/`styled_classes`); new `enum ChapterContent { Html, PlainText, Markdown, ImagePage }`; parse orchestration moved to `src/renderer.rs` (`parse_chapter`/`parse_book`, chapter breaks, image-dimension prescan); factory `open(path)` by extension + zip-magic fallback in `src/formats/mod.rs`; `Epub` moved to `src/formats/epub.rs`; reader holds `Box<dyn Ebook>`. `spine_href` kept as the stable chapter ID (content fingerprints unchanged, so book identity is preserved).
 
 Priority order:
 

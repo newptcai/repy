@@ -2,8 +2,9 @@ use repy::{
     annotations,
     cli::{Cli, ExportFormat},
     config::Config,
-    ebook::{Ebook, Epub},
+    formats::{self, Ebook},
     logging::{self, LogLevel},
+    renderer,
     state::State,
     ui::reader::Reader,
 };
@@ -176,9 +177,8 @@ fn run_tui_with_file(filepath: &str, config: Config) -> Result<()> {
 fn dump_content(filepath: &str) -> Result<()> {
     use std::io::Write;
 
-    let mut epub = Epub::new(filepath);
-    epub.initialize()?;
-    let structures = epub.get_all_parsed_content(80, None, None)?;
+    let mut book = formats::open(filepath)?;
+    let structures = renderer::parse_book(book.as_mut(), 80, None, None)?;
 
     let stdout = std::io::stdout();
     let mut out = std::io::BufWriter::new(stdout.lock());
@@ -197,9 +197,8 @@ fn dump_content(filepath: &str) -> Result<()> {
 
 fn export_highlights(filepath: &std::path::Path, format: ExportFormat) -> Result<()> {
     let path = filepath.to_string_lossy();
-    let mut epub = Epub::new(&path);
-    epub.initialize()?;
-    let identity = annotations::derive_book_identity(&mut epub)?;
+    let mut book = formats::open(&path)?;
+    let identity = annotations::derive_book_identity(book.as_mut())?;
     let db = State::new()?;
     let mut highlights = db.list_highlights(&identity.book_id)?;
 
@@ -213,17 +212,17 @@ fn export_highlights(filepath: &std::path::Path, format: ExportFormat) -> Result
         }
         ExportFormat::Md => {
             highlights.sort_by_key(|h| (h.content_index, h.approx_offset));
-            print!("{}", highlights_to_markdown(&epub, &highlights));
+            print!("{}", highlights_to_markdown(book.as_ref(), &highlights));
         }
     }
     Ok(())
 }
 
 /// Render highlights as Markdown grouped by chapter, in reading order.
-fn highlights_to_markdown(epub: &Epub, highlights: &[repy::models::Highlight]) -> String {
+fn highlights_to_markdown(book: &dyn Ebook, highlights: &[repy::models::Highlight]) -> String {
     use std::fmt::Write;
 
-    let meta = epub.get_meta();
+    let meta = book.get_meta();
     let mut out = String::new();
     let title = meta.title.as_deref().unwrap_or("Untitled");
     writeln!(out, "# Highlights: {}", title).unwrap();
@@ -235,7 +234,7 @@ fn highlights_to_markdown(epub: &Epub, highlights: &[repy::models::Highlight]) -
     for highlight in highlights {
         if current_chapter != Some(highlight.content_index) {
             current_chapter = Some(highlight.content_index);
-            let label = epub
+            let label = book
                 .toc_entries()
                 .iter()
                 .find(|entry| entry.content_index == highlight.content_index)
@@ -254,12 +253,7 @@ fn highlights_to_markdown(epub: &Epub, highlights: &[repy::models::Highlight]) -
         {
             writeln!(out, "\nNote: {}", comment.trim()).unwrap();
         }
-        writeln!(
-            out,
-            "\n*{}*",
-            highlight.created_at.format("%Y-%m-%d %H:%M")
-        )
-        .unwrap();
+        writeln!(out, "\n*{}*", highlight.created_at.format("%Y-%m-%d %H:%M")).unwrap();
     }
     out
 }

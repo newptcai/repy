@@ -1,4 +1,4 @@
-use crate::ebook::Ebook;
+use crate::formats::Ebook;
 use crate::models::{BookIdentity, Highlight, HighlightColor, HighlightRange};
 use eyre::Result;
 use sha2::{Digest, Sha256};
@@ -57,7 +57,8 @@ pub fn derive_book_identity(ebook: &mut dyn Ebook) -> Result<BookIdentity> {
             .spine_href(index)
             .unwrap_or_else(|| content_id.to_string());
         hrefs.push(href);
-        let raw = ebook.get_raw_text(content_id)?;
+        let chapter = ebook.get_chapter(index)?;
+        let raw = chapter.fingerprint_text();
         let prefix: String = raw.chars().take(2048).collect();
         let suffix_rev: String = raw.chars().rev().take(2048).collect();
         let suffix: String = suffix_rev.chars().rev().collect();

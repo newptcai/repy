@@ -574,7 +574,10 @@ impl State {
         Ok(library.into_iter().next().map(|item| item.filepath))
     }
 
-    pub fn get_last_reading_state(&self, ebook: &dyn crate::ebook::Ebook) -> Result<ReadingState> {
+    pub fn get_last_reading_state(
+        &self,
+        ebook: &dyn crate::formats::Ebook,
+    ) -> Result<ReadingState> {
         let mut stmt = self.conn.prepare(
             "SELECT content_index, textwidth, row, rel_pctg FROM reading_states WHERE filepath=?",
         )?;
@@ -603,7 +606,7 @@ impl State {
 
     pub fn set_last_reading_state(
         &self,
-        ebook: &dyn crate::ebook::Ebook,
+        ebook: &dyn crate::formats::Ebook,
         reading_state: &ReadingState,
     ) -> Result<()> {
         self.conn.execute(
@@ -625,7 +628,7 @@ impl State {
         Ok(())
     }
 
-    pub fn get_book_theme(&self, ebook: &dyn crate::ebook::Ebook) -> Result<Option<ColorTheme>> {
+    pub fn get_book_theme(&self, ebook: &dyn crate::formats::Ebook) -> Result<Option<ColorTheme>> {
         let stored: Option<String> = self
             .conn
             .query_row(
@@ -640,7 +643,7 @@ impl State {
 
     pub fn set_book_theme(
         &self,
-        ebook: &dyn crate::ebook::Ebook,
+        ebook: &dyn crate::formats::Ebook,
         theme: Option<ColorTheme>,
     ) -> Result<()> {
         self.conn.execute(
@@ -652,7 +655,7 @@ impl State {
 
     pub fn insert_bookmark(
         &self,
-        ebook: &dyn crate::ebook::Ebook,
+        ebook: &dyn crate::formats::Ebook,
         name: &str,
         reading_state: &ReadingState,
     ) -> Result<()> {
@@ -677,7 +680,7 @@ impl State {
         Ok(())
     }
 
-    pub fn delete_bookmark(&self, ebook: &dyn crate::ebook::Ebook, name: &str) -> Result<()> {
+    pub fn delete_bookmark(&self, ebook: &dyn crate::formats::Ebook, name: &str) -> Result<()> {
         self.conn.execute(
             "DELETE FROM bookmarks WHERE filepath=? AND name=?",
             params![ebook.path(), name],
@@ -687,7 +690,7 @@ impl State {
 
     pub fn get_bookmarks(
         &self,
-        ebook: &dyn crate::ebook::Ebook,
+        ebook: &dyn crate::formats::Ebook,
     ) -> Result<Vec<(String, ReadingState)>> {
         let mut stmt = self.conn.prepare(
             "SELECT name, content_index, textwidth, row, rel_pctg FROM bookmarks WHERE filepath=?",
@@ -715,7 +718,7 @@ impl State {
 
     pub fn set_jump_history(
         &self,
-        ebook: &dyn crate::ebook::Ebook,
+        ebook: &dyn crate::formats::Ebook,
         entries: &[usize],
         current_index: usize,
     ) -> Result<()> {
@@ -733,7 +736,10 @@ impl State {
         Ok(())
     }
 
-    pub fn get_jump_history(&self, ebook: &dyn crate::ebook::Ebook) -> Result<(Vec<usize>, usize)> {
+    pub fn get_jump_history(
+        &self,
+        ebook: &dyn crate::formats::Ebook,
+    ) -> Result<(Vec<usize>, usize)> {
         let stored: Option<(String, usize)> = self
             .conn
             .query_row(
@@ -752,7 +758,7 @@ impl State {
 
     pub fn upsert_mark(
         &self,
-        ebook: &dyn crate::ebook::Ebook,
+        ebook: &dyn crate::formats::Ebook,
         name: char,
         reading_state: &ReadingState,
     ) -> Result<()> {
@@ -778,7 +784,10 @@ impl State {
         Ok(())
     }
 
-    pub fn get_marks(&self, ebook: &dyn crate::ebook::Ebook) -> Result<Vec<(char, ReadingState)>> {
+    pub fn get_marks(
+        &self,
+        ebook: &dyn crate::formats::Ebook,
+    ) -> Result<Vec<(char, ReadingState)>> {
         let mut stmt = self.conn.prepare(
             "SELECT name, content_index, textwidth, row, rel_pctg
              FROM marks WHERE filepath=? ORDER BY name",
@@ -946,7 +955,7 @@ impl State {
 
     pub fn update_library(
         &self,
-        ebook: &dyn crate::ebook::Ebook,
+        ebook: &dyn crate::formats::Ebook,
         reading_progress: Option<f32>,
     ) -> Result<()> {
         let metadata = &ebook.get_meta();
@@ -1158,8 +1167,8 @@ impl State {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ebook::Ebook;
-    use crate::models::{BookMetadata, TextStructure, TocEntry};
+    use crate::formats::Ebook;
+    use crate::models::{BookMetadata, TocEntry};
     use tempfile::TempDir;
 
     #[test]
@@ -1252,36 +1261,19 @@ mod tests {
             Ok(())
         }
 
-        fn get_raw_text(&mut self, _content_id: &str) -> Result<String> {
-            Ok("Mock text content for testing purposes.".to_string())
+        fn get_chapter(&mut self, _index: usize) -> Result<crate::formats::ChapterContent> {
+            Ok(crate::formats::ChapterContent::Html(
+                "Mock text content for testing purposes.".to_string(),
+            ))
         }
 
-        fn get_img_bytestr(&mut self, _path: &str) -> Result<(String, Vec<u8>)> {
+        fn get_resource(&mut self, _path: &str) -> Result<(String, Vec<u8>)> {
             Ok(("image/jpeg".to_string(), vec![0xFF, 0xD8, 0xFF])) // Mock JPEG header
         }
 
         fn cleanup(&mut self) -> Result<()> {
             // No cleanup needed for mock
             Ok(())
-        }
-
-        fn get_parsed_content(
-            &mut self,
-            _content_id: &str,
-            _text_width: usize,
-            _starting_line: usize,
-            _inline_image_rows: Option<usize>,
-        ) -> Result<TextStructure> {
-            Ok(TextStructure::default())
-        }
-
-        fn get_all_parsed_content(
-            &mut self,
-            _text_width: usize,
-            _page_height: Option<usize>,
-            _inline_image_rows: Option<usize>,
-        ) -> Result<Vec<TextStructure>> {
-            Ok(vec![TextStructure::default()])
         }
     }
 
@@ -1675,7 +1667,12 @@ mod tests {
         let state = State::new_for_test();
 
         // Empty cache: no hit, listing is empty.
-        assert!(state.cached_library_file("/lib/a.epub", 100).unwrap().is_none());
+        assert!(
+            state
+                .cached_library_file("/lib/a.epub", 100)
+                .unwrap()
+                .is_none()
+        );
         assert!(state.get_scanned_library_files().unwrap().is_empty());
 
         state
@@ -1690,7 +1687,12 @@ mod tests {
             state.cached_library_file("/lib/a.epub", 100).unwrap(),
             Some((Some("Alpha".to_string()), Some("Anna".to_string())))
         );
-        assert!(state.cached_library_file("/lib/a.epub", 101).unwrap().is_none());
+        assert!(
+            state
+                .cached_library_file("/lib/a.epub", 101)
+                .unwrap()
+                .is_none()
+        );
 
         // Upsert replaces metadata and mtime.
         state

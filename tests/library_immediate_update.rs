@@ -1,6 +1,6 @@
 use eyre::Result;
 use repy::{
-    ebook::{Ebook, Epub},
+    formats::{Ebook, Epub},
     models::ReadingState,
     state::State,
 };

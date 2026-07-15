@@ -86,7 +86,10 @@ src/
 ├── cli.rs               # Command-line argument parsing
 ├── config.rs            # Configuration loading/saving (XDG support)
 ├── state.rs             # SQLite database for reading state, library, bookmarks
-├── ebook.rs             # EPUB parsing and book data structures
+├── formats/
+│   ├── mod.rs           # Ebook trait, ChapterContent enum, open() factory
+│   └── epub.rs          # EPUB format backend (epub crate)
+├── renderer.rs          # ChapterContent → TextStructure (parse orchestration)
 ├── library.rs           # Library directory scanning (walkdir, Calibre metadata.opf)
 ├── parser.rs            # HTML-to-text conversion, wrapping, hyphenation
 ├── models.rs            # Data models (ReadingState, SearchData, WindowType, etc.)
@@ -126,10 +129,15 @@ src/
 - Bundled SQLite (no system dependency required)
 - CRUD operations for all state types
 
-**`src/ebook.rs`** (~700 lines):
-- EPUB parsing using the `epub` crate
-- Chapter extraction and content indexing
-- Metadata extraction (title, author, etc.)
+**`src/formats/`**:
+- `Ebook` trait: format access only — metadata, TOC, `get_chapter(index) -> ChapterContent`, `get_resource`, cover; `spine_href` is the stable chapter ID (highlight anchoring and book identity depend on it)
+- `ChapterContent` enum: `Html | PlainText | Markdown | ImagePage` raw payloads
+- `open(path)` factory picks the backend by extension with a zip-magic fallback
+- `epub.rs`: EPUB backend using the `epub` crate (spine filtering, NCX/nav TOC, CSS-derived styled classes)
+
+**`src/renderer.rs`**:
+- Turns `ChapterContent` into wrapped `TextStructure`s via the shared HTML parse pipeline (`parse_chapter`, `parse_book`)
+- Converts non-HTML payloads to minimal HTML first; owns chapter-break padding and inline-image dimension prescans
 
 **`src/parser.rs`** (~1400 lines):
 - HTML-to-text conversion using html2text and scraper

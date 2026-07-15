@@ -1,5 +1,5 @@
 use eyre::Result;
-use repy::ebook::{Ebook, Epub};
+use repy::formats::{Ebook, Epub};
 
 #[test]
 fn test_epub_loading() -> Result<(), Box<dyn std::error::Error>> {
@@ -45,9 +45,9 @@ fn test_epub_loading() -> Result<(), Box<dyn std::error::Error>> {
     // Try to get raw text for the first chapter
     if !contents.is_empty() {
         println!("\n=== FIRST CHAPTER (RAW) ===");
-        let first_chapter = contents[0].clone();
-        match epub.get_raw_text(&first_chapter) {
-            Ok(raw_html) => {
+        match epub.get_chapter(0) {
+            Ok(chapter) => {
+                let raw_html = chapter.fingerprint_text();
                 println!("Raw HTML length: {} characters", raw_html.len());
 
                 // Show first 500 characters of raw HTML
@@ -64,8 +64,7 @@ fn test_epub_loading() -> Result<(), Box<dyn std::error::Error>> {
     // Try to parse the first chapter
     if !contents.is_empty() {
         println!("\n=== FIRST CHAPTER (PARSED) ===");
-        let first_chapter = contents[0].clone();
-        match epub.get_parsed_content(&first_chapter, 80, 0, None) {
+        match repy::renderer::parse_chapter(&mut epub, 0, 80, 0, None) {
             Ok(parsed) => {
                 println!("Parsed text has {} lines", parsed.text_lines.len());
                 println!("Found {} images", parsed.image_maps.len());
@@ -107,7 +106,7 @@ fn test_epub_loading() -> Result<(), Box<dyn std::error::Error>> {
         println!("\n=== MULTIPLE CHAPTERS TEST ===");
         println!("Parsing first 3 chapters...");
 
-        let all_content = epub.get_all_parsed_content(80, None, None)?;
+        let all_content = repy::renderer::parse_book(&mut epub, 80, None, None)?;
         println!("Successfully parsed {} chapters", all_content.len());
 
         let mut total_lines = 0;

@@ -24,13 +24,14 @@ use ratatui::{
 
 use crate::annotations::{self, COMMENT_MAX_CHARS, NORMALIZATION_VERSION};
 use crate::config::Config;
-use crate::ebook::{Ebook, Epub, build_chapter_break};
+use crate::formats::Ebook;
 use crate::logging;
 use crate::models::{
     BookIdentity, BookMetadata, CHAPTER_BREAK_MARKER, Direction as AppDirection, Highlight,
     HighlightColor, HighlightRange, LibraryEntry, LibraryItem, LibrarySortMode, LinkEntry,
     ReadingState, ReadingStatistics, ScannedBook, SearchData, TextStructure, TocEntry, WindowType,
 };
+use crate::renderer::{self, build_chapter_break};
 use crate::settings::{DICT_PRESET_LIST, InlineImages};
 use crate::state::State;
 use crate::theme::{ColorTheme, Theme};
@@ -692,7 +693,7 @@ pub struct Reader<B: Backend = CrosstermBackend<io::Stdout>> {
     db_state: State,
     board: Board,
     clipboard: Option<Clipboard>,
-    ebook: Option<Epub>,
+    ebook: Option<Box<dyn Ebook>>,
     content_start_rows: Vec<usize>,
     /// Per-chapter text structures for incremental rebuilds
     chapter_text_structures: Vec<TextStructure>,
@@ -1284,9 +1285,8 @@ where
             self.db_state.reconcile_filepath(path, &normalized_path)?;
         }
 
-        let mut epub = Epub::new(&normalized_path);
-        epub.initialize()?;
-        let identity = annotations::derive_book_identity(&mut epub)?;
+        let mut epub = crate::formats::open(&normalized_path)?;
+        let identity = annotations::derive_book_identity(epub.as_mut())?;
         let alias_conflict = self
             .db_state
             .alias_conflict(&normalized_path, &identity)?
@@ -1313,7 +1313,7 @@ where
         }
 
         // Load last reading state early to get preferred textwidth
-        let db_state = self.db_state.get_last_reading_state(&epub).ok();
+        let db_state = self.db_state.get_last_reading_state(epub.as_ref()).ok();
 
         // Determine textwidth: use DB value if available, otherwise use config default (70)
         let textwidth = if let Some(ref s) = db_state {
@@ -1342,7 +1342,7 @@ where
         let page_height = self.chapter_break_page_height();
         let inline_image_rows = self.inline_image_max_rows();
         let all_content =
-            epub.get_all_parsed_content(text_width, page_height, inline_image_rows)?;
+            renderer::parse_book(epub.as_mut(), text_width, page_height, inline_image_rows)?;
 
         // Store per-chapter structures for incremental rebuilds
         self.chapter_text_structures = all_content;
@@ -1396,15 +1396,20 @@ where
             }
 
             // Persist the reading state first (required for foreign key constraint)
-            self.db_state.set_last_reading_state(epub, &reading_state)?;
-            let book_color_theme = self.db_state.get_book_theme(epub)?;
-            let (jump_history, jump_history_index) = self.db_state.get_jump_history(epub)?;
-            let marks: HashMap<char, ReadingState> =
-                self.db_state.get_marks(epub)?.into_iter().collect();
+            self.db_state
+                .set_last_reading_state(epub.as_ref(), &reading_state)?;
+            let book_color_theme = self.db_state.get_book_theme(epub.as_ref())?;
+            let (jump_history, jump_history_index) =
+                self.db_state.get_jump_history(epub.as_ref())?;
+            let marks: HashMap<char, ReadingState> = self
+                .db_state
+                .get_marks(epub.as_ref())?
+                .into_iter()
+                .collect();
             // Preserve any existing reading progress rather than resetting it to
             // 0% on open; only a brand-new book starts at 0.0.
             self.db_state
-                .update_library(epub, reading_state.rel_pctg.or(Some(0.0)))?;
+                .update_library(epub.as_ref(), reading_state.rel_pctg.or(Some(0.0)))?;
 
             // Now update the UI state
             let session_book_id = identity.book_id.clone();
@@ -1418,7 +1423,7 @@ where
             state.ui_state.book_identity = Some(identity);
             state.ui_state.toc_entries = epub.toc_entries().clone();
             state.ui_state.toc_selected_index = 0;
-            if let Ok(bookmarks) = self.db_state.get_bookmarks(epub) {
+            if let Ok(bookmarks) = self.db_state.get_bookmarks(epub.as_ref()) {
                 state.ui_state.bookmarks = bookmarks;
                 state.ui_state.bookmarks_selected_index = 0;
             }
@@ -1656,14 +1661,15 @@ where
             };
             let mut to_save = reading_state.clone();
             to_save.rel_pctg = rel_pctg;
-            self.db_state.set_last_reading_state(epub, &to_save)?;
-            self.db_state.update_library(epub, rel_pctg)?;
+            self.db_state
+                .set_last_reading_state(epub.as_ref(), &to_save)?;
+            self.db_state.update_library(epub.as_ref(), rel_pctg)?;
             let (jump_history, jump_history_index) = {
                 let state = self.state.borrow();
                 (state.jump_history.clone(), state.jump_history_index)
             };
             self.db_state
-                .set_jump_history(epub, &jump_history, jump_history_index)?;
+                .set_jump_history(epub.as_ref(), &jump_history, jump_history_index)?;
         }
         Ok(())
     }
@@ -2256,7 +2262,8 @@ where
                     return Ok(true);
                 };
                 let reading_state = { self.state.borrow().reading_state.clone() };
-                self.db_state.upsert_mark(epub, name, &reading_state)?;
+                self.db_state
+                    .upsert_mark(epub.as_ref(), name, &reading_state)?;
                 let mut state = self.state.borrow_mut();
                 state.marks.insert(name, reading_state);
                 state
@@ -2297,7 +2304,7 @@ where
 
     fn set_effective_color_theme(&mut self, theme: Option<ColorTheme>) -> eyre::Result<()> {
         if let Some(epub) = self.ebook.as_ref() {
-            self.db_state.set_book_theme(epub, theme)?;
+            self.db_state.set_book_theme(epub.as_ref(), theme)?;
             self.state.borrow_mut().book_color_theme = theme;
         } else {
             let mut state = self.state.borrow_mut();
@@ -4302,7 +4309,7 @@ where
 
     fn open_bookmarks_window(&mut self) -> eyre::Result<()> {
         let bookmarks = if let Some(epub) = self.ebook.as_ref() {
-            self.db_state.get_bookmarks(epub)?
+            self.db_state.get_bookmarks(epub.as_ref())?
         } else {
             Vec::new()
         };
@@ -4517,7 +4524,7 @@ where
         for link in &mut links {
             let base_content = self
                 .content_index_for_row(link.row)
-                .and_then(|index| self.ebook.as_ref()?.resource_path_for_content_index(index));
+                .and_then(|index| self.ebook.as_ref()?.spine_href(index));
 
             if let Some(target_row) =
                 self.resolve_internal_link_row(&link.url, base_content.as_deref())
@@ -6129,7 +6136,7 @@ where
         };
         let reading_state = { self.state.borrow().reading_state.clone() };
         self.db_state
-            .insert_bookmark(epub, &bookmark_name, &reading_state)?;
+            .insert_bookmark(epub.as_ref(), &bookmark_name, &reading_state)?;
         self.refresh_bookmarks()?;
         Ok(())
     }
@@ -6147,7 +6154,7 @@ where
                 .map(|(name, _)| name.clone())
         };
         if let Some(name) = bookmark_name {
-            self.db_state.delete_bookmark(epub, &name)?;
+            self.db_state.delete_bookmark(epub.as_ref(), &name)?;
             self.refresh_bookmarks()?;
         }
         Ok(())
@@ -6155,7 +6162,7 @@ where
 
     fn refresh_bookmarks(&mut self) -> eyre::Result<()> {
         if let Some(epub) = self.ebook.as_ref() {
-            let bookmarks = self.db_state.get_bookmarks(epub)?;
+            let bookmarks = self.db_state.get_bookmarks(epub.as_ref())?;
             let mut state = self.state.borrow_mut();
             state.ui_state.bookmarks = bookmarks;
             if state.ui_state.bookmarks_selected_index >= state.ui_state.bookmarks.len() {
@@ -6229,9 +6236,8 @@ where
         {
             return std::fs::read(sibling).ok();
         }
-        let mut epub = Epub::new(path);
-        epub.initialize().ok()?;
-        epub.get_cover().map(|(_mime, bytes)| bytes)
+        let mut book = crate::formats::open(path).ok()?;
+        book.get_cover().map(|(_mime, bytes)| bytes)
     }
 
     /// Inline-image blocks fully visible on the current page:
@@ -6262,7 +6268,7 @@ where
             };
             let base = self
                 .content_index_for_row(row)
-                .and_then(|index| ebook.resource_path_for_content_index(index));
+                .and_then(|index| ebook.spine_href(index));
             let resolved = Self::resolve_relative_href(&src, base.as_deref()).unwrap_or(src);
             blocks.push((row, rows, resolved));
         }
@@ -6293,7 +6299,7 @@ where
         let protocol = if self.graphics.is_available() {
             self.ebook
                 .as_mut()
-                .and_then(|ebook| ebook.get_img_bytestr(&path).ok())
+                .and_then(|ebook| ebook.get_resource(&path).ok())
                 .and_then(|(_mime, bytes)| image::load_from_memory(&bytes).ok())
                 .and_then(|decoded| self.graphics.new_protocol(decoded))
         } else {
@@ -6427,14 +6433,14 @@ where
 
         // Resolve relative path
         let current_index = self.state.borrow().reading_state.content_index;
-        let base_path = epub.resource_path_for_content_index(current_index);
+        let base_path = epub.spine_href(current_index);
         let resolved_path = if let Some(base) = base_path {
             Self::resolve_relative_href(&src, Some(&base)).unwrap_or(src.clone())
         } else {
             src.clone()
         };
 
-        match epub.get_img_bytestr(&resolved_path) {
+        match epub.get_resource(&resolved_path) {
             Ok((mime, bytes)) => Some((src, mime, bytes)),
             Err(e) => {
                 let mut state = self.state.borrow_mut();
@@ -6766,19 +6772,16 @@ where
             // The inline-image layout changed: every chapter's rows are
             // stale, so re-parse the whole book.
             self.chapter_text_structures =
-                epub.get_all_parsed_content(text_width, page_height, inline_image_rows)?;
+                renderer::parse_book(epub.as_mut(), text_width, page_height, inline_image_rows)?;
             self.current_text_width = Some(text_width);
             self.current_inline_image_rows = inline_image_rows;
         } else if needs_rebuild {
             // Only re-parse the current chapter for performance
-            let contents = epub.contents();
-            let total_chapters = contents.len();
+            let total_chapters = epub.contents().len();
 
             if current_chapter_idx < self.chapter_text_structures.len()
                 && current_chapter_idx < total_chapters
             {
-                // Clone content_id to avoid holding immutable borrow across mutable call
-                let content_id = contents[current_chapter_idx].clone();
                 let starting_line = if current_chapter_idx > 0 {
                     self.content_start_rows[current_chapter_idx]
                 } else {
@@ -6786,8 +6789,9 @@ where
                 };
 
                 // Parse only the current chapter with new width
-                let mut parsed_chapter = epub.get_parsed_content(
-                    &content_id,
+                let mut parsed_chapter = renderer::parse_chapter(
+                    epub.as_mut(),
+                    current_chapter_idx,
                     text_width,
                     starting_line,
                     inline_image_rows,
@@ -7261,7 +7265,7 @@ where
     fn follow_link_entry(&mut self, link: LinkEntry) -> eyre::Result<()> {
         let base_content = self
             .content_index_for_row(link.row)
-            .and_then(|index| self.ebook.as_ref()?.resource_path_for_content_index(index));
+            .and_then(|index| self.ebook.as_ref()?.spine_href(index));
 
         if let Some(target_row) = self.resolve_internal_link_row(&link.url, base_content.as_deref())
         {
@@ -7388,7 +7392,7 @@ where
     }
 
     fn resolve_relative_href(href: &str, base_content: Option<&str>) -> Option<String> {
-        crate::ebook::resolve_relative_resource(href, base_content)
+        crate::formats::resolve_relative_resource(href, base_content)
     }
 
     fn resolve_anchor_row(&self, fragment: &str) -> Option<usize> {
