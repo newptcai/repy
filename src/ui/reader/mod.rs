@@ -6109,22 +6109,24 @@ where
     }
 
     fn jump_to_toc_entry(&mut self) -> eyre::Result<()> {
-        let (section, content_index) = {
+        let (toc_index, content_index) = {
             let state = self.state.borrow();
-            if let Some(entry) = state
+            if let Some(index) = state
                 .ui_state
                 .selected_list_index(state.ui_state.toc_selected_index)
-                .and_then(|i| state.ui_state.toc_entries.get(i))
+                && let Some(entry) = state.ui_state.toc_entries.get(index)
             {
-                (entry.section.clone(), entry.content_index)
+                (index, entry.content_index)
             } else {
                 return Ok(());
             }
         };
 
-        let target_row = self
-            .effective_toc_row(content_index, section.as_deref())
-            .map(Self::row_from_start);
+        let target_row = {
+            let state = self.state.borrow();
+            self.toc_activation_row(&state.ui_state.toc_entries, toc_index)
+                .map(Self::row_from_start)
+        };
 
         if let Some(row) = target_row {
             self.record_jump_position();
