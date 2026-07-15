@@ -39,6 +39,8 @@ pub fn expand_tilde(dir: &str) -> PathBuf {
 pub fn scan_library_directories(dirs: &[String], state: &State) -> Result<Vec<ScannedBook>> {
     let mut books = Vec::new();
     let mut seen: HashSet<String> = HashSet::new();
+    let mut calibre_records: HashSet<PathBuf> = HashSet::new();
+    let mut candidates = Vec::new();
     for dir in dirs {
         let root = expand_tilde(dir);
         for entry in WalkDir::new(&root)
@@ -66,39 +68,78 @@ pub fn scan_library_directories(dirs: &[String], state: &State) -> Result<Vec<Sc
             if !is_book {
                 continue;
             }
-            // Canonicalize so entries merge with reading history, which
-            // stores canonical paths (see Reader::normalize_ebook_path).
-            let Ok(filepath) = std::fs::canonicalize(entry.path()) else {
-                continue;
-            };
-            let filepath_str = filepath.to_string_lossy().to_string();
-            if !seen.insert(filepath_str.clone()) {
+            candidates.push(entry.into_path());
+        }
+    }
+
+    // A Calibre record may contain the same book in several formats. Process
+    // preferred formats first so exactly one deterministic entry represents
+    // the record in the library popup.
+    candidates.sort_by(|a, b| {
+        format_preference(a)
+            .cmp(&format_preference(b))
+            .then_with(|| a.cmp(b))
+    });
+    for path in candidates {
+        if let Some(parent) = path.parent()
+            && parent.join("metadata.opf").is_file()
+        {
+            let record = std::fs::canonicalize(parent).unwrap_or_else(|_| parent.to_path_buf());
+            if !calibre_records.insert(record) {
                 continue;
             }
-            let mtime = file_mtime(&filepath);
-            let (title, author) = match state.cached_library_file(&filepath_str, mtime)? {
-                Some(cached) => cached,
-                None => {
-                    let (title, author) = extract_metadata(&filepath);
-                    state.upsert_library_file(
-                        &filepath_str,
-                        mtime,
-                        title.as_deref(),
-                        author.as_deref(),
-                    )?;
-                    (title, author)
-                }
-            };
-            books.push(ScannedBook {
-                filepath: filepath_str,
-                title,
-                author,
-            });
         }
+        // Canonicalize so entries merge with reading history, which
+        // stores canonical paths (see Reader::normalize_ebook_path).
+        let Ok(filepath) = std::fs::canonicalize(&path) else {
+            continue;
+        };
+        let filepath_str = filepath.to_string_lossy().to_string();
+        if !seen.insert(filepath_str.clone()) {
+            continue;
+        }
+        let mtime = file_mtime(&filepath);
+        let (title, author) = match state.cached_library_file(&filepath_str, mtime)? {
+            Some(cached) => cached,
+            None => {
+                let (title, author) = extract_metadata(&filepath);
+                state.upsert_library_file(
+                    &filepath_str,
+                    mtime,
+                    title.as_deref(),
+                    author.as_deref(),
+                )?;
+                (title, author)
+            }
+        };
+        books.push(ScannedBook {
+            filepath: filepath_str,
+            title,
+            author,
+        });
     }
     let seen_paths: Vec<String> = books.iter().map(|b| b.filepath.clone()).collect();
     state.prune_library_files(&seen_paths)?;
     Ok(books)
+}
+
+/// Lower values are preferred when a Calibre record contains multiple files.
+fn format_preference(path: &Path) -> u8 {
+    let name = path
+        .file_name()
+        .map(|name| name.to_string_lossy().to_ascii_lowercase())
+        .unwrap_or_default();
+    if name.ends_with(".epub") {
+        0
+    } else if name.ends_with(".fb2") || name.ends_with(".fb2.zip") {
+        1
+    } else if name.ends_with(".mobi") || name.ends_with(".azw3") || name.ends_with(".azw") {
+        2
+    } else if name.ends_with(".cbz") {
+        3
+    } else {
+        4
+    }
 }
 
 fn file_mtime(path: &Path) -> i64 {
@@ -233,6 +274,9 @@ mod tests {
     #[test]
     fn test_scan_calibre_directory_uses_opf() {
         let dir = make_calibre_dir();
+        let book_dir = dir.path().join("Leo Tolstoy").join("War & Peace (246)");
+        std::fs::write(book_dir.join("War & Peace - Leo Tolstoy.mobi"), b"mobi").unwrap();
+        std::fs::write(book_dir.join("War & Peace - Leo Tolstoy.fb2"), b"fb2").unwrap();
         let state = State::new_for_test();
         let books =
             scan_library_directories(&[dir.path().to_string_lossy().to_string()], &state).unwrap();
