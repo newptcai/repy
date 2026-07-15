@@ -32,6 +32,7 @@ pub enum WindowType {
     Links,
     Metadata,
     Settings,
+    SettingsTextInput,
     Images,
     ImageView,
     Statistics,
@@ -40,6 +41,7 @@ pub enum WindowType {
     Highlights,
     HighlightCommentEditor,
     ConfirmDeleteHighlight,
+    ConfirmSyncProgress,
     LinkPreview,
 }
 

@@ -15,6 +15,7 @@ pub const VIEWER_PRESET_LIST: &[&str] = &[
 pub const DICT_PRESET_LIST: &[&str] = &["dict", "sdcv", "wkdict"];
 
 pub const TTS_PRESET_LIST: &[&str] = &["purr", "edge-tts", "trans"];
+pub const DEFAULT_KOSYNC_SERVER: &str = "https://sync.koreader.rocks";
 
 /// Inline image policy for the reading view.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -65,6 +66,10 @@ pub struct Settings {
     /// Whether images render inline in the reading view or stay as one-line
     /// placeholders.
     pub inline_images: InlineImages,
+    /// KOReader-compatible progress sync credentials.
+    pub kosync_server: Option<String>,
+    pub kosync_username: Option<String>,
+    pub kosync_password: Option<String>,
 }
 
 impl Settings {
@@ -89,6 +94,9 @@ impl Settings {
             self.library_directories = other.library_directories;
         }
         self.inline_images = other.inline_images;
+        self.kosync_server = other.kosync_server;
+        self.kosync_username = other.kosync_username;
+        self.kosync_password = other.kosync_password;
     }
 }
 
@@ -109,6 +117,9 @@ impl Default for Settings {
             show_top_bar: true,
             library_directories: Vec::new(),
             inline_images: InlineImages::default(),
+            kosync_server: Some(DEFAULT_KOSYNC_SERVER.to_string()),
+            kosync_username: None,
+            kosync_password: None,
         }
     }
 }
