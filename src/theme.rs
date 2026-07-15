@@ -151,10 +151,10 @@ impl Theme {
     /// Warm paper-like palette, the classic e-reader "sepia" mode.
     fn sepia_theme() -> Self {
         Self {
-            text_fg: Some(Color::Rgb(91, 70, 54)),     // #5b4636  warm brown
-            text_bg: Some(Color::Rgb(244, 236, 216)),  // #f4ecd8  paper
-            highlight_fg: Color::Rgb(244, 236, 216),   // #f4ecd8
-            highlight_bg: Color::Rgb(139, 111, 71),    // #8b6f47  tan
+            text_fg: Some(Color::Rgb(91, 70, 54)),    // #5b4636  warm brown
+            text_bg: Some(Color::Rgb(244, 236, 216)), // #f4ecd8  paper
+            highlight_fg: Color::Rgb(244, 236, 216),  // #f4ecd8
+            highlight_bg: Color::Rgb(139, 111, 71),   // #8b6f47  tan
             annotation_highlight_fg: Color::Rgb(91, 70, 54),
             annotation_highlight_bg: Color::Rgb(232, 213, 163), // warm yellow
             annotation_green_bg: Color::Rgb(207, 217, 168),
@@ -182,10 +182,10 @@ impl Theme {
             highlight_bg: Color::Rgb(131, 165, 152),  // #83a598  bright-aqua
             annotation_highlight_fg: Color::Rgb(40, 40, 40), // #282828
             annotation_highlight_bg: Color::Rgb(235, 219, 178), // #ebdbb2  soft-yellow
-            annotation_green_bg: Color::Rgb(152, 151, 26),   // #98971a  green
-            annotation_blue_bg: Color::Rgb(69, 133, 136),    // #458588  blue
-            annotation_pink_bg: Color::Rgb(211, 134, 155),   // #d3869b  bright-purple
-            annotation_purple_bg: Color::Rgb(177, 98, 134),  // #b16286  purple
+            annotation_green_bg: Color::Rgb(152, 151, 26), // #98971a  green
+            annotation_blue_bg: Color::Rgb(69, 133, 136), // #458588  blue
+            annotation_pink_bg: Color::Rgb(211, 134, 155), // #d3869b  bright-purple
+            annotation_purple_bg: Color::Rgb(177, 98, 134), // #b16286  purple
             search_fg: Color::Rgb(40, 40, 40),        // #282828
             search_bg: Color::Rgb(250, 189, 47),      // #fabd2f  bright-yellow
             search_current_fg: Color::Rgb(40, 40, 40), // #282828

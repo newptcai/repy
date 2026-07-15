@@ -1,12 +1,12 @@
 use ratatui::{
+    Frame,
     layout::{Constraint, Direction, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Clear, List, ListItem, ListState, Padding, Paragraph, Wrap},
-    Frame,
 };
 
-use crate::models::{LinkEntry, CHAPTER_BREAK_MARKER};
+use crate::models::{CHAPTER_BREAK_MARKER, LinkEntry};
 use crate::theme::Theme;
 use crate::ui::board::Board;
 

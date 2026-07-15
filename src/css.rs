@@ -293,7 +293,9 @@ fn skip_at_rule(bytes: &[u8], from: usize) -> usize {
                 } else if b == b';' {
                     return i + 1;
                 } else if b == b'{' {
-                    return find_matching_brace(bytes, i).map(|p| p + 1).unwrap_or(bytes.len());
+                    return find_matching_brace(bytes, i)
+                        .map(|p| p + 1)
+                        .unwrap_or(bytes.len());
                 }
             }
         }
@@ -330,7 +332,8 @@ mod tests {
 
     #[test]
     fn detects_bold_via_numeric_weight() {
-        let css = ".w700 { font-weight: 700; } .w500 { font-weight: 500; } .w600 { font-weight: 600; }";
+        let css =
+            ".w700 { font-weight: 700; } .w500 { font-weight: 500; } .w600 { font-weight: 600; }";
         let s = collect_styled_classes(&[css]);
         assert!(s.bold.contains("w700"));
         assert!(s.bold.contains("w600"));

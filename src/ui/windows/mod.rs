@@ -29,7 +29,9 @@ pub fn fuzzy_filter_indices(query: &str, items: &[impl AsRef<str>]) -> Vec<usize
         .enumerate()
         .filter_map(|(i, item)| {
             let haystack = Utf32Str::new(item.as_ref(), &mut buf);
-            pattern.score(haystack, &mut matcher).map(|score| (score, i))
+            pattern
+                .score(haystack, &mut matcher)
+                .map(|score| (score, i))
         })
         .collect();
     // Sort by score descending; original order breaks ties (stable sort).
