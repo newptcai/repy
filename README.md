@@ -10,14 +10,24 @@ or crash your terminal. You're on your own. PRs welcome.
 
 ---
 
-Rust reimplementation of the awesome CLI ebook reader [`epy`](https://github.com/wustho/epy).
+Rust reimplementation of the excellent CLI ebook reader [`epy`](https://github.com/wustho/epy).
 
-The goal is to keep the reading experience and keybindings familiar while improving
-performance, robustness, and portability by using Rust and a fully self-contained
-SQLite implementation.
+`repy` keeps the keyboard-first reading experience familiar while adding fast
+chapter rendering, inline terminal graphics, persistent annotations, and a
+self-contained SQLite library.
 
-![repy reading view](screenshots/reader-view.png)
-*A clean reading experience in `repy`, showing Marcus Aurelius's Meditations with hyphenation, footnote markers, and progress tracking.*
+<p align="center">
+  <img src="screenshots/cover-view.png" width="52%" alt="Meditations cover rendered inline in repy">
+</p>
+<p align="center"><em>EPUB artwork rendered directly in the reading flow.</em></p>
+
+<p align="center">
+  <img src="screenshots/toc-view.png" width="48%" alt="Table of Contents in repy">
+  <img src="screenshots/selection-view.png" width="48%" alt="Text selection in repy">
+</p>
+<p align="center">
+  <em>Jump through the table of contents, then select, copy, annotate, or look up text without leaving the reader.</em>
+</p>
 
 ## Status
 
