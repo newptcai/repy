@@ -30,6 +30,7 @@ walkdir = "2.5.0"
 ratatui-image = { version = "11.0.6", default-features = false, features = ["image-defaults", "crossterm"] }
 image = "0.25"
 pulldown-cmark = "0.13.4"
+zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

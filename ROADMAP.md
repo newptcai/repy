@@ -47,7 +47,7 @@ Priority order:
 1. **Plain text + Markdown** (S) — ✅ done (2026-07): new `src/formats/text.rs` backend (one chapter per file; title from first `# heading` for md, file stem otherwise; Markdown image links resolve against the file's directory). Markdown renders via `pulldown-cmark` (tables/footnotes/strikethrough/tasklists) → HTML → existing pipeline; plain text becomes escaped `<p>` paragraphs split on blank lines. Wired into `formats::open` for `.txt`/`.text`/`.md`/`.markdown`.
 2. **FB2** (M) — `quick-xml` walk emitting HTML-ish chapters; base64 inline images through `get_resource`.
 3. **MOBI6** (M-L) — crate `mobi`; AZW3/KF8 documented as best-effort.
-4. **CBZ** (M) — `zip` crate, `ImagePage` chapters; gated on Phase 3 + kitty-class terminal. Skip CBR (unrar licensing).
+4. **CBZ** (M) — ✅ done (2026-07): new `src/formats/cbz.rs` (`zip` crate, deflate only); natural-sorted image entries become one `ImagePage` chapter each, rendered as book-root-relative `<img>` through the existing inline-image pipeline (`inline_images: shown` + graphics terminal to actually see pages); `ComicInfo.xml` supplies title (`Series #Number`) and writer; first page doubles as the cover; `.cbz` included in library scans. CBR skipped (unrar licensing).
 5. **PDF — explicitly out of scope** (reflow is a research problem; document "convert with Calibre").
 
 ## Phase 5 — Sync and ecosystem

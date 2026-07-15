@@ -26,9 +26,11 @@ library management, two-phase cursor/selection modes, image viewing, link/footno
 Wikipedia lookup, persistent highlights/comments, highlight export, and TTS (text-to-speech) all work. Text is intelligently wrapped and hyphenated.
 Reading state and preferences are persisted per-book.
 
-**Supported formats:** EPUB, plain text (`.txt`), and Markdown (`.md`).
+**Supported formats:** EPUB, plain text (`.txt`), Markdown (`.md`), and comic
+book archives (`.cbz` — set `"inline_images": "shown"` and use a
+graphics-capable terminal such as kitty to see the pages).
 
-**Not yet implemented:** FB2, MOBI, and CBZ (planned).
+**Not yet implemented:** FB2 and MOBI (planned).
 
 See [to-do.md](to-do.md) for detailed feature status and roadmap.
 

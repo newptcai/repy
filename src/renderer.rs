@@ -77,8 +77,10 @@ fn chapter_html(content: ChapterContent) -> String {
         ChapterContent::Html(html) => html,
         ChapterContent::PlainText(text) => plain_text_to_html(&text),
         ChapterContent::Markdown(text) => markdown_to_html(&text),
+        // The leading slash makes the src book-root-relative, so resolving
+        // it against any chapter base path yields the archive entry name.
         ChapterContent::ImagePage(path) => {
-            format!("<img src=\"{}\"/>", escape_html(&path))
+            format!("<img src=\"/{}\"/>", escape_html(&path))
         }
     }
 }
@@ -382,7 +384,12 @@ mod tests {
     #[test]
     fn test_chapter_html_image_page() {
         let html = chapter_html(ChapterContent::ImagePage("pages/001.png".to_string()));
-        assert_eq!(html, "<img src=\"pages/001.png\"/>");
+        assert_eq!(html, "<img src=\"/pages/001.png\"/>");
+        // Book-root-relative srcs resolve to the archive entry from any base.
+        assert_eq!(
+            crate::formats::resolve_relative_resource("/pages/001.png", Some("pages/001.png")),
+            Some("pages/001.png".to_string())
+        );
     }
 
     #[test]

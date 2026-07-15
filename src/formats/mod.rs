@@ -5,9 +5,11 @@
 //! (image) access. Turning a chapter payload into wrapped, styled text lines
 //! is the renderer's job (`crate::renderer`), so backends stay layout-free.
 
+pub mod cbz;
 pub mod epub;
 pub mod text;
 
+pub use cbz::Cbz;
 pub use epub::Epub;
 pub use text::{TextBook, TextKind};
 
@@ -90,6 +92,7 @@ pub fn open(path: &str) -> Result<Box<dyn Ebook>> {
         "epub" => Box::new(Epub::new(path)),
         "txt" | "text" => Box::new(TextBook::new(path, TextKind::Plain)),
         "md" | "markdown" => Box::new(TextBook::new(path, TextKind::Markdown)),
+        "cbz" => Box::new(Cbz::new(path)),
         _ if has_zip_magic(path) => Box::new(Epub::new(path)),
         _ => eyre::bail!("Unsupported ebook format: {}", path),
     };

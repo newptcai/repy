@@ -49,11 +49,10 @@ pub fn scan_library_directories(dirs: &[String], state: &State) -> Result<Vec<Sc
             if !entry.file_type().is_file() {
                 continue;
             }
-            let is_epub = entry
-                .path()
-                .extension()
-                .is_some_and(|ext| ext.eq_ignore_ascii_case("epub"));
-            if !is_epub {
+            let is_book = entry.path().extension().is_some_and(|ext| {
+                ext.eq_ignore_ascii_case("epub") || ext.eq_ignore_ascii_case("cbz")
+            });
+            if !is_book {
                 continue;
             }
             // Canonicalize so entries merge with reading history, which

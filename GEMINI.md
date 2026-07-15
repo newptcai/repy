@@ -89,7 +89,8 @@ src/
 ├── formats/
 │   ├── mod.rs           # Ebook trait, ChapterContent enum, open() factory
 │   ├── epub.rs          # EPUB format backend (epub crate)
-│   └── text.rs          # Plain-text/Markdown backend (single-chapter files)
+│   ├── text.rs          # Plain-text/Markdown backend (single-chapter files)
+│   └── cbz.rs           # Comic-book archive backend (zip of image pages)
 ├── renderer.rs          # ChapterContent → TextStructure (parse orchestration)
 ├── library.rs           # Library directory scanning (walkdir, Calibre metadata.opf)
 ├── parser.rs            # HTML-to-text conversion, wrapping, hyphenation
@@ -136,6 +137,7 @@ src/
 - `open(path)` factory picks the backend by extension with a zip-magic fallback
 - `epub.rs`: EPUB backend using the `epub` crate (spine filtering, NCX/nav TOC, CSS-derived styled classes)
 - `text.rs`: plain-text/Markdown backend — one chapter per file, title from the first `# heading` (md) or file stem, relative image links resolved against the file's directory
+- `cbz.rs`: comic-book archive backend — natural-sorted image entries become one `ImagePage` chapter each; title/author from `ComicInfo.xml` when present; first page is the cover; readable with `inline_images: shown` on a graphics terminal
 
 **`src/renderer.rs`**:
 - Turns `ChapterContent` into wrapped `TextStructure`s via the shared HTML parse pipeline (`parse_chapter`, `parse_book`)
@@ -208,6 +210,7 @@ When debugging or fixing HTML parsing bugs (links, footnotes, sections, formatti
 - `textwrap` 0.16.1: Text wrapping with hyphenation support
 - `clap` 4.5.53: CLI argument parsing
 - `pulldown-cmark` 0.13: Markdown-to-HTML conversion for .md books
+- `zip` 8 (deflate only): CBZ comic archive reading
 - `arboard` 3.6.1: Clipboard access for yank functionality
 - `walkdir` 2.5.0: Recursive library directory scanning
 
@@ -307,7 +310,7 @@ When debugging or fixing HTML parsing bugs (links, footnotes, sections, formatti
 - Custom engine: set `preferred_tts_engine` to a command template with `{}` for text, or with both `{}` and `{output}` for file-based playback
 
 ### Known Limitations
-- Supported formats: EPUB, plain text (.txt), Markdown (.md); MOBI, AZW, FB2, CBZ not implemented yet
+- Supported formats: EPUB, plain text (.txt), Markdown (.md), comic archives (.cbz); MOBI, AZW, FB2 not implemented yet
 - Dictionary uses external commands (e.g., `dict`, `sdcv`) and Wikipedia lookup
 - No export functionality
 - Search does not support: history, fuzzy matching, incremental search
