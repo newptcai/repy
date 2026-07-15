@@ -55,6 +55,29 @@ fn test_dump_fixture_epub() {
 }
 
 #[test]
+fn test_dump_fixture_markdown() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("repy"));
+    cmd.env("XDG_CONFIG_HOME", dir.path());
+    cmd.arg("--dump").arg("tests/fixtures/sample.md");
+    cmd.assert()
+        .success()
+        .stdout(predicates::str::contains("The Little Markdown Book"))
+        .stdout(predicates::str::contains("Call me Ishmael."));
+}
+
+#[test]
+fn test_dump_fixture_plain_text() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("repy"));
+    cmd.env("XDG_CONFIG_HOME", dir.path());
+    cmd.arg("--dump").arg("tests/fixtures/sample.txt");
+    cmd.assert().success().stdout(predicates::str::contains(
+        "This paragraph is hard-wrapped across several short lines",
+    ));
+}
+
+#[test]
 fn test_dump_without_ebook_fails() {
     let dir = tempfile::tempdir().unwrap();
     let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("repy"));

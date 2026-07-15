@@ -44,7 +44,7 @@ Crates: `ratatui-image` (kitty graphics / iTerm2 / sixel / halfblocks fallback, 
 
 Priority order:
 
-1. **Plain text + Markdown** (S) — Markdown via `pulldown-cmark` → HTML → existing pipeline (nearly free).
+1. **Plain text + Markdown** (S) — ✅ done (2026-07): new `src/formats/text.rs` backend (one chapter per file; title from first `# heading` for md, file stem otherwise; Markdown image links resolve against the file's directory). Markdown renders via `pulldown-cmark` (tables/footnotes/strikethrough/tasklists) → HTML → existing pipeline; plain text becomes escaped `<p>` paragraphs split on blank lines. Wired into `formats::open` for `.txt`/`.text`/`.md`/`.markdown`.
 2. **FB2** (M) — `quick-xml` walk emitting HTML-ish chapters; base64 inline images through `get_resource`.
 3. **MOBI6** (M-L) — crate `mobi`; AZW3/KF8 documented as best-effort.
 4. **CBZ** (M) — `zip` crate, `ImagePage` chapters; gated on Phase 3 + kitty-class terminal. Skip CBR (unrar licensing).

@@ -26,7 +26,9 @@ library management, two-phase cursor/selection modes, image viewing, link/footno
 Wikipedia lookup, persistent highlights/comments, highlight export, and TTS (text-to-speech) all work. Text is intelligently wrapped and hyphenated.
 Reading state and preferences are persisted per-book.
 
-**Not yet implemented:** additional ebook formats beyond EPUB.
+**Supported formats:** EPUB, plain text (`.txt`), and Markdown (`.md`).
+
+**Not yet implemented:** FB2, MOBI, and CBZ (planned).
 
 See [to-do.md](to-do.md) for detailed feature status and roadmap.
 
@@ -68,10 +70,12 @@ installation is required; SQLite is compiled and linked as part of the build.
 
 ### Opening a book
 
-To open any EPUB file (doesn't need to be in your library):
+To open any EPUB, plain-text, or Markdown file (doesn't need to be in your
+library):
 
 ```sh
 repy /path/to/book.epub
+repy /path/to/notes.md
 ```
 
 ### Starting without arguments

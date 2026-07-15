@@ -6,8 +6,10 @@
 //! is the renderer's job (`crate::renderer`), so backends stay layout-free.
 
 pub mod epub;
+pub mod text;
 
 pub use epub::Epub;
+pub use text::{TextBook, TextKind};
 
 use crate::css::StyledClasses;
 use crate::models::{BookMetadata, TocEntry};
@@ -86,6 +88,8 @@ pub fn open(path: &str) -> Result<Box<dyn Ebook>> {
 
     let mut book: Box<dyn Ebook> = match extension.as_str() {
         "epub" => Box::new(Epub::new(path)),
+        "txt" | "text" => Box::new(TextBook::new(path, TextKind::Plain)),
+        "md" | "markdown" => Box::new(TextBook::new(path, TextKind::Markdown)),
         _ if has_zip_magic(path) => Box::new(Epub::new(path)),
         _ => eyre::bail!("Unsupported ebook format: {}", path),
     };
@@ -172,6 +176,22 @@ mod tests {
     #[test]
     fn test_open_nonexistent_file() {
         assert!(open("tests/fixtures/nonexistent.epub").is_err());
+    }
+
+    #[test]
+    fn test_open_text_and_markdown_by_extension() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let txt = dir.path().join("story.txt");
+        std::fs::write(&txt, "Hello.")?;
+        let md = dir.path().join("notes.md");
+        std::fs::write(&md, "# Notes\n\nHello.")?;
+
+        let txt_book = open(&txt.to_string_lossy())?;
+        assert_eq!(txt_book.get_meta().title.as_deref(), Some("story"));
+
+        let md_book = open(&md.to_string_lossy())?;
+        assert_eq!(md_book.get_meta().title.as_deref(), Some("Notes"));
+        Ok(())
     }
 
     #[test]

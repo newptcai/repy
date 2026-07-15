@@ -76,9 +76,7 @@ fn chapter_html(content: ChapterContent) -> String {
     match content {
         ChapterContent::Html(html) => html,
         ChapterContent::PlainText(text) => plain_text_to_html(&text),
-        // TODO(phase 4.1): render Markdown via pulldown-cmark; until then it
-        // reads as plain text.
-        ChapterContent::Markdown(text) => plain_text_to_html(&text),
+        ChapterContent::Markdown(text) => markdown_to_html(&text),
         ChapterContent::ImagePage(path) => {
             format!("<img src=\"{}\"/>", escape_html(&path))
         }
@@ -100,6 +98,19 @@ fn plain_text_to_html(text: &str) -> String {
         html.push_str("</p>\n");
     }
     html
+}
+
+fn markdown_to_html(text: &str) -> String {
+    use pulldown_cmark::{Options, Parser, html};
+
+    let options = Options::ENABLE_TABLES
+        | Options::ENABLE_FOOTNOTES
+        | Options::ENABLE_STRIKETHROUGH
+        | Options::ENABLE_TASKLISTS;
+    let parser = Parser::new_ext(text, options);
+    let mut html_out = String::with_capacity(text.len() * 2);
+    html::push_html(&mut html_out, parser);
+    html_out
 }
 
 fn escape_html(text: &str) -> String {
@@ -339,6 +350,33 @@ mod tests {
     fn test_plain_text_to_html_crlf_and_blanks() {
         let html = plain_text_to_html("a\r\n\r\nb\n\n\n\nc");
         assert_eq!(html, "<p>a</p>\n<p>b</p>\n<p>c</p>\n");
+    }
+
+    #[test]
+    fn test_markdown_to_html_basics() {
+        let html = markdown_to_html("# Title\n\nSome *emphasis* and **bold**.\n\n- a\n- b");
+        assert!(html.contains("<h1>Title</h1>"));
+        assert!(html.contains("<em>emphasis</em>"));
+        assert!(html.contains("<strong>bold</strong>"));
+        assert!(html.contains("<li>a</li>"));
+    }
+
+    #[test]
+    fn test_markdown_chapter_parses_with_formatting() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let path = dir.path().join("book.md");
+        std::fs::write(&path, "# A Heading\n\nPlain *italic words here* end.")?;
+
+        let mut book = crate::formats::open(&path.to_string_lossy())?;
+        let parsed = parse_chapter(book.as_mut(), 0, 80, 0, None)?;
+        let text = parsed.text_lines.join("\n");
+        assert!(text.contains("A Heading"));
+        assert!(text.contains("italic words here"));
+        assert!(
+            !parsed.formatting.is_empty(),
+            "emphasis should survive the pipeline as formatting"
+        );
+        Ok(())
     }
 
     #[test]

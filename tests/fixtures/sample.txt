@@ -1,0 +1,8 @@
+The Plain Text Sample
+
+This paragraph is hard-wrapped
+across several short lines that
+should reflow into one paragraph.
+
+A second paragraph follows after a blank line, long enough to be wrapped
+by the reader at narrow widths without any trouble at all.
