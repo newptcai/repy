@@ -189,6 +189,42 @@ impl Board {
             .get(state.ui_state.selected_search_result)
             .map(|result| result.line);
 
+        // Keep annotation markers outside the paragraph that contains the
+        // book text. Prepending the marker as a span makes it participate in
+        // Paragraph wrapping, which can push a full-width line onto an extra
+        // visual row and misalign every line below it.
+        let has_highlight_gutter = !state.ui_state.highlights.is_empty() && area.width > 0;
+        let text_area = if has_highlight_gutter {
+            Rect {
+                x: area.x.saturating_add(1),
+                width: area.width.saturating_sub(1),
+                ..area
+            }
+        } else {
+            area
+        };
+
+        if has_highlight_gutter {
+            let marker_lines: Vec<Line> = (start_line..end_line)
+                .map(|line_num| {
+                    let marker = state
+                        .ui_state
+                        .highlight_ranges
+                        .get(&line_num)
+                        .and_then(|ranges| ranges.first());
+                    match marker {
+                        Some(range) => Line::from(Span::styled(
+                            "▎",
+                            Style::default().fg(theme.annotation_bg(range.color)),
+                        )),
+                        None => Line::raw(" "),
+                    }
+                })
+                .collect();
+            let gutter_area = Rect { width: 1, ..area };
+            frame.render_widget(Paragraph::new(marker_lines), gutter_area);
+        }
+
         let visible_lines: Vec<Line> = text_structure
             .text_lines
             .get(start_line..end_line)
@@ -205,23 +241,6 @@ impl Board {
 
                 if text_structure.image_maps.contains_key(&line_num) {
                     return Line::raw(line).alignment(Alignment::Center);
-                }
-
-                // Margin indicator: a colored bar on rows covered by a
-                // highlight. The 1-col gutter is reserved for the whole book
-                // as soon as it has any highlight, so lines never shift.
-                if !state.ui_state.highlights.is_empty() {
-                    let marker = state
-                        .ui_state
-                        .highlight_ranges
-                        .get(&line_num)
-                        .and_then(|ranges| ranges.first());
-                    spans.push(match marker {
-                        Some(range) => {
-                            Span::styled("▎", Style::default().fg(theme.annotation_bg(range.color)))
-                        }
-                        None => Span::raw(" "),
-                    });
                 }
 
                 if state.config.settings.show_line_numbers {
@@ -324,7 +343,7 @@ impl Board {
                                     .map(|(_, cursor_col)| cursor_col),
                             ));
                         }
-                        return Line::from(spans);
+                        return Line::from(Self::trim_leading_whitespace(spans));
                     }
                 }
 
@@ -338,19 +357,42 @@ impl Board {
                     } else {
                         spans.extend(Self::apply_cursor_range(line_spans, cursor_col));
                     }
-                    return Line::from(spans);
+                    return Line::from(Self::trim_leading_whitespace(spans));
                 }
 
                 spans.extend(line_spans);
-                Line::from(spans)
+                Line::from(Self::trim_leading_whitespace(spans))
             })
             .collect();
 
-        let paragraph = Paragraph::new(visible_lines)
-            .wrap(Wrap { trim: true })
-            .block(Block::default());
+        // `text_lines` are already wrapped by the parser to the configured
+        // reading width. Wrapping them again here creates extra visual rows
+        // that have no corresponding row in formatting, highlight, cursor,
+        // or image coordinates.
+        let paragraph = Paragraph::new(visible_lines).block(Block::default());
 
-        frame.render_widget(paragraph, area);
+        frame.render_widget(paragraph, text_area);
+    }
+
+    /// Match `Paragraph::wrap(Wrap { trim: true })`'s leading-whitespace
+    /// behavior without allowing the widget to introduce additional rows.
+    fn trim_leading_whitespace(spans: Vec<Span<'static>>) -> Vec<Span<'static>> {
+        let mut result = Vec::with_capacity(spans.len());
+        let mut trimming = true;
+        for span in spans {
+            if !trimming {
+                result.push(span);
+                continue;
+            }
+
+            let trimmed = span.content.trim_start_matches(char::is_whitespace);
+            if trimmed.is_empty() {
+                continue;
+            }
+            trimming = false;
+            result.push(Span::styled(trimmed.to_string(), span.style));
+        }
+        result
     }
 
     fn apply_visual_selection_range(
