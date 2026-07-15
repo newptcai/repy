@@ -34,6 +34,7 @@ zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
 quick-xml = { version = "0.41.0", features = ["encoding"] }
 base64 = "0.22.1"
 mobi = "0.8.0"
+md-5 = "0.10.6"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

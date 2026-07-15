@@ -32,8 +32,9 @@ use crate::models::{
     ReadingState, ReadingStatistics, ScannedBook, SearchData, TextStructure, TocEntry, WindowType,
 };
 use crate::renderer::{self, build_chapter_break};
-use crate::settings::{DICT_PRESET_LIST, InlineImages};
+use crate::settings::{DEFAULT_KOSYNC_SERVER, DICT_PRESET_LIST, InlineImages};
 use crate::state::State;
+use crate::sync::{self, KosyncConfig, RemoteProgress};
 use crate::theme::{ColorTheme, Theme};
 use crate::ui::board::Board;
 use crate::ui::graphics::Graphics;
@@ -284,6 +285,8 @@ pub struct UiState {
     pub dictionary_client_used: String,
     pub dictionary_scroll_offset: u16,
     pub dictionary_command_query: String,
+    pub settings_input_field: Option<String>,
+    pub settings_input_buffer: String,
     pub settings_selected_index: usize,
     pub dictionary_loading: bool,
     pub dictionary_is_wikipedia: bool,
@@ -312,6 +315,7 @@ pub struct UiState {
     /// motion key (e.g. `2` in `2fa`) so it survives the intermediate key.
     pub pending_visual_find: Option<(VisualFindDirection, u32)>,
     pub pending_mark_command: Option<PendingMarkCommand>,
+    pub pending_sync_progress: Option<(f64, String)>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -392,6 +396,8 @@ impl UiState {
             dictionary_client_used: String::new(),
             dictionary_scroll_offset: 0,
             dictionary_command_query: String::new(),
+            settings_input_field: None,
+            settings_input_buffer: String::new(),
             settings_selected_index: 0,
             dictionary_loading: false,
             dictionary_is_wikipedia: false,
@@ -411,6 +417,7 @@ impl UiState {
             visual_search_selected: 0,
             pending_visual_find: None,
             pending_mark_command: None,
+            pending_sync_progress: None,
         }
     }
 
@@ -509,6 +516,9 @@ impl UiState {
                 self.dictionary_scroll_offset = 0;
             }
             WindowType::Settings => self.show_settings = true,
+            WindowType::SettingsTextInput => {
+                self.show_settings = false;
+            }
             WindowType::Visual => {}
             WindowType::DictionaryCommandInput => {
                 self.show_settings = false;
@@ -520,6 +530,7 @@ impl UiState {
             WindowType::ConfirmDeleteHighlight => {
                 self.show_highlights = false;
             }
+            WindowType::ConfirmSyncProgress => {}
             WindowType::LinkPreview => {
                 self.show_links = false;
             }
@@ -591,6 +602,10 @@ enum SettingItem {
     Width,
     ShowTopBar,
     ColorTheme,
+    KosyncPullNow,
+    KosyncServer,
+    KosyncUsername,
+    KosyncPassword,
 }
 
 impl SettingItem {
@@ -607,6 +622,10 @@ impl SettingItem {
             SettingItem::Width,
             SettingItem::ShowTopBar,
             SettingItem::ColorTheme,
+            SettingItem::KosyncPullNow,
+            SettingItem::KosyncServer,
+            SettingItem::KosyncUsername,
+            SettingItem::KosyncPassword,
         ]
     }
 }
@@ -760,6 +779,9 @@ pub struct Reader<B: Backend = CrosstermBackend<io::Stdout>> {
     /// rendered. Some terminal graphics protocols do not become visible until
     /// the following draw.
     library_cover_redraw_pending: bool,
+    kosync_pull_rx:
+        Option<std::sync::mpsc::Receiver<(String, eyre::Result<Option<RemoteProgress>>)>>,
+    kosync_pull_is_manual: bool,
 }
 
 /// Full-screen in-terminal image viewer state (`WindowType::ImageView`).
@@ -1184,6 +1206,8 @@ where
             library_covers: HashMap::new(),
             library_cover_pending: None,
             library_cover_redraw_pending: false,
+            kosync_pull_rx: None,
+            kosync_pull_is_manual: false,
         })
     }
 
@@ -1452,7 +1476,81 @@ where
             }
         }
 
+        self.start_kosync_pull(false);
         Ok(())
+    }
+
+    fn kosync_config(&self) -> Option<KosyncConfig> {
+        let state = self.state.borrow();
+        let settings = &state.config.settings;
+        let server = settings.kosync_server.as_deref()?;
+        let username = settings.kosync_username.as_deref()?;
+        let password = settings.kosync_password.as_deref()?;
+        KosyncConfig::from_password(server, username, password)
+    }
+
+    fn start_kosync_pull(&mut self, manual: bool) {
+        let Some(config) = self.kosync_config() else {
+            return;
+        };
+        let Some(path) = self.ebook.as_ref().map(|book| book.path().to_string()) else {
+            return;
+        };
+        let Ok(document) = sync::document_id(&path) else {
+            self.state.borrow_mut().ui_state.set_message(
+                "KOReader sync: could not fingerprint this book".into(),
+                MessageType::Warning,
+            );
+            return;
+        };
+        let (tx, rx) = std::sync::mpsc::channel();
+        let request_document = document.clone();
+        std::thread::spawn(move || {
+            let result = sync::pull(&config, &request_document);
+            let _ = tx.send((document, result));
+        });
+        self.kosync_pull_rx = Some(rx);
+        self.kosync_pull_is_manual = manual;
+    }
+
+    fn poll_kosync(&mut self) {
+        let result = self
+            .kosync_pull_rx
+            .as_ref()
+            .and_then(|rx| rx.try_recv().ok());
+        let Some((document, result)) = result else {
+            return;
+        };
+        self.kosync_pull_rx = None;
+        let current_document = self
+            .ebook
+            .as_ref()
+            .and_then(|book| sync::document_id(book.path()).ok());
+        if current_document.as_deref() != Some(document.as_str()) {
+            return;
+        }
+        let manual = std::mem::take(&mut self.kosync_pull_is_manual);
+        match result {
+            Ok(Some(remote)) => {
+                let row = self.state.borrow().reading_state.row;
+                let local = self.board.content_fraction(row);
+                if manual || remote.percentage > local + 0.000_001 {
+                    let mut state = self.state.borrow_mut();
+                    state.ui_state.pending_sync_progress = Some((remote.percentage, remote.device));
+                    state.ui_state.open_window(WindowType::ConfirmSyncProgress);
+                }
+            }
+            Ok(None) if manual => self.state.borrow_mut().ui_state.set_message(
+                "No remote KOReader progress found".into(),
+                MessageType::Info,
+            ),
+            Ok(None) => {}
+            Err(error) => self
+                .state
+                .borrow_mut()
+                .ui_state
+                .set_message(format!("KOReader sync: {error}"), MessageType::Warning),
+        }
     }
 
     fn start_reading_session(&mut self, book_id: String, row: usize) {
@@ -1750,6 +1848,7 @@ impl Reader {
             }
 
             self.tts_poll_worker()?;
+            self.poll_kosync();
             self.poll_library_cover();
             self.poll_inline_images();
 
@@ -1943,6 +2042,7 @@ where
             WindowType::Highlights => self.handle_highlights_mode_keys(key, repeat_count)?,
             WindowType::HighlightCommentEditor => self.handle_highlight_comment_editor_keys(key)?,
             WindowType::ConfirmDeleteHighlight => self.handle_confirm_delete_highlight_keys(key)?,
+            WindowType::ConfirmSyncProgress => self.handle_confirm_sync_progress_keys(key)?,
             WindowType::Library => self.handle_library_mode_keys(key, repeat_count)?,
             WindowType::Settings => self.handle_settings_mode_keys(key, repeat_count)?,
             WindowType::Links => self.handle_links_mode_keys(key, repeat_count)?,
@@ -1954,6 +2054,7 @@ where
             WindowType::Statistics => self.handle_modal_close_keys(key)?,
             WindowType::Dictionary => self.handle_dictionary_mode_keys(key, repeat_count)?,
             WindowType::DictionaryCommandInput => self.handle_dictionary_command_input_keys(key)?,
+            WindowType::SettingsTextInput => self.handle_settings_text_input_keys(key)?,
             _ => self.handle_normal_mode_keys(key, repeat_count)?,
         }
 
@@ -2526,6 +2627,39 @@ where
                 let mut state = self.state.borrow_mut();
                 state.ui_state.pending_delete_highlight = None;
                 state.ui_state.open_window(WindowType::Visual);
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn handle_confirm_sync_progress_keys(&mut self, key: KeyEvent) -> eyre::Result<()> {
+        match key.code {
+            KeyCode::Char('y') | KeyCode::Char('Y') | KeyCode::Enter => {
+                let pending = self
+                    .state
+                    .borrow_mut()
+                    .ui_state
+                    .pending_sync_progress
+                    .take();
+                if let Some((percentage, _)) = pending {
+                    let row = self.board.row_for_fraction(percentage);
+                    let mut state = self.state.borrow_mut();
+                    state.record_jump();
+                    state.reading_state.row = row;
+                    state.ui_state.open_window(WindowType::Reader);
+                    state.ui_state.set_message(
+                        format!("Synced to {:.1}%", percentage * 100.0),
+                        MessageType::Info,
+                    );
+                    drop(state);
+                    self.persist_state()?;
+                }
+            }
+            KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc | KeyCode::Char('q') => {
+                let mut state = self.state.borrow_mut();
+                state.ui_state.pending_sync_progress = None;
+                state.ui_state.open_window(WindowType::Reader);
             }
             _ => {}
         }
@@ -3192,6 +3326,48 @@ where
                     state
                         .ui_state
                         .open_window(WindowType::DictionaryCommandInput);
+                } else if matches!(
+                    selected,
+                    Some(
+                        SettingItem::KosyncServer
+                            | SettingItem::KosyncUsername
+                            | SettingItem::KosyncPassword
+                    )
+                ) {
+                    let mut state = self.state.borrow_mut();
+                    let (field, value) = match selected.unwrap() {
+                        SettingItem::KosyncServer => (
+                            "KOReader sync server",
+                            state
+                                .config
+                                .settings
+                                .kosync_server
+                                .clone()
+                                .unwrap_or_default(),
+                        ),
+                        SettingItem::KosyncUsername => (
+                            "KOReader sync username",
+                            state
+                                .config
+                                .settings
+                                .kosync_username
+                                .clone()
+                                .unwrap_or_default(),
+                        ),
+                        SettingItem::KosyncPassword => (
+                            "KOReader sync password",
+                            state
+                                .config
+                                .settings
+                                .kosync_password
+                                .clone()
+                                .unwrap_or_default(),
+                        ),
+                        _ => unreachable!(),
+                    };
+                    state.ui_state.settings_input_field = Some(field.to_string());
+                    state.ui_state.settings_input_buffer = value;
+                    state.ui_state.open_window(WindowType::SettingsTextInput);
                 } else {
                     self.toggle_selected_setting()?;
                 }
@@ -3334,6 +3510,44 @@ where
             KeyCode::Char(c) => {
                 let mut state = self.state.borrow_mut();
                 state.ui_state.dictionary_command_query.push(c);
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn handle_settings_text_input_keys(&mut self, key: KeyEvent) -> eyre::Result<()> {
+        match key.code {
+            KeyCode::Enter => {
+                let mut state = self.state.borrow_mut();
+                let value = state.ui_state.settings_input_buffer.trim().to_string();
+                let value = (!value.is_empty()).then_some(value);
+                match state.ui_state.settings_input_field.as_deref() {
+                    Some("KOReader sync server") => state.config.settings.kosync_server = value,
+                    Some("KOReader sync username") => state.config.settings.kosync_username = value,
+                    Some("KOReader sync password") => state.config.settings.kosync_password = value,
+                    _ => {}
+                }
+                state.config.save()?;
+                state.ui_state.settings_input_field = None;
+                state.ui_state.settings_input_buffer.clear();
+                state.ui_state.open_window(WindowType::Settings);
+            }
+            KeyCode::Esc => {
+                let mut state = self.state.borrow_mut();
+                state.ui_state.settings_input_field = None;
+                state.ui_state.settings_input_buffer.clear();
+                state.ui_state.open_window(WindowType::Settings);
+            }
+            KeyCode::Backspace => {
+                self.state.borrow_mut().ui_state.settings_input_buffer.pop();
+            }
+            KeyCode::Char(c) => {
+                self.state
+                    .borrow_mut()
+                    .ui_state
+                    .settings_input_buffer
+                    .push(c);
             }
             _ => {}
         }
@@ -3696,10 +3910,14 @@ where
             StatisticsWindow::render(frame, frame.area(), &state.ui_state.statistics, &theme);
         } else if state.ui_state.active_window == WindowType::DictionaryCommandInput {
             Self::render_dictionary_command_input_static(frame, state, &theme);
+        } else if state.ui_state.active_window == WindowType::SettingsTextInput {
+            Self::render_settings_text_input_static(frame, state, &theme);
         } else if state.ui_state.active_window == WindowType::HighlightCommentEditor {
             Self::render_highlight_comment_editor_static(frame, state, &theme);
         } else if state.ui_state.active_window == WindowType::ConfirmDeleteHighlight {
             Self::render_confirm_delete_highlight_static(frame, state, &theme);
+        } else if state.ui_state.active_window == WindowType::ConfirmSyncProgress {
+            Self::render_confirm_sync_progress_static(frame, state, &theme);
         } else if state.ui_state.show_settings {
             let entries = Self::settings_entries(state);
             SettingsWindow::render(
@@ -3905,6 +4123,23 @@ where
                         suffix
                     )
                 }
+                SettingItem::KosyncServer => format!(
+                    "KOReader sync server: {}",
+                    settings.kosync_server.as_deref().unwrap_or("off")
+                ),
+                SettingItem::KosyncUsername => format!(
+                    "KOReader sync username: {}",
+                    settings.kosync_username.as_deref().unwrap_or("not set")
+                ),
+                SettingItem::KosyncPassword => format!(
+                    "KOReader sync password: {}",
+                    if settings.kosync_password.is_some() {
+                        "••••••••"
+                    } else {
+                        "not set"
+                    }
+                ),
+                SettingItem::KosyncPullNow => "Pull KOReader progress now".to_string(),
             })
             .collect()
     }
@@ -4180,6 +4415,47 @@ where
         ));
     }
 
+    fn render_settings_text_input_static(
+        frame: &mut Frame,
+        state: &ApplicationState,
+        theme: &Theme,
+    ) {
+        let area = Rect::new(
+            frame.area().x + frame.area().width / 6,
+            frame.area().y + frame.area().height / 2 - 2,
+            frame.area().width * 2 / 3,
+            3,
+        );
+        let field = state
+            .ui_state
+            .settings_input_field
+            .as_deref()
+            .unwrap_or("Setting");
+        let masked = field == "KOReader sync password";
+        let display = if masked {
+            "•".repeat(state.ui_state.settings_input_buffer.chars().count())
+        } else {
+            state.ui_state.settings_input_buffer.clone()
+        };
+        let input = Paragraph::new(Line::from(display.as_str())).block(
+            Block::default()
+                .title(format!("{field} — Enter saves, Esc cancels"))
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(theme.info_fg)),
+        );
+        frame.render_widget(Clear, area);
+        frame.render_widget(input, area);
+        frame.set_cursor_position((
+            area.x
+                + display
+                    .chars()
+                    .count()
+                    .min(area.width.saturating_sub(2) as usize) as u16
+                + 1,
+            area.y + 1,
+        ));
+    }
+
     fn render_highlight_comment_editor_static(
         frame: &mut Frame,
         state: &ApplicationState,
@@ -4265,6 +4541,47 @@ where
             .style(theme.base_style());
         frame.render_widget(Clear, popup_area);
         frame.render_widget(paragraph, popup_area);
+    }
+
+    fn render_confirm_sync_progress_static(
+        frame: &mut Frame,
+        state: &ApplicationState,
+        theme: &Theme,
+    ) {
+        let Some((percentage, device)) = state.ui_state.pending_sync_progress.as_ref() else {
+            return;
+        };
+        let area = frame.area();
+        let width = (area.width * 2 / 3).max(44).min(area.width);
+        let height = 8u16.min(area.height);
+        let popup_area = Rect::new(
+            area.x + area.width.saturating_sub(width) / 2,
+            area.y + area.height.saturating_sub(height) / 2,
+            width,
+            height,
+        );
+        let lines = vec![
+            Line::from(""),
+            Line::from(format!(
+                "  {device} reports a reading position of {:.1}%.",
+                percentage * 100.0
+            )),
+            Line::from(""),
+            Line::from("  Jump to that position? (y/N)"),
+        ];
+        let block = Block::default()
+            .title("KOReader Sync")
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(theme.warning_fg))
+            .style(theme.base_style());
+        frame.render_widget(Clear, popup_area);
+        frame.render_widget(
+            Paragraph::new(lines)
+                .block(block)
+                .wrap(Wrap { trim: false })
+                .style(theme.base_style()),
+            popup_area,
+        );
     }
 
     fn render_link_preview_static(
@@ -6665,6 +6982,22 @@ where
                 self.cycle_color_theme()?;
                 return Ok(());
             }
+            SettingItem::KosyncServer
+            | SettingItem::KosyncUsername
+            | SettingItem::KosyncPassword => return Ok(()),
+            SettingItem::KosyncPullNow => {
+                drop(state);
+                self.start_kosync_pull(true);
+                self.state
+                    .borrow_mut()
+                    .ui_state
+                    .open_window(WindowType::Reader);
+                self.state
+                    .borrow_mut()
+                    .ui_state
+                    .set_message("Pulling KOReader progress…".into(), MessageType::Info);
+                return Ok(());
+            }
         }
         let _ = state.config.save();
         if rebuild_chapter_breaks {
@@ -6736,6 +7069,21 @@ where
                     .borrow_mut()
                     .ui_state
                     .set_message(format!("Theme reset to {theme_name}"), MessageType::Info);
+            }
+            Some(SettingItem::KosyncServer) => {
+                let mut state = self.state.borrow_mut();
+                state.config.settings.kosync_server = Some(DEFAULT_KOSYNC_SERVER.to_string());
+                state.config.save()?;
+            }
+            Some(SettingItem::KosyncUsername) => {
+                let mut state = self.state.borrow_mut();
+                state.config.settings.kosync_username = None;
+                state.config.save()?;
+            }
+            Some(SettingItem::KosyncPassword) => {
+                let mut state = self.state.borrow_mut();
+                state.config.settings.kosync_password = None;
+                state.config.save()?;
             }
             _ => {}
         }
@@ -8443,6 +8791,8 @@ mod tests {
             library_covers: HashMap::new(),
             library_cover_pending: None,
             library_cover_redraw_pending: false,
+            kosync_pull_rx: None,
+            kosync_pull_is_manual: false,
         }
     }
 

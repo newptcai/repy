@@ -39,7 +39,9 @@ impl Config {
         let filepath = prefix.join("configuration.json");
 
         let (settings, keymap_user_dict) = if filepath.exists() {
-            parse_config_file(&filepath)?
+            let parsed = parse_config_file(&filepath)?;
+            restrict_config_permissions(&filepath)?;
+            parsed
         } else {
             let settings = Settings::default();
             let keymap_user_dict = CfgDefaultKeymaps::default();
@@ -49,6 +51,7 @@ impl Config {
             });
             fs::create_dir_all(&prefix)?;
             fs::write(&filepath, serde_json::to_string_pretty(&initial_config)?)?;
+            restrict_config_permissions(&filepath)?;
             (settings, keymap_user_dict)
         };
 
@@ -101,6 +104,7 @@ impl Config {
         }
 
         fs::write(&self.filepath, config_str)?;
+        restrict_config_permissions(&self.filepath)?;
         Ok(())
     }
 
@@ -116,6 +120,15 @@ impl Config {
             filepath,
         })
     }
+}
+
+fn restrict_config_permissions(path: &std::path::Path) -> Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
+    }
+    Ok(())
 }
 
 pub fn get_app_data_prefix() -> Result<PathBuf> {
