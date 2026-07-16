@@ -1,0 +1,29 @@
+---
+source: src/ui/reader/snapshot_tests.rs
+assertion_line: 225
+expression: reader.terminal.backend()
+---
+"                         Accessible EPUB 3                           ~1m left 0%"
+"                                                                                "
+"                                                                                "
+"             ┌Settings───────────────────────────────────────────┐              "
+"             │ Display                                           │              "
+"             │   Show line numbers: false                        │              "
+"             │   Show progress indicator: true                   │              "
+"             │   Show top bar: true                              │              "
+"             │   Page scroll animation: true                     │              "
+"             │   Seamless between chapters: false                │              "
+"             │   Inline images: placeholder                      │              "
+"             │   Text width: 80                                  │              "
+"             │   Color theme: default (terminal) (global)        │              "
+"             │ Input                                             │              "
+"             │   Mouse support: false                            │              "
+"             │ Tools                                             │              "
+"             │   Dictionary client: auto (default)               │              "
+"             │   TTS engine: purr                                │              "
+"             │ KOReader Sync                                     │              "
+"             │Enter: change/edit  r: reset  Sync: pull-only      │              "
+"             └───────────────────────────────────────────────────┘              "
+"                                                                                "
+"                                                                                "
+"                                                                                "

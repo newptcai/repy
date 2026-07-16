@@ -217,6 +217,33 @@ fn reading_stats_dedup_and_jump_detection() {
 }
 
 #[test]
+fn settings_window_sections() {
+    let mut reader = test_reader();
+    press_char(&mut reader, 's');
+    reader.state.borrow_mut().ui_state.clear_message();
+    reader.draw().expect("failed to draw settings window");
+    insta::assert_snapshot!(reader.terminal.backend());
+}
+
+#[test]
+fn settings_window_scrolls_to_selection() {
+    let mut reader = test_reader();
+    press_char(&mut reader, 's');
+    // Drive the selection down into the last section, which starts below the
+    // initial fold; the list must scroll it into view.
+    for _ in 0..14 {
+        press_char(&mut reader, 'j');
+    }
+    reader.state.borrow_mut().ui_state.clear_message();
+    reader.draw().expect("failed to draw settings window");
+    let screen = format!("{}", reader.terminal.backend());
+    assert!(
+        screen.contains("Pull KOReader progress now"),
+        "selecting the last setting should scroll it into view:\n{screen}"
+    );
+}
+
+#[test]
 fn line_numbers() {
     let mut reader = test_reader();
     // There is no single "toggle line numbers" key; it lives in the
@@ -408,11 +435,57 @@ fn confirm_sync_progress_prompt() {
     let mut reader = test_reader();
     {
         let mut state = reader.state.borrow_mut();
-        state.ui_state.pending_sync_progress = Some((0.42, "KOReader (kobo)".to_string()));
+        state.ui_state.pending_sync_progress = Some((0.42, "KOReader (kobo)".to_string(), 0));
         state
             .ui_state
             .open_window(crate::models::WindowType::ConfirmSyncProgress);
     }
     reader.draw().expect("failed to draw sync prompt");
     insta::assert_snapshot!(reader.terminal.backend());
+}
+
+#[test]
+fn kosync_xpointer_anchors_exact_chapter() {
+    let reader = test_reader();
+    let starts = reader.content_start_rows.clone();
+    assert!(starts.len() >= 2, "fixture must have multiple chapters");
+    let chapter = starts.len() - 1;
+    let chapter_start = starts[chapter];
+
+    // KOReader reports the very start of the last chapter via DocFragment[N].
+    // The percentage is set to the chapter start so the plausibility guard
+    // passes; the XPointer (not the percentage) drives the landing.
+    let percentage = reader.board.content_fraction(chapter_start);
+    let remote = crate::sync::RemoteProgress {
+        document: "doc".into(),
+        progress: format!("/body/DocFragment[{}]/body", chapter + 1),
+        percentage,
+        device: "KOReader".into(),
+        device_id: String::new(),
+        timestamp: 0,
+    };
+
+    let mut reader = reader;
+    let row = reader.resolve_kosync_target_row(&remote);
+    assert!(
+        row.abs_diff(chapter_start) <= 1,
+        "XPointer should anchor the chapter start (got {row}, want {chapter_start})"
+    );
+}
+
+#[test]
+fn kosync_falls_back_when_no_xpointer() {
+    let mut reader = test_reader();
+    // A bare percentage (what repy/older clients store) has no XPointer, so
+    // resolution falls back to the content-percentage mapping.
+    let remote = crate::sync::RemoteProgress {
+        document: "doc".into(),
+        progress: "0.50000000".into(),
+        percentage: 0.5,
+        device: "KOReader".into(),
+        device_id: String::new(),
+        timestamp: 0,
+    };
+    let row = reader.resolve_kosync_target_row(&remote);
+    assert_eq!(row, reader.board.row_for_fraction(0.5));
 }

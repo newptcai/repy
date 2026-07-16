@@ -13,3 +13,4 @@ pub mod state;
 pub mod sync;
 pub mod theme;
 pub mod ui;
+pub mod xpointer;
