@@ -59,13 +59,13 @@ Priority order:
    validated downloads, and direct open. The protocol-neutral model leaves
    OPDS 2.0 as an additional JSON parser.
 
-## Phase 6 — Typography (do last: perturbs the row-keyed coordinate system)
+## Phase 6 — Typography — ✅ complete (2026-07)
 
 All changes go inside/around `wrap_text` in `src/parser.rs` *before* styling recovery; bundle into one parser-touching release.
 
-1. **Paragraph spacing** (S) and **line spacing 1.5/2.0** (M) — insert blank lines pre-recovery; j/k skip blanks; toggle triggers re-parse.
-2. **Justification** (M) — post-wrap space distribution before styling recovery; skip code/centered/CJK-only lines and paragraph-final lines.
-3. **First-line indent** mode (S, optional) — classic book typography (indent + no blank line).
+1. **Paragraph spacing** and **line spacing 1.5/2.0** — ✅ done: global paragraph-style and line-spacing controls insert layout rows before coordinate recovery; vertical motions skip generated gaps and changes trigger a full-book re-parse.
+2. **Justification** — ✅ done: display-width-aware space distribution skips structural, centered, CJK-only, and paragraph-final lines while recovered formatting and links retain correct coordinates.
+3. **First-line indent** mode — ✅ done: the `indented` paragraph style removes prose gaps and applies a two-column first-line indent; `compact` provides the same gapless layout without indentation.
 
 ## Explicitly skipped (poor TUI fits)
 

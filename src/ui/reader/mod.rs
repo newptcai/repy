@@ -32,8 +32,11 @@ use crate::models::{
     ReadingState, ReadingStatistics, ScannedBook, SearchData, TextStructure, TocEntry, WindowType,
 };
 use crate::opds;
+use crate::parser::TypographyOptions;
 use crate::renderer::{self, build_chapter_break};
-use crate::settings::{DEFAULT_KOSYNC_SERVER, DICT_PRESET_LIST, InlineImages};
+use crate::settings::{
+    DEFAULT_KOSYNC_SERVER, DICT_PRESET_LIST, InlineImages, LineSpacing, ParagraphStyle,
+};
 use crate::state::State;
 use crate::sync::{self, KosyncConfig, RemoteProgress};
 use crate::theme::{ColorTheme, Theme};
@@ -631,6 +634,9 @@ enum SettingItem {
     ShowProgressIndicator,
     SeamlessBetweenChapters,
     InlineImages,
+    ParagraphStyle,
+    LineSpacing,
+    JustifyText,
     DictionaryClient,
     TtsEngine,
     Width,
@@ -656,6 +662,9 @@ const SETTINGS_SECTIONS: &[(&str, &[SettingItem])] = &[
             SettingItem::PageScrollAnimation,
             SettingItem::SeamlessBetweenChapters,
             SettingItem::InlineImages,
+            SettingItem::ParagraphStyle,
+            SettingItem::LineSpacing,
+            SettingItem::JustifyText,
             SettingItem::Width,
             SettingItem::ColorTheme,
         ],
@@ -807,6 +816,9 @@ pub struct Reader<B: Backend = CrosstermBackend<io::Stdout>> {
     /// (`None` = placeholder mode). A mismatch with the desired value
     /// forces a full re-parse of every chapter.
     current_inline_image_rows: Option<usize>,
+    /// Typography used for every cached chapter; a mismatch requires a
+    /// full-book rebuild because all subsequent absolute rows move.
+    current_typography: TypographyOptions,
     dictionary_res_rx: Option<std::sync::mpsc::Receiver<DictionaryResult>>,
     /// Signals that the background library scan finished (cache updated).
     library_scan_rx: Option<std::sync::mpsc::Receiver<()>>,
@@ -1269,6 +1281,7 @@ where
             chapter_text_structures: Vec::new(),
             current_text_width: None,
             current_inline_image_rows: None,
+            current_typography: TypographyOptions::default(),
             dictionary_res_rx: None,
             library_scan_rx: None,
             opds_rx: None,
@@ -1467,13 +1480,20 @@ where
 
         let page_height = self.chapter_break_page_height();
         let inline_image_rows = self.inline_image_max_rows();
-        let all_content =
-            renderer::parse_book(epub.as_mut(), text_width, page_height, inline_image_rows)?;
+        let typography = self.typography_options();
+        let all_content = renderer::parse_book_with_typography(
+            epub.as_mut(),
+            text_width,
+            page_height,
+            inline_image_rows,
+            typography,
+        )?;
 
         // Store per-chapter structures for incremental rebuilds
         self.chapter_text_structures = all_content;
         self.current_text_width = Some(text_width);
         self.current_inline_image_rows = inline_image_rows;
+        self.current_typography = typography;
 
         let mut combined_text_structure = TextStructure::default();
         let mut content_start_rows = Vec::with_capacity(self.chapter_text_structures.len());
@@ -1500,6 +1520,12 @@ where
             combined_text_structure
                 .image_block_rows
                 .extend(ts.image_block_rows.clone());
+            combined_text_structure
+                .paragraph_starts
+                .extend(ts.paragraph_starts.iter().copied());
+            combined_text_structure
+                .typography_spacing_rows
+                .extend(ts.typography_spacing_rows.iter().copied());
         }
 
         self.board.update_text_structure(combined_text_structure);
@@ -4714,6 +4740,15 @@ where
                 SettingItem::InlineImages => {
                     format!("Inline images: {}", settings.inline_images.label())
                 }
+                SettingItem::ParagraphStyle => {
+                    format!("Paragraph style: {}", settings.paragraph_style.label())
+                }
+                SettingItem::LineSpacing => {
+                    format!("Line spacing: {}", settings.line_spacing.label())
+                }
+                SettingItem::JustifyText => {
+                    format!("Justify text: {}", settings.justify_text)
+                }
                 SettingItem::DictionaryClient => {
                     let client = if settings.dictionary_client.trim().is_empty() {
                         "auto"
@@ -5820,11 +5855,25 @@ where
             AppDirection::Up => {
                 if current_row > 0 {
                     state.reading_state.row -= 1;
+                    while state.reading_state.row > 0
+                        && self
+                            .board
+                            .is_typography_spacing_row(state.reading_state.row)
+                    {
+                        state.reading_state.row -= 1;
+                    }
                 }
             }
             AppDirection::Down => {
                 if current_row < total_lines.saturating_sub(1) {
                     state.reading_state.row += 1;
+                    while state.reading_state.row < total_lines.saturating_sub(1)
+                        && self
+                            .board
+                            .is_typography_spacing_row(state.reading_state.row)
+                    {
+                        state.reading_state.row += 1;
+                    }
                 }
             }
             AppDirection::PageUp => {
@@ -6038,7 +6087,10 @@ where
             }
             AppDirection::Up => {
                 if row > 0 {
-                    let prev_row = row - 1;
+                    let mut prev_row = row - 1;
+                    while prev_row > 0 && self.board.is_typography_spacing_row(prev_row) {
+                        prev_row -= 1;
+                    }
                     let prev_len = self.board.line_char_count(prev_row);
                     (prev_row, col.min(prev_len.saturating_sub(1)))
                 } else {
@@ -6047,7 +6099,12 @@ where
             }
             AppDirection::Down => {
                 if row + 1 < total_lines {
-                    let next_row = row + 1;
+                    let mut next_row = row + 1;
+                    while next_row + 1 < total_lines
+                        && self.board.is_typography_spacing_row(next_row)
+                    {
+                        next_row += 1;
+                    }
                     let next_len = self.board.line_char_count(next_row);
                     (next_row, col.min(next_len.saturating_sub(1)))
                 } else {
@@ -6198,6 +6255,15 @@ where
         let Some((row, _)) = self.current_visual_cursor() else {
             return;
         };
+        if let Some(&next) = self
+            .board
+            .paragraph_starts()
+            .iter()
+            .find(|&&start| start > row)
+        {
+            self.set_visual_cursor_and_scroll((next, 0));
+            return;
+        }
         let total = self.board.total_lines();
         if total == 0 {
             return;
@@ -6225,6 +6291,16 @@ where
         };
         if row == 0 {
             self.set_visual_cursor_and_scroll((0, 0));
+            return;
+        }
+        if let Some(&previous) = self
+            .board
+            .paragraph_starts()
+            .iter()
+            .rev()
+            .find(|&&start| start < row)
+        {
+            self.set_visual_cursor_and_scroll((previous, 0));
             return;
         }
 
@@ -6531,6 +6607,15 @@ where
         match self.state.borrow().config.settings.inline_images {
             InlineImages::Placeholder => None,
             InlineImages::Shown => Some(self.page_size().saturating_sub(2).max(4)),
+        }
+    }
+
+    fn typography_options(&self) -> TypographyOptions {
+        let settings = &self.state.borrow().config.settings;
+        TypographyOptions {
+            paragraph_style: settings.paragraph_style,
+            line_spacing: settings.line_spacing,
+            justify: settings.justify_text,
         }
     }
 
@@ -7637,6 +7722,19 @@ where
                 // re-parses every chapter.
                 rebuild_chapter_breaks = true;
             }
+            SettingItem::ParagraphStyle => {
+                state.config.settings.paragraph_style =
+                    state.config.settings.paragraph_style.next();
+                rebuild_chapter_breaks = true;
+            }
+            SettingItem::LineSpacing => {
+                state.config.settings.line_spacing = state.config.settings.line_spacing.next();
+                rebuild_chapter_breaks = true;
+            }
+            SettingItem::JustifyText => {
+                state.config.settings.justify_text = !state.config.settings.justify_text;
+                rebuild_chapter_breaks = true;
+            }
             SettingItem::DictionaryClient => {
                 let current = if state.config.settings.dictionary_client.trim().is_empty() {
                     "auto"
@@ -7703,6 +7801,7 @@ where
             // Use current textwidth
             let textwidth = state.reading_state.textwidth;
             drop(state);
+            self.stop_tts();
             self.rebuild_text_structure_with_textwidth(textwidth)?;
         }
         Ok(())
@@ -7761,6 +7860,24 @@ where
                     MessageType::Info,
                 );
             }
+            Some(SettingItem::ParagraphStyle) => {
+                self.state.borrow_mut().config.settings.paragraph_style = ParagraphStyle::Spaced;
+                self.state.borrow().config.save()?;
+                let width = self.state.borrow().reading_state.textwidth;
+                self.rebuild_text_structure_with_textwidth(width)?;
+            }
+            Some(SettingItem::LineSpacing) => {
+                self.state.borrow_mut().config.settings.line_spacing = LineSpacing::Single;
+                self.state.borrow().config.save()?;
+                let width = self.state.borrow().reading_state.textwidth;
+                self.rebuild_text_structure_with_textwidth(width)?;
+            }
+            Some(SettingItem::JustifyText) => {
+                self.state.borrow_mut().config.settings.justify_text = false;
+                self.state.borrow().config.save()?;
+                let width = self.state.borrow().reading_state.textwidth;
+                self.rebuild_text_structure_with_textwidth(width)?;
+            }
             Some(SettingItem::ColorTheme) => {
                 self.set_effective_color_theme(None)?;
                 let theme_name = self.state.borrow().effective_color_theme().name();
@@ -7805,6 +7922,8 @@ where
     }
 
     fn rebuild_text_structure_with_textwidth(&mut self, textwidth: usize) -> eyre::Result<()> {
+        let old_row = self.state.borrow().reading_state.row;
+        let old_content_fraction = self.board.content_fraction(old_row);
         // Capture current position semantically to restore it after rebuild
         let (current_chapter_idx, current_chapter_offset) = {
             let row = self.state.borrow().reading_state.row;
@@ -7841,6 +7960,7 @@ where
         // Collect page_height and inline options before any mutable borrows
         let page_height = self.chapter_break_page_height();
         let inline_image_rows = self.inline_image_max_rows();
+        let typography = self.typography_options();
 
         let epub = match self.ebook.as_mut() {
             Some(epub) => epub,
@@ -7850,13 +7970,20 @@ where
         // Check if we need to rebuild or if width is the same
         let needs_rebuild = self.current_text_width != Some(text_width);
 
-        if inline_image_rows != self.current_inline_image_rows {
+        let typography_changed = typography != self.current_typography;
+        if inline_image_rows != self.current_inline_image_rows || typography_changed {
             // The inline-image layout changed: every chapter's rows are
             // stale, so re-parse the whole book.
-            self.chapter_text_structures =
-                renderer::parse_book(epub.as_mut(), text_width, page_height, inline_image_rows)?;
+            self.chapter_text_structures = renderer::parse_book_with_typography(
+                epub.as_mut(),
+                text_width,
+                page_height,
+                inline_image_rows,
+                typography,
+            )?;
             self.current_text_width = Some(text_width);
             self.current_inline_image_rows = inline_image_rows;
+            self.current_typography = typography;
         } else if needs_rebuild {
             // Only re-parse the current chapter for performance
             let total_chapters = epub.contents().len();
@@ -7871,12 +7998,13 @@ where
                 };
 
                 // Parse only the current chapter with new width
-                let mut parsed_chapter = renderer::parse_chapter(
+                let mut parsed_chapter = renderer::parse_chapter_with_typography(
                     epub.as_mut(),
                     current_chapter_idx,
                     text_width,
                     starting_line,
                     inline_image_rows,
+                    typography,
                 )?;
 
                 // Add chapter break if needed
@@ -7920,6 +8048,12 @@ where
             combined_text_structure
                 .image_block_rows
                 .extend(ts.image_block_rows.clone());
+            combined_text_structure
+                .paragraph_starts
+                .extend(ts.paragraph_starts.iter().copied());
+            combined_text_structure
+                .typography_spacing_rows
+                .extend(ts.typography_spacing_rows.iter().copied());
         }
         self.board.update_text_structure(combined_text_structure);
         self.content_start_rows = content_start_rows;
@@ -7945,6 +8079,9 @@ where
         }
 
         let total_lines = self.board.total_lines();
+        if typography_changed && total_lines > 0 {
+            state.reading_state.row = self.board.row_for_fraction(old_content_fraction);
+        }
         if total_lines > 0 && state.reading_state.row >= total_lines {
             state.reading_state.row = total_lines - 1;
         }
@@ -8547,8 +8684,10 @@ where
         let mut raw_paragraphs: Vec<(usize, usize)> = Vec::new();
         let mut start: Option<usize> = None;
         for (i, line) in lines.iter().enumerate() {
-            let is_content =
-                !line.is_empty() && line != CHAPTER_BREAK_MARKER && !line.starts_with("[Image:");
+            let is_content = self.board.is_typography_spacing_row(i)
+                || (!line.is_empty()
+                    && line != CHAPTER_BREAK_MARKER
+                    && !line.starts_with("[Image:"));
             if is_content {
                 if start.is_none() {
                     start = Some(i);
@@ -9425,7 +9564,9 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::{Reader, TtsChunk, WikipediaSearchResponse, WikipediaSummaryResponse};
+    use super::{
+        Reader, TtsChunk, TypographyOptions, WikipediaSearchResponse, WikipediaSummaryResponse,
+    };
     use crate::config::Config;
     use crate::models::{LibraryItem, LibrarySortMode, ScannedBook, TextStructure, TocEntry};
     use crate::settings::{CfgDefaultKeymaps, Settings};
@@ -9472,6 +9613,7 @@ mod tests {
             chapter_text_structures: Vec::new(),
             current_text_width: None,
             current_inline_image_rows: None,
+            current_typography: TypographyOptions::default(),
             dictionary_res_rx: None,
             library_scan_rx: None,
             opds_rx: None,

@@ -1,6 +1,6 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 #[derive(Debug, Clone, PartialEq, Default)]
 pub enum Direction {
@@ -406,6 +406,10 @@ pub struct TextStructure {
     /// block height in rows, placeholder line included. Empty when inline
     /// images are off or the image's dimensions were unknown at parse time.
     pub image_block_rows: HashMap<usize, usize>,
+    /// Starts of logical prose paragraphs, in absolute document rows.
+    pub paragraph_starts: Vec<usize>,
+    /// Blank rows inserted by typography options, in absolute document rows.
+    pub typography_spacing_rows: HashSet<usize>,
 }
 
 pub const CHAPTER_BREAK_MARKER: &str = "<repy:chapter-break>";
@@ -736,6 +740,8 @@ mod tests {
             }],
             pagebreak_map: std::collections::HashMap::new(),
             image_block_rows: std::collections::HashMap::new(),
+            paragraph_starts: Vec::new(),
+            typography_spacing_rows: std::collections::HashSet::new(),
         };
 
         assert_eq!(text_structure.text_lines.len(), 2);

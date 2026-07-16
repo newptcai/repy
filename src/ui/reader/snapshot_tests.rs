@@ -1,7 +1,7 @@
 //! Integration-style snapshot tests that drive `Reader<TestBackend>` through
 //! synthetic key events and snapshot the rendered 80x24 screen with insta.
 
-use super::{READING_JUMP_MIN_THRESHOLD_ROWS, Reader};
+use super::{READING_JUMP_MIN_THRESHOLD_ROWS, Reader, SettingItem};
 use crate::config::Config;
 use crate::settings::{CfgDefaultKeymaps, Settings};
 use crate::state::State;
@@ -231,7 +231,11 @@ fn settings_window_scrolls_to_selection() {
     press_char(&mut reader, 's');
     // Drive the selection down into the last section, which starts below the
     // initial fold; the list must scroll it into view.
-    for _ in 0..14 {
+    let pull_index = SettingItem::all()
+        .iter()
+        .position(|item| *item == SettingItem::KosyncPullNow)
+        .expect("pull setting should exist");
+    for _ in 0..pull_index {
         press_char(&mut reader, 'j');
     }
     reader.state.borrow_mut().ui_state.clear_message();
@@ -241,6 +245,39 @@ fn settings_window_scrolls_to_selection() {
         screen.contains("Pull KOReader progress now"),
         "selecting the last setting should scroll it into view:\n{screen}"
     );
+}
+
+#[test]
+fn typography_settings_reparse_the_full_book() {
+    let mut reader = test_reader();
+    let original_lines = reader.board.total_lines();
+    press_char(&mut reader, 's');
+
+    let paragraph_index = SettingItem::all()
+        .iter()
+        .position(|item| *item == SettingItem::ParagraphStyle)
+        .unwrap();
+    for _ in 0..paragraph_index {
+        press_char(&mut reader, 'j');
+    }
+    press(&mut reader, KeyCode::Enter);
+    assert_eq!(
+        reader.state.borrow().config.settings.paragraph_style,
+        crate::settings::ParagraphStyle::Compact
+    );
+    assert_eq!(
+        reader.current_typography.paragraph_style,
+        crate::settings::ParagraphStyle::Compact
+    );
+    assert!(reader.board.total_lines() <= original_lines);
+
+    press_char(&mut reader, 'j');
+    press(&mut reader, KeyCode::Enter);
+    assert_eq!(
+        reader.current_typography.line_spacing,
+        crate::settings::LineSpacing::OneAndHalf
+    );
+    assert!(!reader.board.paragraph_starts().is_empty());
 }
 
 #[test]

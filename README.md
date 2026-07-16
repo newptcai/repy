@@ -205,6 +205,12 @@ Press `?` in the TUI to see the help window at any time (`Help (?)`).
     render directly in the reading flow: space is reserved under each
     placeholder and the image appears once its block is fully on screen
 - `i` — Metadata
+- `s` — Settings, including typography controls:
+  - paragraph style cycles through `spaced`, `compact`, and `indented`;
+    indented paragraphs use a two-column first-line indent
+  - line spacing cycles through `1.0`, `1.5`, and `2.0`
+  - justification expands eligible prose lines while leaving final lines,
+    headings, lists, code, centered text, and CJK-only lines unchanged
 - `r` — Library (reading history merged with books found on disk)
   - `j`/`k` to select an entry
   - `Enter` to open the selected book
@@ -346,6 +352,9 @@ Example `configuration.json`:
     ],
     "opds_download_directory": null,
     "inline_images": "placeholder",
+    "paragraph_style": "spaced",
+    "line_spacing": "single",
+    "justify_text": false,
     "kosync_server": "https://sync.koreader.rocks",
     "kosync_username": "your-koreader-sync-user",
     "kosync_password": "your-password"

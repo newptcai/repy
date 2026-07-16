@@ -64,6 +64,60 @@ impl InlineImages {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum ParagraphStyle {
+    #[default]
+    Spaced,
+    Compact,
+    Indented,
+}
+
+impl ParagraphStyle {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Spaced => "spaced",
+            Self::Compact => "compact",
+            Self::Indented => "indented",
+        }
+    }
+
+    pub fn next(self) -> Self {
+        match self {
+            Self::Spaced => Self::Compact,
+            Self::Compact => Self::Indented,
+            Self::Indented => Self::Spaced,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum LineSpacing {
+    #[default]
+    Single,
+    OneAndHalf,
+    Double,
+}
+
+impl LineSpacing {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Single => "1.0",
+            Self::OneAndHalf => "1.5",
+            Self::Double => "2.0",
+        }
+    }
+
+    pub fn next(self) -> Self {
+        match self {
+            Self::Single => Self::OneAndHalf,
+            Self::OneAndHalf => Self::Double,
+            Self::Double => Self::Single,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
@@ -89,6 +143,12 @@ pub struct Settings {
     /// Whether images render inline in the reading view or stay as one-line
     /// placeholders.
     pub inline_images: InlineImages,
+    /// Spacing/indent treatment for ordinary prose paragraphs.
+    pub paragraph_style: ParagraphStyle,
+    /// Vertical spacing between wrapped prose lines.
+    pub line_spacing: LineSpacing,
+    /// Expand eligible prose lines to the configured text width.
+    pub justify_text: bool,
     /// KOReader-compatible progress sync credentials.
     pub kosync_server: Option<String>,
     pub kosync_username: Option<String>,
@@ -121,6 +181,9 @@ impl Settings {
         }
         self.opds_download_directory = other.opds_download_directory;
         self.inline_images = other.inline_images;
+        self.paragraph_style = other.paragraph_style;
+        self.line_spacing = other.line_spacing;
+        self.justify_text = other.justify_text;
         self.kosync_server = other.kosync_server;
         self.kosync_username = other.kosync_username;
         self.kosync_password = other.kosync_password;
@@ -146,6 +209,9 @@ impl Default for Settings {
             opds_catalogs: vec![OpdsCatalogConfig::default()],
             opds_download_directory: None,
             inline_images: InlineImages::default(),
+            paragraph_style: ParagraphStyle::default(),
+            line_spacing: LineSpacing::default(),
+            justify_text: false,
             kosync_server: Some(DEFAULT_KOSYNC_SERVER.to_string()),
             kosync_username: None,
             kosync_password: None,
@@ -354,6 +420,24 @@ mod tests {
         let parsed: Settings = serde_json::from_str(r#"{"inline_images": "shown"}"#).unwrap();
         assert_eq!(parsed.inline_images, InlineImages::Shown);
         assert_eq!(InlineImages::Shown.next(), InlineImages::Placeholder);
+    }
+
+    #[test]
+    fn test_typography_settings_defaults_and_roundtrip() {
+        let defaults = Settings::default();
+        assert_eq!(defaults.paragraph_style, ParagraphStyle::Spaced);
+        assert_eq!(defaults.line_spacing, LineSpacing::Single);
+        assert!(!defaults.justify_text);
+
+        let parsed: Settings = serde_json::from_str(
+            r#"{"paragraph_style":"indented","line_spacing":"one-and-half","justify_text":true}"#,
+        )
+        .unwrap();
+        assert_eq!(parsed.paragraph_style, ParagraphStyle::Indented);
+        assert_eq!(parsed.line_spacing, LineSpacing::OneAndHalf);
+        assert!(parsed.justify_text);
+        assert_eq!(ParagraphStyle::Indented.next(), ParagraphStyle::Spaced);
+        assert_eq!(LineSpacing::Double.next(), LineSpacing::Single);
     }
 
     #[test]

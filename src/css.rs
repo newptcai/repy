@@ -16,11 +16,12 @@ use std::collections::HashSet;
 pub struct StyledClasses {
     pub italic: HashSet<String>,
     pub bold: HashSet<String>,
+    pub centered: HashSet<String>,
 }
 
 impl StyledClasses {
     pub fn is_empty(&self) -> bool {
-        self.italic.is_empty() && self.bold.is_empty()
+        self.italic.is_empty() && self.bold.is_empty() && self.centered.is_empty()
     }
 }
 
@@ -74,7 +75,8 @@ fn scan_sheet(input: &str, out: &mut StyledClasses) {
 fn apply_rule(selector: &str, body: &str, out: &mut StyledClasses) {
     let italic = body_has_italic(body);
     let bold = body_has_bold(body);
-    if !italic && !bold {
+    let centered = body_has_center(body);
+    if !italic && !bold && !centered {
         return;
     }
     for sel in selector.split(',') {
@@ -88,11 +90,23 @@ fn apply_rule(selector: &str, body: &str, out: &mut StyledClasses) {
                     out.italic.insert(c.clone());
                 }
                 if bold {
-                    out.bold.insert(c);
+                    out.bold.insert(c.clone());
+                }
+                if centered {
+                    out.centered.insert(c);
                 }
             }
         }
     }
+}
+
+fn body_has_center(body: &str) -> bool {
+    iter_declarations(body).any(|decl| {
+        split_decl(decl).is_some_and(|(property, value)| {
+            property.eq_ignore_ascii_case("text-align")
+                && value.trim().eq_ignore_ascii_case("center")
+        })
+    })
 }
 
 /// Accept selectors of the shape `tag.class`, `.class`, or `tag.class1.class2`.
@@ -328,6 +342,12 @@ mod tests {
         let css = ".heavy { font-weight: bold; }";
         let s = collect_styled_classes(&[css]);
         assert!(s.bold.contains("heavy"));
+    }
+
+    #[test]
+    fn detects_centered_class() {
+        let s = collect_styled_classes(&[".title { text-align: center; }"]);
+        assert!(s.centered.contains("title"));
     }
 
     #[test]

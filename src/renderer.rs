@@ -5,7 +5,7 @@
 
 use crate::formats::{ChapterContent, Ebook, escape_html, resolve_relative_resource};
 use crate::models::{CHAPTER_BREAK_MARKER, TextStructure};
-use crate::parser::{InlineImageOptions, parse_html_with_styles};
+use crate::parser::{InlineImageOptions, TypographyOptions, parse_html_with_styles_and_typography};
 use eyre::Result;
 use std::collections::{HashMap, HashSet};
 
@@ -16,6 +16,24 @@ pub fn parse_chapter(
     text_width: usize,
     starting_line: usize,
     inline_image_rows: Option<usize>,
+) -> Result<TextStructure> {
+    parse_chapter_with_typography(
+        ebook,
+        index,
+        text_width,
+        starting_line,
+        inline_image_rows,
+        TypographyOptions::default(),
+    )
+}
+
+pub fn parse_chapter_with_typography(
+    ebook: &mut dyn Ebook,
+    index: usize,
+    text_width: usize,
+    starting_line: usize,
+    inline_image_rows: Option<usize>,
+    typography: TypographyOptions,
 ) -> Result<TextStructure> {
     let html = chapter_html(ebook.get_chapter(index)?);
 
@@ -31,13 +49,14 @@ pub fn parse_chapter(
         max_rows,
     });
 
-    parse_html_with_styles(
+    parse_html_with_styles_and_typography(
         &html,
         Some(text_width),
         Some(section_ids),
         starting_line,
         ebook.styled_classes(),
         inline_options.as_ref(),
+        typography,
     )
 }
 
@@ -50,13 +69,35 @@ pub fn parse_book(
     page_height: Option<usize>,
     inline_image_rows: Option<usize>,
 ) -> Result<Vec<TextStructure>> {
+    parse_book_with_typography(
+        ebook,
+        text_width,
+        page_height,
+        inline_image_rows,
+        TypographyOptions::default(),
+    )
+}
+
+pub fn parse_book_with_typography(
+    ebook: &mut dyn Ebook,
+    text_width: usize,
+    page_height: Option<usize>,
+    inline_image_rows: Option<usize>,
+    typography: TypographyOptions,
+) -> Result<Vec<TextStructure>> {
     let mut all_content = Vec::new();
     let mut starting_line = 0;
     let total_chapters = ebook.contents().len();
 
     for index in 0..total_chapters {
-        let mut parsed_content =
-            parse_chapter(ebook, index, text_width, starting_line, inline_image_rows)?;
+        let mut parsed_content = parse_chapter_with_typography(
+            ebook,
+            index,
+            text_width,
+            starting_line,
+            inline_image_rows,
+            typography,
+        )?;
         if let Some(page_height) = page_height
             && index + 1 < total_chapters
         {

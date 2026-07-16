@@ -1,5 +1,6 @@
 use crate::css::StyledClasses;
 use crate::models::{InlineStyle, LinkEntry, TextStructure};
+use crate::settings::{LineSpacing, ParagraphStyle};
 use eyre::Result;
 use html2text::config;
 use hyphenation::{Language, Load, Standard};
@@ -8,6 +9,7 @@ use scraper::{Html, Selector};
 use std::collections::{HashMap, HashSet};
 use std::sync::LazyLock;
 use textwrap::{Options, WordSplitter};
+use unicode_width::UnicodeWidthStr;
 
 // Lazily compiled regex patterns used across parser functions.
 static RE_ORDERED_LIST: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^(\d+)\.\s").unwrap());
@@ -64,6 +66,20 @@ pub struct InlineImageOptions {
     pub max_rows: usize,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct TypographyOptions {
+    pub paragraph_style: ParagraphStyle,
+    pub line_spacing: LineSpacing,
+    pub justify: bool,
+}
+
+#[derive(Default)]
+struct WrappedText {
+    lines: Vec<String>,
+    paragraph_starts: Vec<usize>,
+    spacing_rows: HashSet<usize>,
+}
+
 /// Simple HTML parser for ebook content
 /// This uses html2text for the heavy lifting and adds some basic structure tracking
 pub fn parse_html(
@@ -91,6 +107,26 @@ pub fn parse_html_with_styles(
     starting_line: usize,
     styled_classes: &StyledClasses,
     inline_images: Option<&InlineImageOptions>,
+) -> Result<TextStructure> {
+    parse_html_with_styles_and_typography(
+        html_src,
+        text_width,
+        section_ids,
+        starting_line,
+        styled_classes,
+        inline_images,
+        TypographyOptions::default(),
+    )
+}
+
+pub fn parse_html_with_styles_and_typography(
+    html_src: &str,
+    text_width: Option<usize>,
+    section_ids: Option<HashSet<String>>,
+    starting_line: usize,
+    styled_classes: &StyledClasses,
+    inline_images: Option<&InlineImageOptions>,
+    typography: TypographyOptions,
 ) -> Result<TextStructure> {
     let text_width = text_width.unwrap_or(80);
     let html_src = preprocess_inline_annotations(html_src);
@@ -126,7 +162,9 @@ pub fn parse_html_with_styles(
     // Indent <blockquote> content by 4 spaces.
     indent_blockquote_lines(&fragment, &mut raw_lines);
 
-    let mut plain_text = wrap_text(raw_lines, text_width);
+    let mut wrapped =
+        wrap_text_with_typography(raw_lines, text_width, &fragment, styled_classes, typography);
+    let mut plain_text = std::mem::take(&mut wrapped.lines);
 
     // Reserve blank rows under image placeholders BEFORE any row-keyed
     // structure extraction, so all recovered coordinates already account
@@ -141,6 +179,35 @@ pub fn parse_html_with_styles(
         ),
         None => HashMap::new(),
     };
+
+    // Image padding is inserted after typography. Shift paragraph/spacing
+    // metadata by replaying each block insertion in row order.
+    if !image_block_rows.is_empty() {
+        let mut blocks: Vec<(usize, usize)> = image_block_rows
+            .iter()
+            .map(|(&row, &rows)| (row.saturating_sub(starting_line), rows))
+            .collect();
+        blocks.sort_unstable();
+        for (row, rows) in blocks {
+            let added = rows.saturating_sub(1);
+            for start in &mut wrapped.paragraph_starts {
+                if *start > row {
+                    *start += added;
+                }
+            }
+            wrapped.spacing_rows = wrapped
+                .spacing_rows
+                .into_iter()
+                .map(|spacing| {
+                    if spacing > row {
+                        spacing + added
+                    } else {
+                        spacing
+                    }
+                })
+                .collect();
+        }
+    }
 
     let pagebreak_map = extract_pagebreak_map(&mut plain_text, starting_line);
 
@@ -164,6 +231,16 @@ pub fn parse_html_with_styles(
         links,
         pagebreak_map,
         image_block_rows,
+        paragraph_starts: wrapped
+            .paragraph_starts
+            .into_iter()
+            .map(|row| starting_line + row)
+            .collect(),
+        typography_spacing_rows: wrapped
+            .spacing_rows
+            .into_iter()
+            .map(|row| starting_line + row)
+            .collect(),
     })
 }
 
@@ -222,22 +299,53 @@ fn reserve_image_rows(
     block_rows
 }
 
+#[allow(dead_code)]
 fn wrap_text(lines: Vec<String>, width: usize) -> Vec<String> {
-    let mut wrapped = Vec::new();
-    for line in lines {
+    wrap_text_with_typography(
+        lines,
+        width,
+        &Html::parse_fragment(""),
+        &StyledClasses::default(),
+        TypographyOptions::default(),
+    )
+    .lines
+}
+
+fn wrap_text_with_typography(
+    lines: Vec<String>,
+    width: usize,
+    fragment: &Html,
+    styled_classes: &StyledClasses,
+    typography: TypographyOptions,
+) -> WrappedText {
+    let structural_text = structural_block_text(fragment, styled_classes);
+    let structural: Vec<bool> = lines
+        .iter()
+        .map(|line| is_structural_line(line, &structural_text))
+        .collect();
+    let mut result = WrappedText::default();
+    for (index, line) in lines.iter().enumerate() {
         let line = line.trim_end();
         if line.trim().is_empty() {
-            wrapped.push(String::new());
+            let compact_gap = typography.paragraph_style != ParagraphStyle::Spaced
+                && previous_content_is_prose(index, &lines, &structural)
+                && next_content_is_prose(index, &lines, &structural);
+            if !compact_gap {
+                result.lines.push(String::new());
+            }
             continue;
+        }
+
+        let prose = !structural[index];
+        if prose {
+            result.paragraph_starts.push(result.lines.len());
         }
 
         let subsequent_indent;
         // Detect list markers to maintain indentation
-        if line.starts_with("* ") || line.starts_with("- ") {
+        if line.starts_with("* ") || line.starts_with("- ") || line.starts_with("> ") {
             subsequent_indent = "  ".to_string();
-        } else if line.starts_with("> ") {
-            subsequent_indent = "  ".to_string();
-        } else if let Some(mat) = RE_ORDERED_LIST.find(&line) {
+        } else if let Some(mat) = RE_ORDERED_LIST.find(line) {
             let len = mat.end();
             subsequent_indent = " ".repeat(len);
         } else {
@@ -248,16 +356,130 @@ fn wrap_text(lines: Vec<String>, width: usize) -> Vec<String> {
             subsequent_indent = " ".repeat(leading_spaces);
         }
 
+        let first_indent = if prose && typography.paragraph_style == ParagraphStyle::Indented {
+            "  "
+        } else {
+            ""
+        };
         let options = Options::new(width)
             .word_splitter(WordSplitter::Custom(ebook_word_split_points))
+            .initial_indent(first_indent)
             .subsequent_indent(&subsequent_indent);
 
         let lines_wrapped = textwrap::wrap(line, &options);
-        for l in lines_wrapped {
-            wrapped.push(l.trim_end().to_string());
+        let last = lines_wrapped.len().saturating_sub(1);
+        for (wrapped_index, l) in lines_wrapped.into_iter().enumerate() {
+            let mut visible = l.trim_end().to_string();
+            if typography.justify && prose && wrapped_index < last {
+                visible = justify_line(&visible, width);
+            }
+            result.lines.push(visible);
+            let insert_spacing = match typography.line_spacing {
+                LineSpacing::Single => false,
+                LineSpacing::OneAndHalf => wrapped_index < last && wrapped_index % 2 == 1,
+                LineSpacing::Double => wrapped_index < last,
+            };
+            if prose && insert_spacing {
+                let row = result.lines.len();
+                result.lines.push(String::new());
+                result.spacing_rows.insert(row);
+            }
         }
     }
-    wrapped
+    result
+}
+
+fn structural_block_text(fragment: &Html, styled_classes: &StyledClasses) -> Vec<String> {
+    let selector = Selector::parse(
+        "h1,h2,h3,h4,h5,h6,li,pre,code,blockquote,table,figure,figcaption,center,[style],[class]",
+    )
+    .unwrap();
+    fragment
+        .select(&selector)
+        .filter(|element| {
+            let name = element.value().name();
+            matches!(
+                name,
+                "h1" | "h2"
+                    | "h3"
+                    | "h4"
+                    | "h5"
+                    | "h6"
+                    | "li"
+                    | "pre"
+                    | "code"
+                    | "blockquote"
+                    | "table"
+                    | "figure"
+                    | "figcaption"
+                    | "center"
+            ) || element.value().attr("style").is_some_and(|style| {
+                style
+                    .to_ascii_lowercase()
+                    .replace(' ', "")
+                    .contains("text-align:center")
+            }) || element.value().attr("class").is_some_and(|classes| {
+                classes
+                    .split_whitespace()
+                    .any(|class| styled_classes.centered.contains(class))
+            })
+        })
+        .map(|element| element.text().collect::<Vec<_>>().join(" "))
+        .map(|text| text.split_whitespace().collect::<Vec<_>>().join(" "))
+        .filter(|text| !text.is_empty())
+        .collect()
+}
+
+fn is_structural_line(line: &str, structural: &[String]) -> bool {
+    let normalized = line.split_whitespace().collect::<Vec<_>>().join(" ");
+    line.starts_with("- ")
+        || line.starts_with("* ")
+        || line.starts_with("> ")
+        || RE_ORDERED_LIST.is_match(line)
+        || line.starts_with("    ")
+        || line.contains("[Image:")
+        || structural
+            .iter()
+            .any(|text| text.contains(&normalized) || normalized.contains(text))
+}
+
+fn previous_content_is_prose(index: usize, lines: &[String], structural: &[bool]) -> bool {
+    (0..index)
+        .rev()
+        .find(|&i| !lines[i].trim().is_empty())
+        .is_some_and(|i| !structural[i])
+}
+
+fn next_content_is_prose(index: usize, lines: &[String], structural: &[bool]) -> bool {
+    (index + 1..lines.len())
+        .find(|&i| !lines[i].trim().is_empty())
+        .is_some_and(|i| !structural[i])
+}
+
+fn justify_line(line: &str, width: usize) -> String {
+    let display_width = UnicodeWidthStr::width(line);
+    if display_width >= width || !line.chars().any(|ch| ch.is_ascii_alphabetic()) {
+        return line.to_string();
+    }
+    let leading = line.len() - line.trim_start_matches(' ').len();
+    let body = &line[leading..];
+    let words: Vec<&str> = body.split(' ').filter(|word| !word.is_empty()).collect();
+    if words.len() < 2 {
+        return line.to_string();
+    }
+    let extra = width - display_width;
+    let gaps = words.len() - 1;
+    let base = extra / gaps;
+    let remainder = extra % gaps;
+    let mut out = String::with_capacity(line.len() + extra);
+    out.push_str(&" ".repeat(leading));
+    for (i, word) in words.iter().enumerate() {
+        out.push_str(word);
+        if i < gaps {
+            out.push_str(&" ".repeat(1 + base + usize::from(i < remainder)));
+        }
+    }
+    out
 }
 
 /// Collapse blank-line separators between consecutive paragraphs that are
@@ -956,6 +1178,11 @@ fn match_sequence(
 
             // Move to next line
             current_line_idx += 1;
+            while current_line_idx < text_lines.len()
+                && text_lines[current_line_idx].trim().is_empty()
+            {
+                current_line_idx += 1;
+            }
             if current_line_idx >= text_lines.len() {
                 return None; // Ran out of lines but tokens remain
             }
@@ -1319,6 +1546,135 @@ mod tests {
                 .collect(),
             max_rows,
         }
+    }
+
+    #[test]
+    fn test_typography_paragraph_styles() {
+        let fragment = Html::parse_fragment("<p>First paragraph.</p><p>Second paragraph.</p>");
+        let raw = vec![
+            "First paragraph.".to_string(),
+            String::new(),
+            "Second paragraph.".to_string(),
+        ];
+        let compact = wrap_text_with_typography(
+            raw.clone(),
+            40,
+            &fragment,
+            &StyledClasses::default(),
+            TypographyOptions {
+                paragraph_style: ParagraphStyle::Compact,
+                ..Default::default()
+            },
+        );
+        assert_eq!(compact.lines, ["First paragraph.", "Second paragraph."]);
+        assert_eq!(compact.paragraph_starts, [0, 1]);
+
+        let indented = wrap_text_with_typography(
+            raw,
+            40,
+            &fragment,
+            &StyledClasses::default(),
+            TypographyOptions {
+                paragraph_style: ParagraphStyle::Indented,
+                ..Default::default()
+            },
+        );
+        assert_eq!(
+            indented.lines,
+            ["  First paragraph.", "  Second paragraph."]
+        );
+    }
+
+    #[test]
+    fn test_typography_line_spacing_rows() {
+        let fragment = Html::parse_fragment("<p>one two three four five six seven eight</p>");
+        let raw = vec!["one two three four five six seven eight".to_string()];
+        let double = wrap_text_with_typography(
+            raw.clone(),
+            10,
+            &fragment,
+            &StyledClasses::default(),
+            TypographyOptions {
+                line_spacing: LineSpacing::Double,
+                ..Default::default()
+            },
+        );
+        assert!(!double.spacing_rows.is_empty());
+        assert!(
+            double
+                .spacing_rows
+                .iter()
+                .all(|&row| double.lines[row].is_empty())
+        );
+        assert!(!double.lines.last().unwrap().is_empty());
+
+        let one_and_half = wrap_text_with_typography(
+            raw,
+            10,
+            &fragment,
+            &StyledClasses::default(),
+            TypographyOptions {
+                line_spacing: LineSpacing::OneAndHalf,
+                ..Default::default()
+            },
+        );
+        assert!(one_and_half.spacing_rows.len() < double.spacing_rows.len());
+    }
+
+    #[test]
+    fn test_justification_and_structural_exclusions() {
+        assert_eq!(justify_line("alpha beta", 16), "alpha       beta");
+        assert_eq!(justify_line("纯中文内容", 16), "纯中文内容");
+
+        let fragment = Html::parse_fragment("<pre>code block words here</pre>");
+        let wrapped = wrap_text_with_typography(
+            vec!["code block words here".to_string()],
+            12,
+            &fragment,
+            &StyledClasses::default(),
+            TypographyOptions {
+                justify: true,
+                ..Default::default()
+            },
+        );
+        assert_eq!(wrapped.lines[0], "code block");
+    }
+
+    #[test]
+    fn typography_rows_preserve_formatting_and_link_coordinates() {
+        let html = r#"<p>alpha beta <strong>gamma delta</strong> epsilon <a href="next.xhtml">zeta eta</a> theta</p>"#;
+        let parsed = parse_html_with_styles_and_typography(
+            html,
+            Some(16),
+            None,
+            0,
+            &StyledClasses::default(),
+            None,
+            TypographyOptions {
+                line_spacing: LineSpacing::Double,
+                justify: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert!(!parsed.typography_spacing_rows.is_empty());
+        assert!(parsed.formatting.iter().all(|style| {
+            !parsed
+                .typography_spacing_rows
+                .contains(&(style.row as usize))
+                && parsed.text_lines[style.row as usize]
+                    .chars()
+                    .skip(style.col as usize)
+                    .take(style.n_letters as usize)
+                    .any(|ch| !ch.is_whitespace())
+        }));
+        assert_eq!(parsed.links.len(), 1);
+        assert!(
+            !parsed
+                .typography_spacing_rows
+                .contains(&parsed.links[0].row)
+        );
+        assert!(parsed.text_lines[parsed.links[0].row].contains("zeta"));
     }
 
     #[test]
@@ -2008,6 +2364,7 @@ mod tests {
         let styled = StyledClasses {
             italic,
             bold: std::collections::HashSet::new(),
+            centered: std::collections::HashSet::new(),
         };
         let text_lines = vec!["The quote ends here.".to_string(), "[22]".to_string()];
         let formatting = extract_formatting(&fragment, 0, &text_lines, &styled).unwrap();

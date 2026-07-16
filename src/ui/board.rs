@@ -746,6 +746,19 @@ impl Board {
             .and_then(|ts| ts.image_maps.get(&line).cloned())
     }
 
+    pub fn is_typography_spacing_row(&self, row: usize) -> bool {
+        self.text_structure
+            .as_ref()
+            .is_some_and(|ts| ts.typography_spacing_rows.contains(&row))
+    }
+
+    pub fn paragraph_starts(&self) -> &[usize] {
+        self.text_structure
+            .as_ref()
+            .map(|ts| ts.paragraph_starts.as_slice())
+            .unwrap_or(&[])
+    }
+
     /// Returns the page label at or before `row`, or None if the book has no pagebreak markers.
     pub fn current_page_label(&self, row: usize) -> Option<&str> {
         let map = &self.text_structure.as_ref()?.pagebreak_map;
@@ -776,6 +789,9 @@ impl Board {
         }
 
         if start_row == end_row {
+            if text_structure.typography_spacing_rows.contains(&start_row) {
+                return String::new();
+            }
             let chars: Vec<char> = text_structure.text_lines[start_row].chars().collect();
             if chars.is_empty() || start_col >= chars.len() {
                 return String::new();
@@ -789,6 +805,9 @@ impl Board {
 
         let mut result = String::new();
         for row in start_row..=end_row {
+            if text_structure.typography_spacing_rows.contains(&row) {
+                continue;
+            }
             let chars: Vec<char> = text_structure.text_lines[row].chars().collect();
             if row == start_row {
                 if start_col < chars.len() {
@@ -831,7 +850,10 @@ impl Board {
                     .split_whitespace()
                     .filter(|word| word.chars().any(|ch| ch.is_alphanumeric()))
                     .count();
-                char_total += line.chars().count();
+                // Layout-only indentation and justification spaces must not
+                // perturb semantic progress (notably KOReader sync).
+                let normalized = line.split_whitespace().collect::<Vec<_>>().join(" ");
+                char_total += normalized.chars().count();
             }
             word_sums.push(word_total);
             char_sums.push(char_total);
@@ -951,6 +973,8 @@ mod tests {
             links: vec![],
             pagebreak_map: HashMap::new(),
             image_block_rows: HashMap::new(),
+            paragraph_starts: Vec::new(),
+            typography_spacing_rows: std::collections::HashSet::new(),
         };
 
         let board = Board::new().with_text_structure(text_structure.clone());
@@ -970,6 +994,8 @@ mod tests {
             links: vec![],
             pagebreak_map: HashMap::new(),
             image_block_rows,
+            paragraph_starts: Vec::new(),
+            typography_spacing_rows: std::collections::HashSet::new(),
         };
         let board = Board::new().with_text_structure(text_structure);
 
@@ -1000,6 +1026,8 @@ mod tests {
             links: vec![],
             pagebreak_map: HashMap::new(),
             image_block_rows: HashMap::new(),
+            paragraph_starts: Vec::new(),
+            typography_spacing_rows: std::collections::HashSet::new(),
         };
 
         board.update_text_structure(text_structure);
@@ -1019,6 +1047,8 @@ mod tests {
             links: vec![],
             pagebreak_map: HashMap::new(),
             image_block_rows: HashMap::new(),
+            paragraph_starts: Vec::new(),
+            typography_spacing_rows: std::collections::HashSet::new(),
         };
 
         board.update_text_structure(text_structure);
@@ -1040,6 +1070,8 @@ mod tests {
             links: vec![],
             pagebreak_map: HashMap::new(),
             image_block_rows: HashMap::new(),
+            paragraph_starts: Vec::new(),
+            typography_spacing_rows: std::collections::HashSet::new(),
         };
 
         board.update_text_structure(text_structure);
@@ -1060,6 +1092,8 @@ mod tests {
             links: vec![],
             pagebreak_map: HashMap::new(),
             image_block_rows: HashMap::new(),
+            paragraph_starts: Vec::new(),
+            typography_spacing_rows: std::collections::HashSet::new(),
         };
 
         board.update_text_structure(text_structure.clone());
@@ -1237,6 +1271,8 @@ mod tests {
             links: vec![],
             pagebreak_map: HashMap::new(),
             image_block_rows: HashMap::new(),
+            paragraph_starts: Vec::new(),
+            typography_spacing_rows: std::collections::HashSet::new(),
         };
         Board::new().with_text_structure(text_structure)
     }
