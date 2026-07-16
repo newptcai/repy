@@ -372,14 +372,20 @@ as plaintext in `configuration.json`; on Unix, `repy` restricts that file to the
 current user (`0600`). `repy` derives the MD5 kosync authentication key in
 memory.
 
-The position is exchanged as a **content percentage** — the fraction of the
-book's characters before your current line. This is width-independent and lines
-up with KOReader's own content-proportional percentage, so a pulled position
-lands at the matching spot rather than drifting. `repy` pulls on open and
-prompts before jumping when KOReader is further ahead; the Settings window also
-offers a **Pull KOReader progress now** action. The sync service receives only
-the KOReader document fingerprint, percentage, device label, and timestamp — not
-the ebook, filename, highlights, or notes.
+To place a pulled position accurately, `repy` reads the **CREngine XPointer**
+KOReader stores alongside the percentage (e.g.
+`/body/DocFragment[14]/body/p[1]/text().0`). The `DocFragment` index pins the
+exact chapter, and the element path places you within it — so a "start of
+chapter 14" bookmark lands at the start of chapter 14 rather than drifting by a
+paragraph. `repy` only *reads* this pointer; it still cannot generate one, which
+is why sync stays pull-only. When the pointer is absent or cannot be resolved
+(e.g. heavily transformed markup), `repy` falls back to a width-independent
+**content percentage** — the fraction of the book's characters before your
+current line. `repy` pulls on open and prompts before jumping when KOReader is
+further ahead; the Settings window also offers a **Pull KOReader progress now**
+action. The sync service receives only the KOReader document fingerprint,
+percentage, device label, and timestamp — not the ebook, filename, highlights,
+or notes.
 
 KOReader identifies a document using sampled bytes from the file. Both devices
 must therefore use the same unmodified ebook file; reconversion or metadata

@@ -881,6 +881,32 @@ impl Board {
         let row = self.char_prefix_sums[1..].partition_point(|&cum| cum <= target);
         row.min(total_lines - 1)
     }
+
+    /// The global row at `fraction` of the way through the character span of
+    /// the chapter `[start_row, end_row)`. Used to place a KOReader XPointer's
+    /// within-chapter position without letting global percentage drift leak in.
+    pub fn row_for_chapter_fraction(
+        &self,
+        start_row: usize,
+        end_row: usize,
+        fraction: f64,
+    ) -> usize {
+        let total = self.char_prefix_sums.last().copied().unwrap_or(0);
+        if total == 0 {
+            return start_row;
+        }
+        let start_chars = self.chars_before(start_row);
+        let end_chars = self.chars_before(end_row);
+        let span = end_chars.saturating_sub(start_chars);
+        let target = start_chars as f64 + fraction.clamp(0.0, 1.0) * span as f64;
+        self.row_for_fraction(target / total as f64)
+    }
+
+    /// Cumulative character count before `row` (clamped).
+    fn chars_before(&self, row: usize) -> usize {
+        let idx = row.min(self.char_prefix_sums.len().saturating_sub(1));
+        self.char_prefix_sums.get(idx).copied().unwrap_or(0)
+    }
 }
 
 fn byte_to_char_col(line: &str, byte_idx: usize) -> usize {

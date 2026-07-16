@@ -55,6 +55,10 @@ const READING_IDLE_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 /// the terminal size is unknown or smaller than a typical screen.
 const READING_JUMP_MIN_THRESHOLD_ROWS: usize = 50;
 const DEFAULT_READING_WPM: f64 = 250.0;
+/// Max book-fraction gap allowed between a KOReader XPointer's resolved row and
+/// the percentage reported alongside it before we distrust the XPointer (e.g.
+/// a spine-index/DocFragment mismatch) and fall back to the percentage.
+const KOSYNC_XPOINTER_TOLERANCE: f64 = 0.08;
 /// How long the library selection must rest before its cover is loaded.
 const LIBRARY_COVER_DEBOUNCE: Duration = Duration::from_millis(150);
 
@@ -315,7 +319,10 @@ pub struct UiState {
     /// motion key (e.g. `2` in `2fa`) so it survives the intermediate key.
     pub pending_visual_find: Option<(VisualFindDirection, u32)>,
     pub pending_mark_command: Option<PendingMarkCommand>,
-    pub pending_sync_progress: Option<(f64, String)>,
+    /// Remote KOReader progress awaiting the jump prompt: `(percentage, device,
+    /// resolved target row)`. The row is precomputed at pull time — from the
+    /// XPointer when possible, otherwise the content percentage.
+    pub pending_sync_progress: Option<(f64, String, usize)>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1535,8 +1542,10 @@ where
                 let row = self.state.borrow().reading_state.row;
                 let local = self.board.content_fraction(row);
                 if manual || remote.percentage > local + 0.000_001 {
+                    let target_row = self.resolve_kosync_target_row(&remote);
                     let mut state = self.state.borrow_mut();
-                    state.ui_state.pending_sync_progress = Some((remote.percentage, remote.device));
+                    state.ui_state.pending_sync_progress =
+                        Some((remote.percentage, remote.device, target_row));
                     state.ui_state.open_window(WindowType::ConfirmSyncProgress);
                 }
             }
@@ -1550,6 +1559,61 @@ where
                 .borrow_mut()
                 .ui_state
                 .set_message(format!("KOReader sync: {error}"), MessageType::Warning),
+        }
+    }
+
+    /// Turn a remote KOReader progress record into the row to jump to. Prefers
+    /// the CREngine XPointer (exact chapter via `DocFragment[N]`, plus a
+    /// within-chapter position) and falls back to the content percentage when
+    /// the XPointer is absent, unresolvable, or implausible.
+    fn resolve_kosync_target_row(&mut self, remote: &RemoteProgress) -> usize {
+        let percentage = remote.percentage;
+        let percentage_row = self.board.row_for_fraction(percentage);
+
+        let Some(xp) = crate::xpointer::parse(&remote.progress) else {
+            return percentage_row;
+        };
+        let Some(content_index) = xp.doc_fragment.checked_sub(1) else {
+            return percentage_row;
+        };
+        if content_index >= self.content_start_rows.len() {
+            return percentage_row;
+        }
+
+        let chapter_start = self.content_start_rows[content_index];
+        let chapter_end = self
+            .content_start_rows
+            .get(content_index + 1)
+            .copied()
+            .unwrap_or_else(|| self.board.total_lines());
+        let chapter_last = chapter_end.saturating_sub(1).max(chapter_start);
+
+        // Within-chapter position from the XPointer path; when a step can't be
+        // followed, keep the percentage if it already lands in this chapter.
+        let target_row = self
+            .epub_chapter_html(content_index)
+            .and_then(|html| crate::xpointer::resolve_fraction(&html, &xp))
+            .map(|fraction| {
+                self.board
+                    .row_for_chapter_fraction(chapter_start, chapter_end, fraction)
+            })
+            .unwrap_or_else(|| percentage_row.clamp(chapter_start, chapter_last));
+
+        // Guard against a DocFragment/spine-index mismatch (e.g. an EPUB3 nav
+        // document that crengine counts but repy filters out): only trust the
+        // XPointer when its row sits near the percentage KOReader sent with it.
+        if (self.board.content_fraction(target_row) - percentage).abs() > KOSYNC_XPOINTER_TOLERANCE
+        {
+            return percentage_row;
+        }
+        target_row
+    }
+
+    /// The raw XHTML of an EPUB chapter, or `None` for non-HTML backends.
+    fn epub_chapter_html(&mut self, index: usize) -> Option<String> {
+        match self.ebook.as_mut()?.get_chapter(index).ok()? {
+            crate::formats::ChapterContent::Html(html) => Some(html),
+            _ => None,
         }
     }
 
@@ -2642,11 +2706,10 @@ where
                     .ui_state
                     .pending_sync_progress
                     .take();
-                if let Some((percentage, _)) = pending {
-                    let row = self.board.row_for_fraction(percentage);
+                if let Some((percentage, _, target_row)) = pending {
                     let mut state = self.state.borrow_mut();
                     state.record_jump();
-                    state.reading_state.row = row;
+                    state.reading_state.row = target_row;
                     state.ui_state.open_window(WindowType::Reader);
                     state.ui_state.set_message(
                         format!("Synced to {:.1}%", percentage * 100.0),
@@ -4548,7 +4611,7 @@ where
         state: &ApplicationState,
         theme: &Theme,
     ) {
-        let Some((percentage, device)) = state.ui_state.pending_sync_progress.as_ref() else {
+        let Some((percentage, device, _)) = state.ui_state.pending_sync_progress.as_ref() else {
             return;
         };
         let area = frame.area();
