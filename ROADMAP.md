@@ -54,7 +54,10 @@ Priority order:
 
 1. **KOReader sync (kosync) client** (M) — shipped **pull-only**: authentication, KOReader partial-MD5 document IDs, background pull, a confirm-jump prompt, and the settings UI. Pull parses the CREngine XPointer KOReader stores in `progress` (`src/xpointer.rs`): `DocFragment[N]` pins the exact chapter and the element path places the reader within it, with a width-independent **content (character) fraction** (`Board::content_fraction`/`row_for_fraction`) as fallback when the pointer is absent or unresolvable. A percentage-plausibility guard rejects DocFragment/spine mismatches. **Deferred:** KOReader-compatible *push* needs a generated XPointer that a wrapped `repy` row cannot supply (it would require reproducing crengine's DOM normalization); until then `repy` never pushes, so it can't corrupt a KOReader bookmark.
 2. **Calibre-aware library** (M) — ✅ done (2026-07): schema v7 stores a stable logical-book key, library root, all discovered formats, series/index, tags, language, publisher, description, and cover path. A detected root `metadata.db` is opened through read-only immutable SQLite and supplies the catalog in one pass; incompatible or unavailable databases fall back atomically to sibling `metadata.opf` files and directory scanning. Books are grouped into one row with EPUB-first format preference; `f` cycles formats, `R` refreshes, `c` opens a responsive cover-and-metadata details panel, and `s` includes series sorting. Fuzzy search covers title, author, series, tags, and path. Selection survives refresh/sort. Cache invalidation tracks database, ebook, OPF, and cover mtimes; pruning is isolated per successfully scanned root, unavailable roots retain cached entries, directory symlinks are not followed, and canonical paths deduplicate overlapping roots. The Calibre database and files are never written.
-3. **OPDS catalog browsing** (M, optional) — Atom via `quick-xml`, download + open; parity with Thorium.
+3. **OPDS catalog browsing** (M) — ✅ done (2026-07): OPDS 1.2 Atom browsing,
+   OpenSearch, pagination, Basic auth with origin isolation, background
+   validated downloads, and direct open. The protocol-neutral model leaves
+   OPDS 2.0 as an additional JSON parser.
 
 ## Phase 6 — Typography (do last: perturbs the row-keyed coordinate system)
 

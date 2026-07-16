@@ -31,6 +31,7 @@ use crate::models::{
     HighlightColor, HighlightRange, LibraryEntry, LibraryItem, LibrarySortMode, LinkEntry,
     ReadingState, ReadingStatistics, ScannedBook, SearchData, TextStructure, TocEntry, WindowType,
 };
+use crate::opds;
 use crate::renderer::{self, build_chapter_break};
 use crate::settings::{DEFAULT_KOSYNC_SERVER, DICT_PRESET_LIST, InlineImages};
 use crate::state::State;
@@ -41,7 +42,7 @@ use crate::ui::graphics::Graphics;
 use crate::ui::windows::{
     bookmarks::BookmarksWindow, dictionary::DictionaryWindow, fuzzy_filter_indices,
     help::HelpWindow, images::ImagesWindow, library::LibraryWindow, links::LinksWindow,
-    metadata::MetadataWindow, search::SearchWindow, settings::SettingsWindow,
+    metadata::MetadataWindow, opds::OpdsWindow, search::SearchWindow, settings::SettingsWindow,
     statistics::StatisticsWindow, toc::TocWindow,
 };
 use ratatui_image::protocol::StatefulProtocol;
@@ -282,6 +283,16 @@ pub struct UiState {
     pub library_cover_visible: bool,
     /// True while a background library scan is running.
     pub library_scanning: bool,
+    pub opds_feed: Option<crate::opds::Feed>,
+    pub opds_selected_index: usize,
+    pub opds_catalog_selected_index: usize,
+    pub opds_format_index: usize,
+    pub opds_loading: bool,
+    pub opds_downloading: bool,
+    pub opds_downloaded_bytes: u64,
+    pub opds_total_bytes: Option<u64>,
+    pub opds_error: Option<String>,
+    pub opds_search_query: String,
     pub metadata: Option<BookMetadata>,
     pub statistics: ReadingStatistics,
     pub dictionary_word: String,
@@ -396,6 +407,16 @@ impl UiState {
             library_sort_mode: LibrarySortMode::default(),
             library_cover_visible: false,
             library_scanning: false,
+            opds_feed: None,
+            opds_selected_index: 0,
+            opds_catalog_selected_index: 0,
+            opds_format_index: 0,
+            opds_loading: false,
+            opds_downloading: false,
+            opds_downloaded_bytes: 0,
+            opds_total_bytes: None,
+            opds_error: None,
+            opds_search_query: String::new(),
             metadata: None,
             statistics: ReadingStatistics::default(),
             dictionary_word: String::new(),
@@ -510,6 +531,12 @@ impl UiState {
             WindowType::Toc => self.show_toc = true,
             WindowType::Bookmarks => self.show_bookmarks = true,
             WindowType::Library => self.show_library = true,
+            WindowType::OpdsCatalogs
+            | WindowType::OpdsFeed
+            | WindowType::OpdsSearchInput
+            | WindowType::OpdsDetails => {
+                self.show_library = false;
+            }
             WindowType::Search => self.show_search = true,
             WindowType::Links => self.show_links = true,
             WindowType::Images => self.show_images = true,
@@ -613,6 +640,7 @@ enum SettingItem {
     KosyncServer,
     KosyncUsername,
     KosyncPassword,
+    OpdsDownloadDirectory,
 }
 
 /// Settings grouped into labelled sections. Single source of truth for both
@@ -646,6 +674,7 @@ const SETTINGS_SECTIONS: &[(&str, &[SettingItem])] = &[
             SettingItem::KosyncPullNow,
         ],
     ),
+    ("OPDS", &[SettingItem::OpdsDownloadDirectory]),
 ];
 
 impl SettingItem {
@@ -745,6 +774,22 @@ enum TtsWorkerEvent {
     },
 }
 
+enum OpdsWorkerEvent {
+    Feed {
+        request_id: u64,
+        result: Result<opds::Feed, String>,
+    },
+    Download {
+        request_id: u64,
+        result: Result<std::path::PathBuf, String>,
+    },
+    Progress {
+        request_id: u64,
+        downloaded: u64,
+        total: Option<u64>,
+    },
+}
+
 /// Main reader application struct
 pub struct Reader<B: Backend = CrosstermBackend<io::Stdout>> {
     state: Rc<RefCell<ApplicationState>>,
@@ -765,6 +810,11 @@ pub struct Reader<B: Backend = CrosstermBackend<io::Stdout>> {
     dictionary_res_rx: Option<std::sync::mpsc::Receiver<DictionaryResult>>,
     /// Signals that the background library scan finished (cache updated).
     library_scan_rx: Option<std::sync::mpsc::Receiver<()>>,
+    opds_rx: Option<std::sync::mpsc::Receiver<OpdsWorkerEvent>>,
+    opds_request_id: u64,
+    opds_catalog_index: Option<usize>,
+    opds_history: Vec<String>,
+    opds_current_url: Option<String>,
     /// Channel to receive notification when a TTS chunk finishes speaking
     tts_done_rx: Option<std::sync::mpsc::Receiver<()>>,
     /// Handle to the running TTS child process
@@ -1221,6 +1271,11 @@ where
             current_inline_image_rows: None,
             dictionary_res_rx: None,
             library_scan_rx: None,
+            opds_rx: None,
+            opds_request_id: 0,
+            opds_catalog_index: None,
+            opds_history: Vec::new(),
+            opds_current_url: None,
             tts_done_rx: None,
             tts_child: None,
             tts_chunks: Vec::new(),
@@ -1940,6 +1995,65 @@ impl Reader {
                 }
             }
 
+            if let Some(event) = self.opds_rx.as_ref().and_then(|rx| rx.try_recv().ok()) {
+                match event {
+                    OpdsWorkerEvent::Feed { request_id, result }
+                        if request_id == self.opds_request_id =>
+                    {
+                        self.opds_rx = None;
+                        let mut state = self.state.borrow_mut();
+                        state.ui_state.opds_loading = false;
+                        state.ui_state.opds_downloading = false;
+                        match result {
+                            Ok(feed) => {
+                                state.ui_state.opds_feed = Some(feed);
+                                state.ui_state.opds_error = None
+                            }
+                            Err(e) => state.ui_state.opds_error = Some(e),
+                        }
+                    }
+                    OpdsWorkerEvent::Download { request_id, result }
+                        if request_id == self.opds_request_id =>
+                    {
+                        // A newly downloaded book has no per-book theme yet.
+                        // Preserve the theme the user was looking at while
+                        // browsing OPDS, but never replace a theme already
+                        // associated with a previously downloaded identity.
+                        let inherited_theme = self.state.borrow().book_color_theme;
+                        self.opds_rx = None;
+                        let mut state = self.state.borrow_mut();
+                        state.ui_state.opds_loading = false;
+                        state.ui_state.opds_downloading = false;
+                        drop(state);
+                        match result {
+                            Ok(path) => {
+                                self.load_ebook(&path.to_string_lossy())?;
+                                if self.state.borrow().book_color_theme.is_none()
+                                    && let Some(theme) = inherited_theme
+                                {
+                                    self.set_effective_color_theme(Some(theme))?;
+                                }
+                                self.state
+                                    .borrow_mut()
+                                    .ui_state
+                                    .open_window(WindowType::Reader);
+                            }
+                            Err(e) => self.state.borrow_mut().ui_state.opds_error = Some(e),
+                        }
+                    }
+                    OpdsWorkerEvent::Progress {
+                        request_id,
+                        downloaded,
+                        total,
+                    } if request_id == self.opds_request_id => {
+                        let mut state = self.state.borrow_mut();
+                        state.ui_state.opds_downloaded_bytes = downloaded;
+                        state.ui_state.opds_total_bytes = total;
+                    }
+                    _ => {}
+                }
+            }
+
             self.tts_poll_worker()?;
             self.poll_kosync();
             self.poll_library_cover();
@@ -1979,6 +2093,8 @@ impl Reader {
                     Duration::from_millis(100)
                 } else if state.ui_state.library_scanning && state.ui_state.show_library {
                     Duration::from_millis(200)
+                } else if state.ui_state.opds_loading {
+                    Duration::from_millis(100)
                 } else {
                     match state.ui_state.message_time {
                         Some(t) => {
@@ -2137,6 +2253,11 @@ where
             WindowType::ConfirmDeleteHighlight => self.handle_confirm_delete_highlight_keys(key)?,
             WindowType::ConfirmSyncProgress => self.handle_confirm_sync_progress_keys(key)?,
             WindowType::Library => self.handle_library_mode_keys(key, repeat_count)?,
+            WindowType::OpdsCatalogs => self.handle_opds_catalog_keys(key, repeat_count)?,
+            WindowType::OpdsFeed | WindowType::OpdsDetails => {
+                self.handle_opds_feed_keys(key, repeat_count)?
+            }
+            WindowType::OpdsSearchInput => self.handle_opds_search_keys(key)?,
             WindowType::Settings => self.handle_settings_mode_keys(key, repeat_count)?,
             WindowType::Links => self.handle_links_mode_keys(key, repeat_count)?,
             WindowType::LinkPreview => self.handle_link_preview_mode_keys(key)?,
@@ -3365,6 +3486,11 @@ where
                 KeyCode::Char('R') => {
                     self.spawn_library_scan();
                 }
+                KeyCode::Char('O') => {
+                    let mut state = self.state.borrow_mut();
+                    state.ui_state.opds_catalog_selected_index = 0;
+                    state.ui_state.open_window(WindowType::OpdsCatalogs);
+                }
                 KeyCode::Char('f') => {
                     let mut state = self.state.borrow_mut();
                     let selected = state.ui_state.selected_list_index(index);
@@ -3396,6 +3522,322 @@ where
         } else {
             self.state.borrow_mut().ui_state.library_selected_index = index;
         }
+        Ok(())
+    }
+
+    fn handle_opds_catalog_keys(&mut self, key: KeyEvent, repeat_count: u32) -> eyre::Result<()> {
+        let len = self.state.borrow().config.settings.opds_catalogs.len();
+        let mut index = self.state.borrow().ui_state.opds_catalog_selected_index;
+        if self.handle_list_nav(&key, repeat_count, len, &mut index) {
+            self.state.borrow_mut().ui_state.opds_catalog_selected_index = index;
+        } else {
+            match key.code {
+                KeyCode::Esc | KeyCode::Char('q') => self
+                    .state
+                    .borrow_mut()
+                    .ui_state
+                    .open_window(WindowType::Library),
+                KeyCode::Enter if index < len => {
+                    self.opds_catalog_index = Some(index);
+                    self.opds_history.clear();
+                    let url = self.state.borrow().config.settings.opds_catalogs[index]
+                        .url
+                        .clone();
+                    self.spawn_opds_feed(url, false)?;
+                }
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+
+    fn handle_opds_feed_keys(&mut self, key: KeyEvent, repeat_count: u32) -> eyre::Result<()> {
+        let len = self
+            .state
+            .borrow()
+            .ui_state
+            .opds_feed
+            .as_ref()
+            .map(|f| f.navigation.len() + f.publications.len())
+            .unwrap_or(0);
+        let mut index = self.state.borrow().ui_state.opds_selected_index;
+        if self.handle_list_nav(&key, repeat_count, len, &mut index) {
+            let mut s = self.state.borrow_mut();
+            s.ui_state.opds_selected_index = index;
+            s.ui_state.opds_format_index = 0;
+            return Ok(());
+        }
+        match key.code {
+            KeyCode::Char('q') | KeyCode::Esc => self
+                .state
+                .borrow_mut()
+                .ui_state
+                .open_window(WindowType::Library),
+            KeyCode::Char('h') | KeyCode::Backspace => {
+                if let Some(url) = self.opds_history.pop() {
+                    self.spawn_opds_feed(url, false)?
+                } else {
+                    self.state
+                        .borrow_mut()
+                        .ui_state
+                        .open_window(WindowType::OpdsCatalogs)
+                }
+            }
+            KeyCode::Char('/') => {
+                if self
+                    .state
+                    .borrow()
+                    .ui_state
+                    .opds_feed
+                    .as_ref()
+                    .and_then(|f| f.search.as_ref())
+                    .is_some()
+                {
+                    let mut s = self.state.borrow_mut();
+                    s.ui_state.opds_search_query.clear();
+                    s.ui_state.open_window(WindowType::OpdsSearchInput)
+                } else {
+                    self.state.borrow_mut().ui_state.opds_error =
+                        Some("This catalog does not advertise search".into())
+                }
+            }
+            KeyCode::Char('[') | KeyCode::Char(']') => {
+                let next = key.code == KeyCode::Char(']');
+                let url = self
+                    .state
+                    .borrow()
+                    .ui_state
+                    .opds_feed
+                    .as_ref()
+                    .and_then(|f| {
+                        if next {
+                            f.pagination.next.clone()
+                        } else {
+                            f.pagination.previous.clone()
+                        }
+                    });
+                if let Some(url) = url {
+                    self.spawn_opds_feed(url, true)?
+                }
+            }
+            KeyCode::Char('f') => {
+                let mut state = self.state.borrow_mut();
+                state.ui_state.opds_format_index =
+                    state.ui_state.opds_format_index.saturating_add(1)
+            }
+            KeyCode::Char('c') => {
+                let mut s = self.state.borrow_mut();
+                s.ui_state.active_window = if s.ui_state.active_window == WindowType::OpdsDetails {
+                    WindowType::OpdsFeed
+                } else {
+                    WindowType::OpdsDetails
+                };
+            }
+            KeyCode::Enter => {
+                let selected = {
+                    let s = self.state.borrow();
+                    s.ui_state.opds_feed.as_ref().and_then(|f| {
+                        if index < f.navigation.len() {
+                            Some((Some(f.navigation[index].href.clone()), None))
+                        } else {
+                            f.publications
+                                .get(index - f.navigation.len())
+                                .cloned()
+                                .map(|p| (None, Some(p)))
+                        }
+                    })
+                };
+                if let Some((Some(url), _)) = selected {
+                    self.spawn_opds_feed(url, true)?
+                } else if let Some((_, Some(p))) = selected {
+                    self.spawn_opds_download(p)?
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn handle_opds_search_keys(&mut self, key: KeyEvent) -> eyre::Result<()> {
+        match key.code {
+            KeyCode::Esc => self
+                .state
+                .borrow_mut()
+                .ui_state
+                .open_window(WindowType::OpdsFeed),
+            KeyCode::Backspace => {
+                let mut s = self.state.borrow_mut();
+                let n = previous_grapheme_boundary(
+                    &s.ui_state.opds_search_query,
+                    s.ui_state.opds_search_query.len(),
+                );
+                s.ui_state.opds_search_query.truncate(n);
+            }
+            KeyCode::Char(c) => self.state.borrow_mut().ui_state.opds_search_query.push(c),
+            KeyCode::Enter => {
+                let (description, q) = {
+                    let s = self.state.borrow();
+                    (
+                        s.ui_state
+                            .opds_feed
+                            .as_ref()
+                            .and_then(|f| f.search.as_ref())
+                            .cloned(),
+                        s.ui_state.opds_search_query.clone(),
+                    )
+                };
+                if let Some(description) = description {
+                    self.spawn_opds_search(description, q)?
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn spawn_opds_feed(&mut self, url: String, push_history: bool) -> eyre::Result<()> {
+        let catalog_index = self
+            .opds_catalog_index
+            .ok_or_else(|| eyre::eyre!("no OPDS catalog selected"))?;
+        let catalog = self.state.borrow().config.settings.opds_catalogs[catalog_index].clone();
+        let target = url::Url::parse(&url)?;
+        let origin = url::Url::parse(&catalog.url)?;
+        if push_history {
+            if let Some(current) = self.opds_current_url.take() {
+                self.opds_history.push(current)
+            }
+        }
+        self.opds_current_url = Some(url);
+        self.opds_request_id = self.opds_request_id.wrapping_add(1);
+        let id = self.opds_request_id;
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let result = (|| {
+                let client = opds::client(false).map_err(|e| e.to_string())?;
+                let creds = catalog
+                    .username
+                    .as_deref()
+                    .map(|u| (u, catalog.password.as_deref()));
+                opds::get_feed(&client, &target, &origin, creds).map_err(|e| e.to_string())
+            })();
+            let _ = tx.send(OpdsWorkerEvent::Feed {
+                request_id: id,
+                result,
+            });
+        });
+        self.opds_rx = Some(rx);
+        let mut s = self.state.borrow_mut();
+        s.ui_state.opds_loading = true;
+        s.ui_state.opds_downloading = false;
+        s.ui_state.opds_error = None;
+        s.ui_state.opds_selected_index = 0;
+        s.ui_state.open_window(WindowType::OpdsFeed);
+        Ok(())
+    }
+
+    fn spawn_opds_download(&mut self, pubn: opds::Publication) -> eyre::Result<()> {
+        let readable = pubn.readable_acquisitions();
+        if readable.is_empty() {
+            self.state.borrow_mut().ui_state.opds_error =
+                Some("No directly readable acquisition is available".into());
+            return Ok(());
+        }
+        let format_index = self.state.borrow().ui_state.opds_format_index % readable.len();
+        let link = readable[format_index].clone();
+        let catalog = self.state.borrow().config.settings.opds_catalogs
+            [self.opds_catalog_index.unwrap_or(0)]
+        .clone();
+        let origin = url::Url::parse(&catalog.url)?;
+        let dir = opds::default_download_directory(
+            self.state
+                .borrow()
+                .config
+                .settings
+                .opds_download_directory
+                .as_deref(),
+        )?;
+        self.opds_request_id = self.opds_request_id.wrapping_add(1);
+        let id = self.opds_request_id;
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let progress_tx = tx.clone();
+            let mut last_progress = Instant::now() - Duration::from_secs(1);
+            let result = (|| {
+                let client = opds::client(true).map_err(|e| e.to_string())?;
+                let creds = catalog
+                    .username
+                    .as_deref()
+                    .map(|u| (u, catalog.password.as_deref()));
+                opds::download(
+                    &client,
+                    &link,
+                    &pubn.title,
+                    &dir,
+                    &origin,
+                    creds,
+                    |downloaded, total| {
+                        let complete = total.is_some_and(|value| downloaded >= value);
+                        if complete || last_progress.elapsed() >= Duration::from_millis(75) {
+                            let _ = progress_tx.send(OpdsWorkerEvent::Progress {
+                                request_id: id,
+                                downloaded,
+                                total,
+                            });
+                            last_progress = Instant::now();
+                        }
+                    },
+                )
+                .map_err(|e| e.to_string())
+            })();
+            let _ = tx.send(OpdsWorkerEvent::Download {
+                request_id: id,
+                result,
+            });
+        });
+        self.opds_rx = Some(rx);
+        let mut state = self.state.borrow_mut();
+        state.ui_state.opds_loading = true;
+        state.ui_state.opds_downloading = true;
+        state.ui_state.opds_downloaded_bytes = 0;
+        state.ui_state.opds_total_bytes = None;
+        Ok(())
+    }
+
+    fn spawn_opds_search(
+        &mut self,
+        description: opds::SearchDescription,
+        query: String,
+    ) -> eyre::Result<()> {
+        let catalog_index = self
+            .opds_catalog_index
+            .ok_or_else(|| eyre::eyre!("no OPDS catalog selected"))?;
+        let catalog = self.state.borrow().config.settings.opds_catalogs[catalog_index].clone();
+        let origin = url::Url::parse(&catalog.url)?;
+        if let Some(current) = self.opds_current_url.take() {
+            self.opds_history.push(current);
+        }
+        self.opds_request_id = self.opds_request_id.wrapping_add(1);
+        let request_id = self.opds_request_id;
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let result = (|| {
+                let client = opds::client(false).map_err(|e| e.to_string())?;
+                let credentials = catalog
+                    .username
+                    .as_deref()
+                    .map(|username| (username, catalog.password.as_deref()));
+                opds::search_feed(&client, &description, &query, &origin, credentials)
+                    .map_err(|e| e.to_string())
+            })();
+            let _ = tx.send(OpdsWorkerEvent::Feed { request_id, result });
+        });
+        self.opds_rx = Some(rx);
+        let mut state = self.state.borrow_mut();
+        state.ui_state.opds_loading = true;
+        state.ui_state.opds_downloading = false;
+        state.ui_state.opds_error = None;
+        state.ui_state.opds_selected_index = 0;
+        state.ui_state.open_window(WindowType::OpdsFeed);
         Ok(())
     }
 
@@ -3441,6 +3883,7 @@ where
                         SettingItem::KosyncServer
                             | SettingItem::KosyncUsername
                             | SettingItem::KosyncPassword
+                            | SettingItem::OpdsDownloadDirectory
                     )
                 ) {
                     let mut state = self.state.borrow_mut();
@@ -3469,6 +3912,15 @@ where
                                 .config
                                 .settings
                                 .kosync_password
+                                .clone()
+                                .unwrap_or_default(),
+                        ),
+                        SettingItem::OpdsDownloadDirectory => (
+                            "OPDS download directory",
+                            state
+                                .config
+                                .settings
+                                .opds_download_directory
                                 .clone()
                                 .unwrap_or_default(),
                         ),
@@ -3635,6 +4087,9 @@ where
                     Some("KOReader sync server") => state.config.settings.kosync_server = value,
                     Some("KOReader sync username") => state.config.settings.kosync_username = value,
                     Some("KOReader sync password") => state.config.settings.kosync_password = value,
+                    Some("OPDS download directory") => {
+                        state.config.settings.opds_download_directory = value
+                    }
                     _ => {}
                 }
                 state.config.save()?;
@@ -3970,6 +4425,40 @@ where
                 library_cover,
                 &theme,
             );
+        } else if state.ui_state.active_window == WindowType::OpdsCatalogs {
+            OpdsWindow::catalogs(
+                frame,
+                frame.area(),
+                &state.config.settings.opds_catalogs,
+                state.ui_state.opds_catalog_selected_index,
+                &theme,
+            );
+        } else if matches!(
+            state.ui_state.active_window,
+            WindowType::OpdsFeed | WindowType::OpdsDetails | WindowType::OpdsSearchInput
+        ) {
+            OpdsWindow::feed(
+                frame,
+                frame.area(),
+                state.ui_state.opds_feed.as_ref(),
+                state.ui_state.opds_selected_index,
+                state.ui_state.opds_format_index,
+                state.ui_state.opds_loading,
+                state.ui_state.opds_downloading,
+                state.ui_state.opds_downloaded_bytes,
+                state.ui_state.opds_total_bytes,
+                state.ui_state.opds_error.as_deref(),
+                state.ui_state.active_window == WindowType::OpdsDetails,
+                &theme,
+            );
+            if state.ui_state.active_window == WindowType::OpdsSearchInput {
+                OpdsWindow::search(
+                    frame,
+                    frame.area(),
+                    &state.ui_state.opds_search_query,
+                    &theme,
+                );
+            }
         } else if state.ui_state.show_search {
             let entries: Vec<String> = state
                 .ui_state
@@ -4272,6 +4761,13 @@ where
                     }
                 ),
                 SettingItem::KosyncPullNow => "Pull KOReader progress now".to_string(),
+                SettingItem::OpdsDownloadDirectory => format!(
+                    "Download directory: {}",
+                    settings
+                        .opds_download_directory
+                        .as_deref()
+                        .unwrap_or("Downloads/repy (default)")
+                ),
             })
             .collect()
     }
@@ -7186,7 +7682,8 @@ where
             }
             SettingItem::KosyncServer
             | SettingItem::KosyncUsername
-            | SettingItem::KosyncPassword => return Ok(()),
+            | SettingItem::KosyncPassword
+            | SettingItem::OpdsDownloadDirectory => return Ok(()),
             SettingItem::KosyncPullNow => {
                 drop(state);
                 self.start_kosync_pull(true);
@@ -7285,6 +7782,11 @@ where
             Some(SettingItem::KosyncPassword) => {
                 let mut state = self.state.borrow_mut();
                 state.config.settings.kosync_password = None;
+                state.config.save()?;
+            }
+            Some(SettingItem::OpdsDownloadDirectory) => {
+                let mut state = self.state.borrow_mut();
+                state.config.settings.opds_download_directory = None;
                 state.config.save()?;
             }
             _ => {}
@@ -8972,6 +9474,11 @@ mod tests {
             current_inline_image_rows: None,
             dictionary_res_rx: None,
             library_scan_rx: None,
+            opds_rx: None,
+            opds_request_id: 0,
+            opds_catalog_index: None,
+            opds_history: Vec::new(),
+            opds_current_url: None,
             tts_done_rx: None,
             tts_child: None,
             tts_chunks: Vec::new(),

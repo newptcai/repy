@@ -66,6 +66,7 @@ const HELP_TEXT: &[&str] = &[
     "   c                 Toggle selected book details and cover",
     "   f                 Cycle available formats",
     "   R                 Refresh library directories",
+    "   O                 Browse OPDS catalogs (from Library)",
     "   d                 Remove from history",
     "   s                 Cycle sort (recent/title/author/series/progress)",
     " Text-to-Speech:",

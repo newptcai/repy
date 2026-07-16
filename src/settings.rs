@@ -17,6 +17,25 @@ pub const DICT_PRESET_LIST: &[&str] = &["dict", "sdcv", "wkdict"];
 pub const TTS_PRESET_LIST: &[&str] = &["purr", "edge-tts", "trans"];
 pub const DEFAULT_KOSYNC_SERVER: &str = "https://sync.koreader.rocks";
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OpdsCatalogConfig {
+    pub name: String,
+    pub url: String,
+    pub username: Option<String>,
+    pub password: Option<String>,
+}
+
+impl Default for OpdsCatalogConfig {
+    fn default() -> Self {
+        Self {
+            name: "Project Gutenberg".into(),
+            url: "https://www.gutenberg.org/ebooks/search.opds/".into(),
+            username: None,
+            password: None,
+        }
+    }
+}
+
 /// Inline image policy for the reading view.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
@@ -63,6 +82,10 @@ pub struct Settings {
     /// Directories scanned for ebooks by the library window (`~` expands to
     /// the home directory). A Calibre library root works as-is.
     pub library_directories: Vec<String>,
+    /// Named OPDS catalogs. Credentials are kept in the mode-0600 config file.
+    pub opds_catalogs: Vec<OpdsCatalogConfig>,
+    /// Download destination. `None` selects Downloads/repy, with an app-data fallback.
+    pub opds_download_directory: Option<String>,
     /// Whether images render inline in the reading view or stay as one-line
     /// placeholders.
     pub inline_images: InlineImages,
@@ -93,6 +116,10 @@ impl Settings {
         if !other.library_directories.is_empty() {
             self.library_directories = other.library_directories;
         }
+        if !other.opds_catalogs.is_empty() {
+            self.opds_catalogs = other.opds_catalogs;
+        }
+        self.opds_download_directory = other.opds_download_directory;
         self.inline_images = other.inline_images;
         self.kosync_server = other.kosync_server;
         self.kosync_username = other.kosync_username;
@@ -116,6 +143,8 @@ impl Default for Settings {
             show_line_numbers: false,
             show_top_bar: true,
             library_directories: Vec::new(),
+            opds_catalogs: vec![OpdsCatalogConfig::default()],
+            opds_download_directory: None,
             inline_images: InlineImages::default(),
             kosync_server: Some(DEFAULT_KOSYNC_SERVER.to_string()),
             kosync_username: None,

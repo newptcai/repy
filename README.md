@@ -336,6 +336,15 @@ Example `configuration.json`:
     "preferred_tts_engine": "purr",
     "tts_engine_args": [],
     "library_directories": ["~/Calibre", "~/Books"],
+    "opds_catalogs": [
+      {
+        "name": "Project Gutenberg",
+        "url": "https://www.gutenberg.org/ebooks/search.opds/",
+        "username": null,
+        "password": null
+      }
+    ],
+    "opds_download_directory": null,
     "inline_images": "placeholder",
     "kosync_server": "https://sync.koreader.rocks",
     "kosync_username": "your-koreader-sync-user",
@@ -354,6 +363,22 @@ Example `configuration.json`:
   }
 }
 ```
+
+### OPDS catalogs
+
+From the Library, press `O` to browse the catalogs in `opds_catalogs`. `Enter`
+opens a catalog, navigation entry, or downloadable publication; `/` searches
+when the server advertises OpenSearch; `[` and `]` page; `f` changes format;
+`c` shows publication details; and `h`/Backspace returns to the previous feed.
+
+OPDS 1.2 Atom catalogs are supported. Downloads run in the background, are
+validated before being saved permanently, and then open in the reader. A null
+download directory uses the platform Downloads directory under `repy` (with an
+app-data fallback). Basic-auth credentials are sent only to the configured
+catalog origin and passwords are never shown in the UI. Catalog entries remain
+configuration-file based. The shared catalog model is version-neutral, so OPDS
+2.0 support can be added as a JSON parser without changing the browser or
+download pipeline.
 
 You can modify any setting or keybinding by editing this file. Changes take effect
 on next restart.

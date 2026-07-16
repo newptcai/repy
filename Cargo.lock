@@ -3249,6 +3249,7 @@ dependencies = [
  "textwrap",
  "unicode-segmentation",
  "unicode-width",
+ "url",
  "walkdir",
  "zip 8.6.0",
 ]

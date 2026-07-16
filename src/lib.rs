@@ -6,6 +6,7 @@ pub mod formats;
 pub mod library;
 pub mod logging;
 pub mod models;
+pub mod opds;
 pub mod parser;
 pub mod renderer;
 pub mod settings;

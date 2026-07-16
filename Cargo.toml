@@ -32,6 +32,7 @@ image = "0.25"
 pulldown-cmark = "0.13.4"
 zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
 quick-xml = { version = "0.41.0", features = ["encoding"] }
+url = "2.5"
 base64 = "0.22.1"
 mobi = "0.8.0"
 md-5 = "0.10.6"
