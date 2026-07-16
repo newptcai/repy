@@ -217,6 +217,33 @@ fn reading_stats_dedup_and_jump_detection() {
 }
 
 #[test]
+fn settings_window_sections() {
+    let mut reader = test_reader();
+    press_char(&mut reader, 's');
+    reader.state.borrow_mut().ui_state.clear_message();
+    reader.draw().expect("failed to draw settings window");
+    insta::assert_snapshot!(reader.terminal.backend());
+}
+
+#[test]
+fn settings_window_scrolls_to_selection() {
+    let mut reader = test_reader();
+    press_char(&mut reader, 's');
+    // Drive the selection down into the last section, which starts below the
+    // initial fold; the list must scroll it into view.
+    for _ in 0..14 {
+        press_char(&mut reader, 'j');
+    }
+    reader.state.borrow_mut().ui_state.clear_message();
+    reader.draw().expect("failed to draw settings window");
+    let screen = format!("{}", reader.terminal.backend());
+    assert!(
+        screen.contains("Pull KOReader progress now"),
+        "selecting the last setting should scroll it into view:\n{screen}"
+    );
+}
+
+#[test]
 fn line_numbers() {
     let mut reader = test_reader();
     // There is no single "toggle line numbers" key; it lives in the

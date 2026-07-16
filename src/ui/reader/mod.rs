@@ -615,25 +615,54 @@ enum SettingItem {
     KosyncPassword,
 }
 
-impl SettingItem {
-    fn all() -> &'static [SettingItem] {
+/// Settings grouped into labelled sections. Single source of truth for both
+/// the flat navigation order (`SettingItem::all`) and the section headers the
+/// Settings window renders.
+const SETTINGS_SECTIONS: &[(&str, &[SettingItem])] = &[
+    (
+        "Display",
         &[
             SettingItem::ShowLineNumbers,
-            SettingItem::MouseSupport,
-            SettingItem::PageScrollAnimation,
             SettingItem::ShowProgressIndicator,
+            SettingItem::ShowTopBar,
+            SettingItem::PageScrollAnimation,
             SettingItem::SeamlessBetweenChapters,
             SettingItem::InlineImages,
-            SettingItem::DictionaryClient,
-            SettingItem::TtsEngine,
             SettingItem::Width,
-            SettingItem::ShowTopBar,
             SettingItem::ColorTheme,
-            SettingItem::KosyncPullNow,
+        ],
+    ),
+    ("Input", &[SettingItem::MouseSupport]),
+    (
+        "Tools",
+        &[SettingItem::DictionaryClient, SettingItem::TtsEngine],
+    ),
+    (
+        "KOReader Sync",
+        &[
             SettingItem::KosyncServer,
             SettingItem::KosyncUsername,
             SettingItem::KosyncPassword,
-        ]
+            SettingItem::KosyncPullNow,
+        ],
+    ),
+];
+
+impl SettingItem {
+    /// The settings in flat navigation order (sections concatenated).
+    fn all() -> Vec<SettingItem> {
+        SETTINGS_SECTIONS
+            .iter()
+            .flat_map(|(_, items)| items.iter().copied())
+            .collect()
+    }
+
+    /// Section titles paired with how many settings each contains, in order.
+    fn section_counts() -> Vec<(&'static str, usize)> {
+        SETTINGS_SECTIONS
+            .iter()
+            .map(|(title, items)| (*title, items.len()))
+            .collect()
     }
 }
 
@@ -3987,6 +4016,7 @@ where
                 frame,
                 frame.area(),
                 &entries,
+                &SettingItem::section_counts(),
                 state.ui_state.settings_selected_index,
                 &theme,
             );
