@@ -63,9 +63,11 @@ const HELP_TEXT: &[&str] = &[
     "   /                 Fuzzy-filter list windows (Esc clears, Enter picks)",
     " Library Window:",
     "   Enter             Open book",
-    "   c                 Toggle selected book cover",
+    "   c                 Toggle selected book details and cover",
+    "   f                 Cycle available formats",
+    "   R                 Refresh library directories",
     "   d                 Remove from history",
-    "   s                 Cycle sort (recent/title/author/progress)",
+    "   s                 Cycle sort (recent/title/author/series/progress)",
     " Text-to-Speech:",
     "   !                 Toggle TTS (Read Aloud)",
     " Cursor Mode:",
@@ -157,7 +159,7 @@ mod tests {
 
     #[test]
     fn max_scroll_offset_zero_when_help_fits() {
-        let area = Rect::new(0, 0, 120, 80);
+        let area = Rect::new(0, 0, 120, 100);
         assert_eq!(HelpWindow::max_scroll_offset(area), 0);
     }
 
@@ -175,9 +177,7 @@ mod tests {
         assert!(!is_section_header(""));
         // Every non-blank help line is either a header or an indented item.
         assert!(
-            HELP_TEXT
-                .iter()
-                .any(|line| is_section_header(line)),
+            HELP_TEXT.iter().any(|line| is_section_header(line)),
             "help text should contain section headers"
         );
     }

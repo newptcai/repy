@@ -1,6 +1,6 @@
 use crate::models::{
-    BookIdentity, Highlight, LibraryItem, ReadingState, ReadingStatistics, ReadingStatsTotals,
-    ScannedBook,
+    BookIdentity, Highlight, LibraryCacheEntry, LibraryItem, ReadingState, ReadingStatistics,
+    ReadingStatsTotals, ScannedBook,
 };
 use crate::theme::ColorTheme;
 use chrono::{DateTime, Local, NaiveDate, Utc};
@@ -13,6 +13,72 @@ use crate::config::get_app_data_prefix;
 
 pub struct State {
     conn: Connection,
+}
+
+fn cache_entry_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<LibraryCacheEntry> {
+    let tags_json: String = row.get(10)?;
+    Ok(LibraryCacheEntry {
+        filepath: row.get(0)?,
+        library_root: row.get(1)?,
+        book_key: row.get(2)?,
+        mtime: row.get(3)?,
+        metadata_mtime: row.get(4)?,
+        cover_mtime: row.get(5)?,
+        title: row.get(6)?,
+        author: row.get(7)?,
+        series: row.get(8)?,
+        series_index: row.get(9)?,
+        tags: serde_json::from_str(&tags_json).unwrap_or_default(),
+        language: row.get(11)?,
+        publisher: row.get(12)?,
+        description: row.get(13)?,
+        cover_path: row.get(14)?,
+    })
+}
+
+fn logical_scanned_books(entries: Vec<LibraryCacheEntry>) -> Vec<ScannedBook> {
+    let mut groups = std::collections::BTreeMap::<String, Vec<LibraryCacheEntry>>::new();
+    for entry in entries {
+        groups
+            .entry(entry.book_key.clone())
+            .or_default()
+            .push(entry);
+    }
+    groups
+        .into_values()
+        .filter_map(|mut formats| {
+            formats.sort_by_key(|e| {
+                let p = std::path::Path::new(&e.filepath);
+                let ext = p
+                    .extension()
+                    .and_then(|x| x.to_str())
+                    .unwrap_or("")
+                    .to_ascii_lowercase();
+                match ext.as_str() {
+                    "epub" => 0,
+                    "fb2" => 1,
+                    "mobi" | "azw3" | "azw" => 2,
+                    "cbz" => 3,
+                    _ => 4,
+                }
+            });
+            let preferred = formats.first()?.clone();
+            Some(ScannedBook {
+                filepath: preferred.filepath.clone(),
+                title: preferred.title,
+                author: preferred.author,
+                book_key: preferred.book_key,
+                series: preferred.series,
+                series_index: preferred.series_index,
+                tags: preferred.tags,
+                language: preferred.language,
+                publisher: preferred.publisher,
+                description: preferred.description,
+                formats: formats.into_iter().map(|e| e.filepath).collect(),
+                cover_path: preferred.cover_path,
+            })
+        })
+        .collect()
 }
 
 impl State {
@@ -106,6 +172,17 @@ impl State {
             conn.execute_batch("BEGIN IMMEDIATE TRANSACTION;")?;
             if let Err(err) = Self::migrate_v6(conn).and_then(|_| {
                 conn.pragma_update(None, "user_version", 6)
+                    .map_err(Into::into)
+            }) {
+                let _ = conn.execute_batch("ROLLBACK;");
+                return Err(err);
+            }
+            conn.execute_batch("COMMIT;")?;
+        }
+        if current_version < 7 {
+            conn.execute_batch("BEGIN IMMEDIATE TRANSACTION;")?;
+            if let Err(err) = Self::migrate_v7(conn).and_then(|_| {
+                conn.pragma_update(None, "user_version", 7)
                     .map_err(Into::into)
             }) {
                 let _ = conn.execute_batch("ROLLBACK;");
@@ -303,6 +380,30 @@ impl State {
         Ok(())
     }
 
+    fn migrate_v7(conn: &Connection) -> Result<()> {
+        for sql in [
+            "ALTER TABLE library_files ADD COLUMN library_root TEXT NOT NULL DEFAULT ''",
+            "ALTER TABLE library_files ADD COLUMN book_key TEXT NOT NULL DEFAULT ''",
+            "ALTER TABLE library_files ADD COLUMN metadata_mtime INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE library_files ADD COLUMN cover_mtime INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE library_files ADD COLUMN series TEXT",
+            "ALTER TABLE library_files ADD COLUMN series_index REAL",
+            "ALTER TABLE library_files ADD COLUMN tags_json TEXT NOT NULL DEFAULT '[]'",
+            "ALTER TABLE library_files ADD COLUMN language TEXT",
+            "ALTER TABLE library_files ADD COLUMN publisher TEXT",
+            "ALTER TABLE library_files ADD COLUMN description TEXT",
+            "ALTER TABLE library_files ADD COLUMN cover_path TEXT",
+        ] {
+            let _ = conn.execute(sql, []);
+        }
+        conn.execute_batch(
+            "UPDATE library_files SET book_key=filepath WHERE book_key='';
+             CREATE INDEX IF NOT EXISTS idx_library_files_root ON library_files(library_root);
+             CREATE INDEX IF NOT EXISTS idx_library_files_book ON library_files(book_key);",
+        )?;
+        Ok(())
+    }
+
     /// Return cached (title, author) for a scanned file if the cache row
     /// matches the file's current modification time.
     pub fn cached_library_file(
@@ -321,6 +422,83 @@ impl State {
         Ok(result)
     }
 
+    pub fn cached_library_entry(
+        &self,
+        filepath: &str,
+        mtime: i64,
+        metadata_mtime: i64,
+        cover_mtime: i64,
+    ) -> Result<Option<LibraryCacheEntry>> {
+        self.conn
+            .query_row(
+                "SELECT filepath, library_root, book_key, mtime, metadata_mtime, cover_mtime,
+                    title, author, series, series_index, tags_json, language, publisher,
+                    description, cover_path
+             FROM library_files
+             WHERE filepath=? AND mtime=? AND metadata_mtime=? AND cover_mtime=?",
+                params![filepath, mtime, metadata_mtime, cover_mtime],
+                cache_entry_from_row,
+            )
+            .optional()
+            .map_err(Into::into)
+    }
+
+    pub fn upsert_library_entry(&self, entry: &LibraryCacheEntry) -> Result<()> {
+        let tags = serde_json::to_string(&entry.tags)?;
+        self.conn.execute(
+            "INSERT INTO library_files
+             (filepath, library_root, book_key, mtime, metadata_mtime, cover_mtime,
+              title, author, series, series_index, tags_json, language, publisher,
+              description, cover_path, scanned_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+             ON CONFLICT(filepath) DO UPDATE SET
+              library_root=excluded.library_root, book_key=excluded.book_key,
+              mtime=excluded.mtime, metadata_mtime=excluded.metadata_mtime,
+              cover_mtime=excluded.cover_mtime, title=excluded.title, author=excluded.author,
+              series=excluded.series, series_index=excluded.series_index,
+              tags_json=excluded.tags_json, language=excluded.language,
+              publisher=excluded.publisher, description=excluded.description,
+              cover_path=excluded.cover_path, scanned_at=excluded.scanned_at",
+            params![
+                entry.filepath,
+                entry.library_root,
+                entry.book_key,
+                entry.mtime,
+                entry.metadata_mtime,
+                entry.cover_mtime,
+                entry.title,
+                entry.author,
+                entry.series,
+                entry.series_index,
+                tags,
+                entry.language,
+                entry.publisher,
+                entry.description,
+                entry.cover_path
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Prune only a root whose walk completed successfully. An unavailable
+    /// root deliberately retains its last-known cache rows.
+    pub fn prune_library_root(&self, root: &str, seen: &[String]) -> Result<()> {
+        if seen.is_empty() {
+            self.conn
+                .execute("DELETE FROM library_files WHERE library_root=?", [root])?;
+        } else {
+            let placeholders = vec!["?"; seen.len()].join(",");
+            let sql = format!(
+                "DELETE FROM library_files WHERE library_root=? AND filepath NOT IN ({})",
+                placeholders
+            );
+            let values = std::iter::once(root).chain(seen.iter().map(String::as_str));
+            self.conn
+                .execute(&sql, rusqlite::params_from_iter(values))?;
+        }
+        Ok(())
+    }
+
     pub fn upsert_library_file(
         &self,
         filepath: &str,
@@ -329,14 +507,14 @@ impl State {
         author: Option<&str>,
     ) -> Result<()> {
         self.conn.execute(
-            "INSERT INTO library_files (filepath, mtime, title, author, scanned_at)
-             VALUES (?, ?, ?, ?, datetime('now'))
+            "INSERT INTO library_files (filepath, book_key, mtime, title, author, scanned_at)
+             VALUES (?, ?, ?, ?, ?, datetime('now'))
              ON CONFLICT(filepath) DO UPDATE SET
                 mtime=excluded.mtime,
                 title=excluded.title,
                 author=excluded.author,
                 scanned_at=excluded.scanned_at",
-            params![filepath, mtime, title, author],
+            params![filepath, filepath, mtime, title, author],
         )?;
         Ok(())
     }
@@ -359,21 +537,17 @@ impl State {
 
     /// All scanned on-disk books, from the cache (no filesystem access).
     pub fn get_scanned_library_files(&self) -> Result<Vec<ScannedBook>> {
-        let mut stmt = self
-            .conn
-            .prepare("SELECT filepath, title, author FROM library_files ORDER BY filepath")?;
-        let rows = stmt.query_map([], |row| {
-            Ok(ScannedBook {
-                filepath: row.get(0)?,
-                title: row.get(1)?,
-                author: row.get(2)?,
-            })
-        })?;
-        let mut files = Vec::new();
+        let mut stmt = self.conn.prepare(
+            "SELECT filepath, library_root, book_key, mtime, metadata_mtime, cover_mtime,
+                    title, author, series, series_index, tags_json, language, publisher,
+                    description, cover_path FROM library_files ORDER BY filepath",
+        )?;
+        let rows = stmt.query_map([], cache_entry_from_row)?;
+        let mut entries = Vec::new();
         for row in rows {
-            files.push(row?);
+            entries.push(row?);
         }
-        Ok(files)
+        Ok(logical_scanned_books(entries))
     }
 
     /// Record a search query, refreshing its recency. History is capped at
@@ -1351,7 +1525,7 @@ mod tests {
         let version: i64 = conn
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .unwrap();
-        assert_eq!(version, 6);
+        assert_eq!(version, 7);
     }
 
     fn sample_identity(book_id: &str) -> BookIdentity {
@@ -1502,7 +1676,7 @@ mod tests {
         let version: i64 = conn
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .unwrap();
-        assert_eq!(version, 6);
+        assert_eq!(version, 7);
 
         let row: i64 = conn
             .query_row(

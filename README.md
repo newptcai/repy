@@ -208,15 +208,17 @@ Press `?` in the TUI to see the help window at any time (`Help (?)`).
 - `r` — Library (reading history merged with books found on disk)
   - `j`/`k` to select an entry
   - `Enter` to open the selected book
-  - `c` to show or hide the selected book's cover (off by default)
+  - `c` to show or hide the selected book's details and cover (off by default)
+  - `f` to cycle among available formats for a Calibre book
+  - `R` to refresh configured library directories
   - `d` to delete the selected history entry
-  - `s` to cycle the sort order: recent / title / author / progress
+  - `s` to cycle the sort order: recent / title / author / series / progress
   - Books found in `library_directories` but never opened show as `new`/`unread`;
     history entries whose file has disappeared are marked `[missing]`
-  - When enabled with `c` and the terminal supports graphics, the selected
-    book's cover is shown in a panel beside the list (Calibre-style
-    `cover.jpg` files are used directly; otherwise the cover is read from the
-    EPUB)
+  - When enabled with `c`, a responsive details panel shows metadata and all
+    available formats; supported graphics terminals also show the cover
+    (Calibre-style `cover.jpg` files are used directly, otherwise the cover is
+    read from the ebook)
 - `R` — Reading Statistics
 - `s` — Settings
   - `Enter`: Activate (toggle boolean, input for dictionary client)
@@ -406,11 +408,13 @@ background scan. Metadata is cached in the database keyed by file path and
 modification time, so repeat scans only read new or changed files.
 
 A [Calibre](https://calibre-ebook.com/) library works as-is: point
-`library_directories` at the Calibre library root and `repy` walks its
-`Author/Title (id)/` folder structure, reading title and author from the
-`metadata.opf` file Calibre keeps next to each book (without opening the
-EPUB itself). The Calibre database is never written to — the directory is
-only read.
+`library_directories` at the Calibre library root. `repy` reads the root
+`metadata.db` through an immutable, read-only SQLite connection, obtaining
+books, formats, authors, series, tags, languages, publishers, comments, and
+covers without walking every ebook archive. If the database is unavailable or
+its schema is incompatible, `repy` automatically falls back to the per-book
+`metadata.opf` files and directory scan. Calibre's database and library files
+are never written.
 
 ### Mouse support
 

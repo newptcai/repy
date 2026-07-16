@@ -277,8 +277,8 @@ pub struct UiState {
     pub library_items: Vec<LibraryEntry>,
     pub library_selected_index: usize,
     pub library_sort_mode: LibrarySortMode,
-    /// Whether the selected book's cover is shown in the Library window.
-    /// Covers are opt-in because decoding them can make navigation sluggish.
+    /// Whether the selected book's metadata details are shown in the Library
+    /// window. Cover decoding remains lazy because it can make navigation sluggish.
     pub library_cover_visible: bool,
     /// True while a background library scan is running.
     pub library_scanning: bool,
@@ -3339,7 +3339,7 @@ where
                 .ui_state
                 .library_items
                 .iter()
-                .map(Self::format_library_item)
+                .map(LibraryEntry::searchable_text)
                 .collect();
             (items, s.ui_state.library_selected_index)
         };
@@ -3358,10 +3358,27 @@ where
                     {
                         let mut state = self.state.borrow_mut();
                         state.ui_state.library_sort_mode = state.ui_state.library_sort_mode.next();
-                        state.ui_state.library_selected_index = 0;
                     }
                     self.rebuild_library_entries()?;
                     self.reset_list_filter_after_change();
+                }
+                KeyCode::Char('R') => {
+                    self.spawn_library_scan();
+                }
+                KeyCode::Char('f') => {
+                    let mut state = self.state.borrow_mut();
+                    let selected = state.ui_state.selected_list_index(index);
+                    if let Some(entry) =
+                        selected.and_then(|i| state.ui_state.library_items.get_mut(i))
+                        && entry.formats.len() > 1
+                    {
+                        let current = entry
+                            .formats
+                            .iter()
+                            .position(|p| p == &entry.filepath)
+                            .unwrap_or(0);
+                        entry.filepath = entry.formats[(current + 1) % entry.formats.len()].clone();
+                    }
                 }
                 KeyCode::Char('c') => {
                     let mut state = self.state.borrow_mut();
@@ -3942,6 +3959,14 @@ where
                 filter.as_deref(),
                 state.ui_state.library_sort_mode,
                 state.ui_state.library_scanning,
+                if state.ui_state.library_cover_visible {
+                    state
+                        .ui_state
+                        .selected_list_index(state.ui_state.library_selected_index)
+                        .and_then(|i| state.ui_state.library_items.get(i))
+                } else {
+                    None
+                },
                 library_cover,
                 &theme,
             );
@@ -4135,7 +4160,7 @@ where
             }
         };
 
-        let book_name =
+        let mut book_name =
             if let (Some(title), Some(author)) = (item.title.as_ref(), item.author.as_ref()) {
                 format!("{} - {} ({})", title, author, filename)
             } else if item.title.is_none() && item.author.is_some() {
@@ -4143,6 +4168,20 @@ where
             } else {
                 filename
             };
+        if let Some(series) = &item.series {
+            let index = item
+                .series_index
+                .map(|n| format!(" #{n}"))
+                .unwrap_or_default();
+            book_name.push_str(&format!(" [{series}{index}]"));
+        }
+        if item.formats.len() > 1 {
+            let format = std::path::Path::new(&item.filepath)
+                .extension()
+                .map(|ext| ext.to_string_lossy().to_ascii_uppercase())
+                .unwrap_or_default();
+            book_name.push_str(&format!(" <{format}>"));
+        }
 
         let last_read_str = match item.last_read {
             Some(last_read) => last_read
@@ -5017,15 +5056,33 @@ where
     /// Rebuild the library window entries from the database (reading history
     /// merged with scanned on-disk books), keeping the current sort mode.
     fn rebuild_library_entries(&mut self) -> eyre::Result<()> {
+        let selected_key = {
+            let state = self.state.borrow();
+            state
+                .ui_state
+                .selected_list_index(state.ui_state.library_selected_index)
+                .and_then(|i| state.ui_state.library_items.get(i))
+                .map(|entry| entry.book_key.clone())
+        };
         let history = self.db_state.get_from_history()?;
         let scanned = self.db_state.get_scanned_library_files()?;
         let mut state = self.state.borrow_mut();
         let sort_mode = state.ui_state.library_sort_mode;
         state.ui_state.library_items = Self::merge_library_entries(history, scanned, sort_mode);
-        let max_index = state.ui_state.library_items.len().saturating_sub(1);
-        if state.ui_state.library_selected_index > max_index {
-            state.ui_state.library_selected_index = max_index;
-        }
+        state.ui_state.library_selected_index = selected_key
+            .and_then(|key| {
+                state
+                    .ui_state
+                    .library_items
+                    .iter()
+                    .position(|e| e.book_key == key)
+            })
+            .unwrap_or_else(|| {
+                state
+                    .ui_state
+                    .library_selected_index
+                    .min(state.ui_state.library_items.len().saturating_sub(1))
+            });
         Ok(())
     }
 
@@ -5043,17 +5100,31 @@ where
             let on_disk = std::path::Path::new(&item.filepath).exists();
             index_by_path.insert(item.filepath.clone(), entries.len());
             entries.push(LibraryEntry {
-                filepath: item.filepath,
+                book_key: item.filepath.clone(),
+                formats: vec![item.filepath.clone()],
+                filepath: item.filepath.clone(),
                 title: item.title,
                 author: item.author,
+                series: None,
+                series_index: None,
+                tags: Vec::new(),
+                language: None,
+                publisher: None,
+                description: None,
+                cover_path: None,
+                history_filepath: Some(item.filepath.clone()),
                 last_read: Some(item.last_read),
                 reading_progress: item.reading_progress,
                 on_disk,
             });
         }
         for book in scanned {
-            match index_by_path.get(&book.filepath) {
-                Some(&i) => {
+            let existing = book
+                .formats
+                .iter()
+                .find_map(|path| index_by_path.get(path).copied());
+            match existing {
+                Some(i) => {
                     let entry = &mut entries[i];
                     if entry.title.is_none() {
                         entry.title = book.title;
@@ -5061,12 +5132,35 @@ where
                     if entry.author.is_none() {
                         entry.author = book.author;
                     }
+                    entry.book_key = book.book_key;
+                    entry.series = book.series;
+                    entry.series_index = book.series_index;
+                    entry.tags = book.tags;
+                    entry.language = book.language;
+                    entry.publisher = book.publisher;
+                    entry.description = book
+                        .description
+                        .and_then(|text| crate::library::plain_text_description(&text));
+                    entry.formats = book.formats;
+                    entry.cover_path = book.cover_path;
                     entry.on_disk = true;
                 }
                 None => entries.push(LibraryEntry {
                     filepath: book.filepath,
+                    book_key: book.book_key,
                     title: book.title,
                     author: book.author,
+                    series: book.series,
+                    series_index: book.series_index,
+                    tags: book.tags,
+                    language: book.language,
+                    publisher: book.publisher,
+                    description: book
+                        .description
+                        .and_then(|text| crate::library::plain_text_description(&text)),
+                    formats: book.formats,
+                    cover_path: book.cover_path,
+                    history_filepath: None,
                     last_read: None,
                     reading_progress: None,
                     on_disk: true,
@@ -5094,6 +5188,19 @@ where
                     (None, None) => a.display_title().cmp(&b.display_title()),
                 });
             }
+            LibrarySortMode::Series => entries.sort_by(|a, b| {
+                a.series
+                    .as_deref()
+                    .unwrap_or("~")
+                    .to_lowercase()
+                    .cmp(&b.series.as_deref().unwrap_or("~").to_lowercase())
+                    .then_with(|| {
+                        a.series_index
+                            .partial_cmp(&b.series_index)
+                            .unwrap_or(std::cmp::Ordering::Equal)
+                    })
+                    .then_with(|| a.display_title().cmp(&b.display_title()))
+            }),
             LibrarySortMode::Progress => {
                 entries.sort_by(|a, b| match (a.reading_progress, b.reading_progress) {
                     (Some(x), Some(y)) => y
@@ -6632,7 +6739,7 @@ where
                 .ui_state
                 .selected_list_index(state.ui_state.library_selected_index)
                 .and_then(|i| state.ui_state.library_items.get(i))
-                .map(|item| (item.filepath.clone(), item.last_read.is_some()))
+                .map(|item| (item.history_filepath.clone(), item.last_read.is_some()))
         };
         if let Some((path, has_history)) = selected {
             if !has_history {
@@ -6644,7 +6751,9 @@ where
                 );
                 return Ok(());
             }
-            self.db_state.delete_from_library(&path)?;
+            if let Some(path) = path {
+                self.db_state.delete_from_library(&path)?;
+            }
             self.rebuild_library_entries()?;
         }
         Ok(())
@@ -9388,6 +9497,15 @@ mod tests {
             filepath: path.to_string(),
             title: Some(title.to_string()),
             author: Some(format!("{} Author", title)),
+            book_key: path.to_string(),
+            series: None,
+            series_index: None,
+            tags: Vec::new(),
+            language: None,
+            publisher: None,
+            description: None,
+            formats: vec![path.to_string()],
+            cover_path: None,
         }
     }
 
@@ -9408,6 +9526,48 @@ mod tests {
         assert!(!entries[0].on_disk);
         assert!(entries[2].on_disk);
         assert!(entries[2].last_read.is_none());
+    }
+
+    #[test]
+    fn test_merge_library_entries_preserves_calibre_formats_and_metadata() {
+        let history = vec![history_item("/c/book.mobi", "Old title", 5, 0.4)];
+        let mut scanned = scanned_book("/c/book.epub", "Catalog title");
+        scanned.book_key = "/c/record".into();
+        scanned.formats = vec!["/c/book.epub".into(), "/c/book.mobi".into()];
+        scanned.series = Some("A Series".into());
+        scanned.series_index = Some(2.0);
+        scanned.tags = vec!["history".into()];
+
+        let entries =
+            TestReader::merge_library_entries(history, vec![scanned], LibrarySortMode::Recent);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].book_key, "/c/record");
+        assert_eq!(entries[0].formats.len(), 2);
+        assert_eq!(entries[0].series.as_deref(), Some("A Series"));
+        assert!(entries[0].searchable_text().contains("history"));
+    }
+
+    #[test]
+    fn test_merge_library_entries_sorts_series_by_index() {
+        let mut second = scanned_book("/c/second.epub", "Second");
+        second.series = Some("Series".into());
+        second.series_index = Some(2.0);
+        let mut first = scanned_book("/c/first.epub", "First");
+        first.series = Some("Series".into());
+        first.series_index = Some(1.0);
+
+        let entries = TestReader::merge_library_entries(
+            Vec::new(),
+            vec![second, first],
+            LibrarySortMode::Series,
+        );
+        assert_eq!(
+            entries
+                .iter()
+                .map(|e| e.title.as_deref())
+                .collect::<Vec<_>>(),
+            vec![Some("First"), Some("Second")]
+        );
     }
 
     #[test]

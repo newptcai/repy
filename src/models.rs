@@ -111,6 +111,37 @@ pub struct ScannedBook {
     pub filepath: String,
     pub title: Option<String>,
     pub author: Option<String>,
+    /// Stable scanner identity shared by every format in one Calibre record.
+    pub book_key: String,
+    pub series: Option<String>,
+    pub series_index: Option<f32>,
+    pub tags: Vec<String>,
+    pub language: Option<String>,
+    pub publisher: Option<String>,
+    pub description: Option<String>,
+    /// Canonical paths for every discovered format, in preference order.
+    pub formats: Vec<String>,
+    pub cover_path: Option<String>,
+}
+
+/// One physical file in the persistent library scan cache.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LibraryCacheEntry {
+    pub filepath: String,
+    pub library_root: String,
+    pub book_key: String,
+    pub mtime: i64,
+    pub metadata_mtime: i64,
+    pub cover_mtime: i64,
+    pub title: Option<String>,
+    pub author: Option<String>,
+    pub series: Option<String>,
+    pub series_index: Option<f32>,
+    pub tags: Vec<String>,
+    pub language: Option<String>,
+    pub publisher: Option<String>,
+    pub description: Option<String>,
+    pub cover_path: Option<String>,
 }
 
 /// A row in the library window: the merge of reading history and on-disk
@@ -118,9 +149,19 @@ pub struct ScannedBook {
 #[derive(Debug, Clone, PartialEq)]
 pub struct LibraryEntry {
     pub filepath: String,
+    pub book_key: String,
     pub title: Option<String>,
     pub author: Option<String>,
+    pub series: Option<String>,
+    pub series_index: Option<f32>,
+    pub tags: Vec<String>,
+    pub language: Option<String>,
+    pub publisher: Option<String>,
+    pub description: Option<String>,
+    pub formats: Vec<String>,
+    pub cover_path: Option<String>,
     /// Present only for books with reading history.
+    pub history_filepath: Option<String>,
     pub last_read: Option<DateTime<Utc>>,
     pub reading_progress: Option<f32>,
     /// False for history entries whose file no longer exists on disk.
@@ -138,6 +179,17 @@ impl LibraryEntry {
                 .unwrap_or_else(|| self.filepath.to_lowercase()),
         }
     }
+
+    pub fn searchable_text(&self) -> String {
+        format!(
+            "{} {} {} {} {}",
+            self.title.as_deref().unwrap_or_default(),
+            self.author.as_deref().unwrap_or_default(),
+            self.series.as_deref().unwrap_or_default(),
+            self.tags.join(" "),
+            self.filepath
+        )
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -146,6 +198,7 @@ pub enum LibrarySortMode {
     Recent,
     Title,
     Author,
+    Series,
     Progress,
 }
 
@@ -154,7 +207,8 @@ impl LibrarySortMode {
         match self {
             Self::Recent => Self::Title,
             Self::Title => Self::Author,
-            Self::Author => Self::Progress,
+            Self::Author => Self::Series,
+            Self::Series => Self::Progress,
             Self::Progress => Self::Recent,
         }
     }
@@ -164,6 +218,7 @@ impl LibrarySortMode {
             Self::Recent => "recent",
             Self::Title => "title",
             Self::Author => "author",
+            Self::Series => "series",
             Self::Progress => "progress",
         }
     }

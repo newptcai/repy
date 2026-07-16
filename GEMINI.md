@@ -92,7 +92,7 @@ src/
 │   ├── text.rs          # Plain-text/Markdown backend (single-chapter files)
 │   └── cbz.rs           # Comic-book archive backend (zip of image pages)
 ├── renderer.rs          # ChapterContent → TextStructure (parse orchestration)
-├── library.rs           # Library directory scanning (walkdir, Calibre metadata.opf)
+├── library.rs           # Library scanning (Calibre metadata.db/OPF + walkdir fallback)
 ├── parser.rs            # HTML-to-text conversion, wrapping, hyphenation
 ├── models.rs            # Data models (ReadingState, SearchData, WindowType, etc.)
 ├── settings.rs          # User settings structure
@@ -223,9 +223,9 @@ When debugging or fixing HTML parsing bugs (links, footnotes, sections, formatti
 - Background scan on a worker thread (own SQLite connection), signalled over
   an mpsc channel polled in the main event loop; results cached in the
   `library_files` table keyed by (canonical path, mtime)
-- Calibre libraries work as plain directories: title/author come from the
-  per-book `metadata.opf` when present (avoids unzipping the EPUB); the
-  Calibre database is never touched
+- Calibre libraries use a read-only immutable `metadata.db` catalog when
+  available, with per-book `metadata.opf` plus directory walking as the
+  schema-tolerant fallback; Calibre files and its database are never written
 - `s` cycles sorting (recent/title/author/progress), `/` fuzzy-filters,
   `d` removes a history entry; never-opened books show `unread`, history
   entries whose file vanished show `[missing]`

@@ -3,15 +3,15 @@ use ratatui::{
     layout::Rect,
     style::Style,
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, List, ListItem, Paragraph},
+    widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap},
 };
 use ratatui_image::{Resize, StatefulImage, protocol::StatefulProtocol};
 
-use crate::models::LibrarySortMode;
+use crate::models::{LibraryEntry, LibrarySortMode};
 use crate::theme::Theme;
 
-/// Minimum popup width before a cover panel is worth splitting off.
-const COVER_MIN_POPUP_WIDTH: u16 = 50;
+/// Minimum popup width before metadata is placed beside the book list.
+const DETAILS_SIDE_MIN_POPUP_WIDTH: u16 = 50;
 
 pub struct LibraryWindow;
 
@@ -25,6 +25,7 @@ impl LibraryWindow {
         filter: Option<&str>,
         sort_mode: LibrarySortMode,
         scanning: bool,
+        details: Option<&LibraryEntry>,
         cover: Option<&mut StatefulProtocol>,
         theme: &Theme,
     ) {
@@ -88,8 +89,9 @@ impl LibraryWindow {
             height: 1,
         };
 
-        let hint = Paragraph::new("HINT: Enter open  c cover  d delete  s sort  / filter")
-            .style(Style::default().fg(theme.warning_fg));
+        let hint =
+            Paragraph::new("HINT: Enter open  c details  f format  d delete  R refresh  s sort")
+                .style(Style::default().fg(theme.warning_fg));
         frame.render_widget(hint, hint_area);
 
         let mut list_area = Rect {
@@ -99,12 +101,10 @@ impl LibraryWindow {
             height: inner_area.height.saturating_sub(2),
         };
 
-        // Selected book's cover in a right-hand panel, when the terminal
-        // supports graphics and the popup is wide enough.
-        if let Some(protocol) = cover
-            && popup_area.width >= COVER_MIN_POPUP_WIDTH
+        if let Some(entry) = details
+            && popup_area.width >= DETAILS_SIDE_MIN_POPUP_WIDTH
         {
-            let panel_width = (inner_area.width / 3).min(30);
+            let panel_width = (inner_area.width * 2 / 5).clamp(24, 38);
             list_area.width = list_area.width.saturating_sub(panel_width);
             let panel_area = Rect {
                 x: list_area.x + list_area.width,
@@ -113,19 +113,24 @@ impl LibraryWindow {
                 height: list_area.height,
             };
             let panel_block = Block::default()
+                .title(" Details ")
                 .borders(Borders::LEFT)
                 .style(theme.base_style());
             let panel_inner = panel_block.inner(panel_area);
             frame.render_widget(panel_block, panel_area);
-            // Center the aspect-fitted cover inside the panel.
-            let fitted = protocol.size_for(Resize::Fit(None), panel_inner.as_size());
-            let cover_area = Rect::new(
-                panel_inner.x + panel_inner.width.saturating_sub(fitted.width) / 2,
-                panel_inner.y + panel_inner.height.saturating_sub(fitted.height) / 2,
-                fitted.width.min(panel_inner.width),
-                fitted.height.min(panel_inner.height),
-            );
-            frame.render_stateful_widget(StatefulImage::default(), cover_area, protocol);
+            Self::render_details(frame, panel_inner, entry, cover, theme);
+        } else if let Some(entry) = details {
+            // On narrow terminals, retain most of the popup for the list and
+            // show a compact metadata strip below it.
+            let details_height = (list_area.height / 3).clamp(4, 8);
+            list_area.height = list_area.height.saturating_sub(details_height);
+            let details_area = Rect {
+                x: list_area.x,
+                y: list_area.y + list_area.height,
+                width: list_area.width,
+                height: details_height,
+            };
+            Self::render_details(frame, details_area, entry, None, theme);
         }
 
         let items: Vec<ListItem> = entries
@@ -146,5 +151,76 @@ impl LibraryWindow {
         let list = List::new(items);
 
         frame.render_widget(list, list_area);
+    }
+
+    fn render_details(
+        frame: &mut Frame,
+        area: Rect,
+        entry: &LibraryEntry,
+        cover: Option<&mut StatefulProtocol>,
+        theme: &Theme,
+    ) {
+        let mut text_area = area;
+        if let Some(protocol) = cover {
+            let max_cover_height = area.height.saturating_mul(2) / 5;
+            let bounds = ratatui::layout::Size::new(area.width, max_cover_height);
+            let fitted = protocol.size_for(Resize::Fit(None), bounds);
+            let cover_area = Rect::new(
+                area.x + area.width.saturating_sub(fitted.width) / 2,
+                area.y,
+                fitted.width.min(area.width),
+                fitted.height.min(max_cover_height),
+            );
+            frame.render_stateful_widget(StatefulImage::default(), cover_area, protocol);
+            text_area.y = cover_area.y + cover_area.height + 1;
+            text_area.height = area.bottom().saturating_sub(text_area.y);
+        }
+
+        let mut lines = Vec::new();
+        let title = entry.title.as_deref().unwrap_or_else(|| {
+            std::path::Path::new(&entry.filepath)
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("Unknown title")
+        });
+        lines.push(Line::styled(title, Style::default().fg(theme.warning_fg)));
+        if let Some(author) = &entry.author {
+            lines.push(Line::from(format!("Author: {author}")));
+        }
+        if let Some(series) = &entry.series {
+            let index = entry
+                .series_index
+                .map(|n| format!(" #{n}"))
+                .unwrap_or_default();
+            lines.push(Line::from(format!("Series: {series}{index}")));
+        }
+        if !entry.tags.is_empty() {
+            lines.push(Line::from(format!("Tags: {}", entry.tags.join(", "))));
+        }
+        let formats = entry
+            .formats
+            .iter()
+            .filter_map(|path| std::path::Path::new(path).extension()?.to_str())
+            .map(str::to_uppercase)
+            .collect::<Vec<_>>();
+        if !formats.is_empty() {
+            lines.push(Line::from(format!("Formats: {}", formats.join(", "))));
+        }
+        if let Some(language) = &entry.language {
+            lines.push(Line::from(format!("Language: {language}")));
+        }
+        if let Some(publisher) = &entry.publisher {
+            lines.push(Line::from(format!("Publisher: {publisher}")));
+        }
+        if let Some(description) = &entry.description {
+            lines.push(Line::from(""));
+            lines.push(Line::from(description.as_str()));
+        }
+        frame.render_widget(
+            Paragraph::new(lines)
+                .style(theme.base_style())
+                .wrap(Wrap { trim: true }),
+            text_area,
+        );
     }
 }

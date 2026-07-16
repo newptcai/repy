@@ -6,7 +6,7 @@ expression: reader.terminal.backend()
 "                                                                                "
 "                                                                                "
 "             ┌Library — by recent────────────────────────────────┐              "
-"             │HINT: Enter open  c cover  d delete  s sort  / filt│              "
+"             │HINT: Enter open  c details  f format  d delete  R │              "
 "             │                                                   │              "
 "             │  0% [time]: Accessible EPUB 3 - Matt Garri│              "
 "             │ new         unread: Scanned Book - Some Author (/s│              "
