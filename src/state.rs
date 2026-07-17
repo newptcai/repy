@@ -17,9 +17,44 @@ pub struct State {
 
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 struct JumpHistoryEntrySerde {
+    #[serde(default)]
+    content_index: usize,
     row: usize,
     #[serde(default)]
     source_offset: Option<usize>,
+    #[serde(default = "default_jump_history_textwidth")]
+    textwidth: usize,
+    #[serde(default)]
+    rel_pctg: Option<f32>,
+}
+
+fn default_jump_history_textwidth() -> usize {
+    crate::settings::DEFAULT_TEXT_WIDTH
+}
+
+impl From<&ReadingState> for JumpHistoryEntrySerde {
+    fn from(state: &ReadingState) -> Self {
+        Self {
+            content_index: state.content_index,
+            row: state.row,
+            source_offset: state.source_offset,
+            textwidth: state.textwidth,
+            rel_pctg: state.rel_pctg,
+        }
+    }
+}
+
+impl From<JumpHistoryEntrySerde> for ReadingState {
+    fn from(entry: JumpHistoryEntrySerde) -> Self {
+        Self {
+            content_index: entry.content_index,
+            row: entry.row,
+            source_offset: entry.source_offset,
+            textwidth: entry.textwidth,
+            rel_pctg: entry.rel_pctg,
+            section: None,
+        }
+    }
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -930,16 +965,12 @@ impl State {
     pub fn set_jump_history(
         &self,
         ebook: &dyn crate::formats::Ebook,
-        entries: &[usize],
+        entries: &[ReadingState],
         current_index: usize,
     ) -> Result<()> {
         let entries = entries
             .iter()
-            .copied()
-            .map(|row| JumpHistoryEntrySerde {
-                row,
-                source_offset: None,
-            })
+            .map(JumpHistoryEntrySerde::from)
             .collect::<Vec<_>>();
         let entries_json = serde_json::to_string(&entries)?;
         let current_index = current_index.min(entries.len());
@@ -958,7 +989,7 @@ impl State {
     pub fn get_jump_history(
         &self,
         ebook: &dyn crate::formats::Ebook,
-    ) -> Result<(Vec<usize>, usize)> {
+    ) -> Result<(Vec<ReadingState>, usize)> {
         let stored: Option<(String, usize)> = self
             .conn
             .query_row(
@@ -974,8 +1005,11 @@ impl State {
             .unwrap_or_default()
             .into_iter()
             .map(|entry| match entry {
-                JumpHistoryEntryCompat::Structured(entry) => entry.row,
-                JumpHistoryEntryCompat::LegacyRow(row) => row,
+                JumpHistoryEntryCompat::Structured(entry) => entry.into(),
+                JumpHistoryEntryCompat::LegacyRow(row) => ReadingState {
+                    row,
+                    ..ReadingState::default()
+                },
             })
             .collect::<Vec<_>>();
         let current_index = current_index.min(entries.len());
@@ -1879,8 +1913,18 @@ mod tests {
             Some(ColorTheme::Sepia)
         );
 
-        state.set_jump_history(&ebook, &[3, 9, 42], 2).unwrap();
-        assert_eq!(state.get_jump_history(&ebook).unwrap(), (vec![3, 9, 42], 2));
+        let jump_history = [3, 9, 42]
+            .into_iter()
+            .map(|row| ReadingState {
+                row,
+                source_offset: Some(row + 100),
+                ..ReadingState::default()
+            })
+            .collect::<Vec<_>>();
+        state
+            .set_jump_history(&ebook, &jump_history, 2)
+            .unwrap();
+        assert_eq!(state.get_jump_history(&ebook).unwrap(), (jump_history.clone(), 2));
         state
             .conn
             .execute(
@@ -1888,7 +1932,16 @@ mod tests {
                 params![r#"[{"row":3},{"row":9},{"row":42}]"#, ebook.path()],
             )
             .unwrap();
-        assert_eq!(state.get_jump_history(&ebook).unwrap(), (vec![3, 9, 42], 2));
+        assert_eq!(
+            state
+                .get_jump_history(&ebook)
+                .unwrap()
+                .0
+                .iter()
+                .map(|entry| entry.row)
+                .collect::<Vec<_>>(),
+            vec![3, 9, 42]
+        );
         state
             .conn
             .execute(
@@ -1896,7 +1949,16 @@ mod tests {
                 params!["[3,9,42]", ebook.path()],
             )
             .unwrap();
-        assert_eq!(state.get_jump_history(&ebook).unwrap(), (vec![3, 9, 42], 2));
+        assert_eq!(
+            state
+                .get_jump_history(&ebook)
+                .unwrap()
+                .0
+                .iter()
+                .map(|entry| entry.row)
+                .collect::<Vec<_>>(),
+            vec![3, 9, 42]
+        );
 
         state.upsert_mark(&ebook, 'a', &reading_state).unwrap();
         let marks = state.get_marks(&ebook).unwrap();
@@ -1916,7 +1978,16 @@ mod tests {
             state.get_book_theme(&ebook).unwrap(),
             Some(ColorTheme::Sepia)
         );
-        assert_eq!(state.get_jump_history(&ebook).unwrap(), (vec![3, 9, 42], 2));
+        assert_eq!(
+            state
+                .get_jump_history(&ebook)
+                .unwrap()
+                .0
+                .iter()
+                .map(|entry| entry.row)
+                .collect::<Vec<_>>(),
+            vec![3, 9, 42]
+        );
         assert_eq!(state.get_marks(&ebook).unwrap()[0].1.row, 42);
     }
 

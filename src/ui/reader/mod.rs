@@ -166,7 +166,7 @@ pub struct ApplicationState {
     pub ui_state: UiState,
     pub should_quit: bool,
     pub count_prefix: String, // For command repetition (e.g., "5j")
-    pub jump_history: Vec<usize>,
+    pub jump_history: Vec<ReadingState>,
     pub jump_history_index: usize,
     pub marks: HashMap<char, ReadingState>,
     pub book_color_theme: Option<ColorTheme>,
@@ -197,17 +197,19 @@ impl ApplicationState {
             .unwrap_or(self.config.settings.color_theme)
     }
 
-    pub fn record_jump(&mut self) {
-        let current_row = self.reading_state.row;
-
+    pub fn record_jump(&mut self, current: ReadingState) {
         // If we are in the middle of history (index < len), truncate the future
         if self.jump_history_index < self.jump_history.len() {
             self.jump_history.truncate(self.jump_history_index);
         }
 
         // Avoid duplicate consecutive entries
-        if self.jump_history.last() != Some(&current_row) {
-            self.jump_history.push(current_row);
+        if self.jump_history.last().is_none_or(|last| {
+            last.content_index != current.content_index
+                || last.source_offset != current.source_offset
+                || (last.source_offset.is_none() && last.row != current.row)
+        }) {
+            self.jump_history.push(current);
             // Limit history size (optional, e.g., 100 entries)
             if self.jump_history.len() > 100 {
                 self.jump_history.remove(0);
@@ -217,15 +219,18 @@ impl ApplicationState {
         self.jump_history_index = self.jump_history.len();
     }
 
-    pub fn jump_back(&mut self) {
+    pub fn jump_back(&mut self, current: ReadingState) -> Option<ReadingState> {
         if self.jump_history.is_empty() {
-            return;
+            return None;
         }
 
         if self.jump_history_index == self.jump_history.len() {
-            let current_row = self.reading_state.row;
-            if self.jump_history.last() != Some(&current_row) {
-                self.jump_history.push(current_row);
+            if self.jump_history.last().is_none_or(|last| {
+                last.content_index != current.content_index
+                    || last.source_offset != current.source_offset
+                    || (last.source_offset.is_none() && last.row != current.row)
+            }) {
+                self.jump_history.push(current);
             }
             // We are now at the "tip". To jump back, we start from the last element.
             self.jump_history_index = self.jump_history.len().saturating_sub(1);
@@ -233,21 +238,21 @@ impl ApplicationState {
 
         if self.jump_history_index > 0 {
             self.jump_history_index -= 1;
-            let row = self.jump_history[self.jump_history_index];
-            self.reading_state.row = row;
+            return self.jump_history.get(self.jump_history_index).cloned();
         }
+        None
     }
 
-    pub fn jump_forward(&mut self) {
+    pub fn jump_forward(&mut self) -> Option<ReadingState> {
         if self.jump_history.is_empty() {
-            return;
+            return None;
         }
 
         if self.jump_history_index + 1 < self.jump_history.len() {
             self.jump_history_index += 1;
-            let row = self.jump_history[self.jump_history_index];
-            self.reading_state.row = row;
+            return self.jump_history.get(self.jump_history_index).cloned();
         }
+        None
     }
 }
 
@@ -2591,22 +2596,40 @@ where
     }
 
     fn record_jump_position(&mut self) {
+        let row = self.state.borrow().reading_state.row;
+        let position = self.position_state_for_row(row);
         let mut state = self.state.borrow_mut();
-        state.record_jump();
+        state.record_jump(position);
     }
 
     fn jump_back(&mut self) {
-        {
+        let current_row = self.state.borrow().reading_state.row;
+        let current = self.position_state_for_row(current_row);
+        let target = {
             let mut state = self.state.borrow_mut();
-            state.jump_back();
+            state.jump_back(current)
+        };
+        if let Some(target) = target {
+            let current_textwidth = self
+                .current_text_width
+                .unwrap_or(self.state.borrow().reading_state.textwidth);
+            let row = self.restore_row(&target, current_textwidth);
+            self.state.borrow_mut().reading_state.row = row;
         }
         self.sync_reading_content_index();
     }
 
     fn jump_forward(&mut self) {
-        {
+        let target = {
             let mut state = self.state.borrow_mut();
-            state.jump_forward();
+            state.jump_forward()
+        };
+        if let Some(target) = target {
+            let current_textwidth = self
+                .current_text_width
+                .unwrap_or(self.state.borrow().reading_state.textwidth);
+            let row = self.restore_row(&target, current_textwidth);
+            self.state.borrow_mut().reading_state.row = row;
         }
         self.sync_reading_content_index();
     }
@@ -2656,7 +2679,8 @@ where
                 let Some(epub) = self.ebook.as_ref() else {
                     return Ok(true);
                 };
-                let reading_state = { self.state.borrow().reading_state.clone() };
+                let row = self.state.borrow().reading_state.row;
+                let reading_state = self.position_state_for_row(row);
                 self.db_state
                     .upsert_mark(epub.as_ref(), name, &reading_state)?;
                 let mut state = self.state.borrow_mut();
@@ -2669,9 +2693,15 @@ where
                 let target = { self.state.borrow().marks.get(&name).cloned() };
                 if let Some(target) = target {
                     self.record_jump_position();
+                    let current_textwidth = self
+                        .current_text_width
+                        .unwrap_or(self.state.borrow().reading_state.textwidth);
+                    let row = self.restore_row(&target, current_textwidth);
                     let mut state = self.state.borrow_mut();
-                    state.reading_state.row = target.row;
-                    state.reading_state.content_index = target.content_index;
+                    state.reading_state.row = row;
+                    state.reading_state.content_index = self
+                        .content_index_for_row(row)
+                        .unwrap_or(target.content_index);
                     state.ui_state.open_window(WindowType::Reader);
                 } else {
                     self.state
@@ -2924,8 +2954,8 @@ where
                     .pending_sync_progress
                     .take();
                 if let Some((percentage, _, target_row)) = pending {
+                    self.record_jump_position();
                     let mut state = self.state.borrow_mut();
-                    state.record_jump();
                     state.reading_state.row = target_row;
                     state.ui_state.open_window(WindowType::Reader);
                     state.ui_state.set_message(
@@ -6763,6 +6793,26 @@ where
         saved.row.min(total_lines - 1)
     }
 
+    /// Capture a row with both canonical and legacy coordinates so bookmarks,
+    /// marks, and jump history remain downgrade-compatible.
+    fn position_state_for_row(&self, row: usize) -> ReadingState {
+        let mut position = self.state.borrow().reading_state.clone();
+        position.row = row;
+        position.textwidth = self.current_text_width.unwrap_or(position.textwidth);
+        position.rel_pctg = (self.board.total_lines() > 0)
+            .then_some(row as f32 / self.board.total_lines() as f32);
+        if let Some((content_index, source_offset)) = self.source_position_for_row(row) {
+            position.content_index = content_index;
+            position.source_offset = Some(source_offset);
+        } else {
+            position.content_index = self
+                .content_index_for_row(row)
+                .unwrap_or(position.content_index);
+            position.source_offset = None;
+        }
+        position
+    }
+
     fn chapter_bounds_for_index(&self, index: usize) -> Option<(usize, usize)> {
         let start = *self.content_start_rows.get(index)?;
         let end = if index + 1 < self.content_start_rows.len() {
@@ -7369,7 +7419,8 @@ where
             let state = self.state.borrow();
             format!("Bookmark {}", state.ui_state.bookmarks.len() + 1)
         };
-        let reading_state = { self.state.borrow().reading_state.clone() };
+        let row = self.state.borrow().reading_state.row;
+        let reading_state = self.position_state_for_row(row);
         self.db_state
             .insert_bookmark(epub.as_ref(), &bookmark_name, &reading_state)?;
         self.refresh_bookmarks()?;
@@ -7409,18 +7460,25 @@ where
     }
 
     fn jump_to_selected_bookmark(&mut self) -> eyre::Result<()> {
-        let row = {
+        let target = {
             let state = self.state.borrow();
             state
                 .ui_state
                 .selected_list_index(state.ui_state.bookmarks_selected_index)
                 .and_then(|i| state.ui_state.bookmarks.get(i))
-                .map(|(_, reading_state)| reading_state.row)
+                .map(|(_, reading_state)| reading_state.clone())
         };
-        if let Some(row) = row {
+        if let Some(target) = target {
             self.record_jump_position();
+            let current_textwidth = self
+                .current_text_width
+                .unwrap_or(self.state.borrow().reading_state.textwidth);
+            let row = self.restore_row(&target, current_textwidth);
             let mut state = self.state.borrow_mut();
             state.reading_state.row = row;
+            state.reading_state.content_index = self
+                .content_index_for_row(row)
+                .unwrap_or(target.content_index);
             state.ui_state.open_window(WindowType::Reader);
         }
         Ok(())
