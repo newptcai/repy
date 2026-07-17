@@ -128,6 +128,34 @@ fn wrapped_cursor_position(text: &str, cursor: usize, wrap_width: u16) -> (u16, 
     )
 }
 
+/// Columns drawn beside the wrapped text: 5 for the line-number margin
+/// ("9999 ") and 1 for the highlight marker column.
+fn reader_gutter_width(show_line_numbers: bool, has_highlights: bool) -> usize {
+    let mut width = if show_line_numbers { 5 } else { 0 };
+    if has_highlights {
+        width += 1;
+    }
+    width
+}
+
+/// The width text is wrapped to, shared by the parse and render paths so
+/// justified lines exactly fill the drawn text area. The gutter is carved
+/// out before centering, padding keeps at least 5 columns per side, and the
+/// result never exceeds the configured textwidth (the old formula could
+/// come out one wider when `term_width - textwidth` was odd).
+fn compute_wrap_width(term_width: usize, textwidth: usize, gutter_width: usize) -> usize {
+    let available = term_width.saturating_sub(gutter_width);
+    let padding = if term_width <= 20 {
+        0
+    } else {
+        (available.saturating_sub(textwidth) / 2).max(5)
+    };
+    available
+        .saturating_sub(padding * 2)
+        .min(textwidth.max(20))
+        .max(20)
+}
+
 /// Application state that encompasses all UI and reading state
 #[derive(Debug, Clone)]
 pub struct ApplicationState {
@@ -1461,17 +1489,20 @@ where
             self.state.borrow().config.settings.width.unwrap_or(70)
         };
 
-        // Calculate padding from textwidth for rendering
-        let term_width = match crossterm::terminal::size() {
-            Ok((w, _)) => w as usize,
-            Err(_) => 100,
-        };
-        let padding = if term_width <= 20 {
-            0 // Minimum width for very small windows
-        } else {
-            (term_width.saturating_sub(textwidth) / 2).max(5)
-        };
-        let text_width = term_width.saturating_sub(padding * 2).max(20);
+        let term_width = self.term_width();
+        // Highlights are loaded into ui_state only after parsing, so ask the
+        // DB now whether this book shows the highlight gutter — otherwise the
+        // first render would need a full re-wrap.
+        let has_highlights = self
+            .db_state
+            .list_highlights(&identity.book_id)
+            .map(|highlights| !highlights.is_empty())
+            .unwrap_or(false);
+        let gutter_width = reader_gutter_width(
+            self.state.borrow().config.settings.show_line_numbers,
+            has_highlights,
+        );
+        let text_width = compute_wrap_width(term_width, textwidth, gutter_width);
 
         // Also update the state with the decided textwidth immediately so we are consistent
         if let Some(mut s) = db_state.clone() {
@@ -2169,10 +2200,6 @@ impl Reader {
                     }
                     Event::Resize(_, _) => {
                         // Rebuild text structure on resize with current textwidth
-                        let term_width = match crossterm::terminal::size() {
-                            Ok((w, _)) => w as usize,
-                            Err(_) => 100,
-                        };
                         let textwidth = {
                             let state = self.state.borrow();
                             if state.config.settings.seamless_between_chapters {
@@ -2182,12 +2209,7 @@ impl Reader {
                             }
                         };
                         if let Some(textwidth) = textwidth {
-                            let padding = if term_width <= 20 {
-                                0
-                            } else {
-                                (term_width.saturating_sub(textwidth) / 2).max(5)
-                            };
-                            self.rebuild_text_structure(padding)?;
+                            self.rebuild_text_structure_with_textwidth(textwidth)?;
                         }
                     }
                     _ => {}
@@ -4850,29 +4872,18 @@ where
             ])
             .split(frame_area);
 
-        // Main content area with centered margins
-        // Calculate padding from stored textwidth (minimum 5 on each side, unless window ≤ 20)
-        // The line-number gutter ("9999 ") occupies 5 extra columns on top of
-        // the wrapped text width, and the highlight margin indicator one
-        // more, so reserve room for them to avoid visual wrap.
-        let mut gutter_width = if state.config.settings.show_line_numbers {
-            5
-        } else {
-            0
-        };
-        if !state.ui_state.highlights.is_empty() {
-            gutter_width += 1;
-        }
+        // Main content area, centered: the wrap width recomputed with the
+        // same formula the parse paths use, plus the gutter columns (the
+        // line-number margin "9999 " and the highlight marker), so justified
+        // lines exactly fill the text area instead of being clipped.
+        let gutter_width = reader_gutter_width(
+            state.config.settings.show_line_numbers,
+            !state.ui_state.highlights.is_empty(),
+        );
         let available_width = chunks[2].width as usize;
-        let padding = if available_width <= 20 {
-            0
-        } else {
-            (available_width.saturating_sub(state.reading_state.textwidth + gutter_width) / 2)
-                .max(5)
-        };
-        let desired_width = available_width.saturating_sub(padding * 2).max(20) as u16;
-
-        let content_width = desired_width.min(chunks[2].width);
+        let wrap_width =
+            compute_wrap_width(available_width, state.reading_state.textwidth, gutter_width);
+        let content_width = (wrap_width + gutter_width).min(available_width) as u16;
         let left_pad = (chunks[2].width.saturating_sub(content_width)) / 2;
         let content_area = Rect {
             x: chunks[2].x + left_pad,
@@ -5341,6 +5352,26 @@ where
             }
         };
         self.state.borrow_mut().ui_state.highlights = highlights;
+        // The marker gutter appears with the first highlight and vanishes
+        // with the last; when that shifts the wrap width, re-wrap so the
+        // rendered text area still matches the wrapped lines exactly.
+        if self.ebook.is_some() && self.current_text_width.is_some() {
+            let (textwidth, gutter_width) = {
+                let state = self.state.borrow();
+                (
+                    state.reading_state.textwidth,
+                    reader_gutter_width(
+                        state.config.settings.show_line_numbers,
+                        !state.ui_state.highlights.is_empty(),
+                    ),
+                )
+            };
+            let wrap_width = compute_wrap_width(self.term_width(), textwidth, gutter_width);
+            if self.current_text_width != Some(wrap_width) {
+                // The rebuild refreshes highlight ranges itself.
+                return self.rebuild_text_structure_with_textwidth(textwidth);
+            }
+        }
         self.refresh_highlight_ranges()
     }
 
@@ -6601,6 +6632,18 @@ where
         }
     }
 
+    /// Terminal width in columns, preferring the backend's size (also
+    /// correct under TestBackend) so text wrapping and rendering agree.
+    fn term_width(&self) -> usize {
+        match self.terminal.size() {
+            Ok(size) => size.width as usize,
+            Err(_) => match crossterm::terminal::size() {
+                Ok((w, _)) => w as usize,
+                Err(_) => 100,
+            },
+        }
+    }
+
     /// Row cap for inline image blocks, or `None` when the setting keeps
     /// one-line placeholders.
     fn inline_image_max_rows(&self) -> Option<usize> {
@@ -7693,6 +7736,9 @@ where
         match item {
             SettingItem::ShowLineNumbers => {
                 state.config.settings.show_line_numbers = !state.config.settings.show_line_numbers;
+                // The 5-column gutter changes the wrap width when the
+                // terminal is too narrow to absorb it in the margins.
+                rebuild_chapter_breaks = true;
             }
             SettingItem::MouseSupport => {
                 state.config.settings.mouse_support = !state.config.settings.mouse_support;
@@ -7867,7 +7913,10 @@ where
                 let width = self.state.borrow().reading_state.textwidth;
                 self.rebuild_text_structure_with_textwidth(width)?;
                 self.state.borrow_mut().ui_state.set_message(
-                    format!("Paragraph style reset to {}", ParagraphStyle::Spaced.label()),
+                    format!(
+                        "Paragraph style reset to {}",
+                        ParagraphStyle::Spaced.label()
+                    ),
                     MessageType::Info,
                 );
             }
@@ -7888,10 +7937,10 @@ where
                 self.stop_tts();
                 let width = self.state.borrow().reading_state.textwidth;
                 self.rebuild_text_structure_with_textwidth(width)?;
-                self.state.borrow_mut().ui_state.set_message(
-                    "Justify text reset to false".to_string(),
-                    MessageType::Info,
-                );
+                self.state
+                    .borrow_mut()
+                    .ui_state
+                    .set_message("Justify text reset to false".to_string(), MessageType::Info);
             }
             Some(SettingItem::ColorTheme) => {
                 self.set_effective_color_theme(None)?;
@@ -7926,16 +7975,6 @@ where
         Ok(())
     }
 
-    fn rebuild_text_structure(&mut self, padding: usize) -> eyre::Result<()> {
-        // Calculate textwidth from padding (for backwards compatibility with resize handler)
-        let term_width = match crossterm::terminal::size() {
-            Ok((w, _)) => w as usize,
-            Err(_) => 100,
-        };
-        let textwidth = term_width.saturating_sub(padding * 2).max(20);
-        self.rebuild_text_structure_with_textwidth(textwidth)
-    }
-
     fn rebuild_text_structure_with_textwidth(&mut self, textwidth: usize) -> eyre::Result<()> {
         let old_row = self.state.borrow().reading_state.row;
         let old_content_fraction = self.board.content_fraction(old_row);
@@ -7954,23 +7993,14 @@ where
             }
         };
 
-        let term_width = match crossterm::terminal::size() {
-            Ok((w, _)) => w as usize,
-            Err(_) => 100,
+        let gutter_width = {
+            let state = self.state.borrow();
+            reader_gutter_width(
+                state.config.settings.show_line_numbers,
+                !state.ui_state.highlights.is_empty(),
+            )
         };
-
-        // Calculate padding from textwidth (minimum 5 on each side, unless window ≤ 20)
-        let padding = if term_width <= 20 {
-            0
-        } else {
-            (term_width.saturating_sub(textwidth) / 2).max(5)
-        };
-
-        // Calculate actual text width for rendering
-        let text_width = term_width
-            .saturating_sub(padding * 2)
-            .max(20)
-            .min(term_width);
+        let text_width = compute_wrap_width(self.term_width(), textwidth, gutter_width);
 
         // Collect page_height and inline options before any mutable borrows
         let page_height = self.chapter_break_page_height();
@@ -8699,9 +8729,8 @@ where
         let mut raw_paragraphs: Vec<(usize, usize)> = Vec::new();
         let mut start: Option<usize> = None;
         for (i, line) in lines.iter().enumerate() {
-            let is_text = !line.is_empty()
-                && line != CHAPTER_BREAK_MARKER
-                && !line.starts_with("[Image:");
+            let is_text =
+                !line.is_empty() && line != CHAPTER_BREAK_MARKER && !line.starts_with("[Image:");
             // A blank spacing row keeps a wrapped paragraph together, but a
             // paragraph must never begin on one (spacing rows also pad
             // paragraph gaps under double line spacing).
