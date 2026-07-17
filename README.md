@@ -1,10 +1,79 @@
 # `repy`
 
+## Reflective notes
+
+I like to do things in the terminal.
+It has little to do with efficiency.
+It is more my obsession with fiddling with software,
+so I don't have to think about all the depressing things happening in the world.
+
+One terminal program I tried is [epy](https://github.com/wustho/epy),
+an e-book reader.
+I quite liked its speed.
+But like many other open source projects, it stopped being maintained.
+
+So last November (2025),
+when coding agents like Codex CLI and Claude Code got better,
+I started to port epy from Python to Rust.
+I thought it was a task for an afternoon.
+After all, how hard can it be to display text in a terminal?
+
+It turns out that rendering EPUB correctly in a terminal is a messy business.
+The format was not designed to be displayed in a terminal at all.
+And for a reasonable reading experience,
+you have to solve the problem of navigating the book correctly,
+which the AI struggled with quite a bit.
+Instead of a few hours, the agents worked for days,
+adding more and more features,
+until I was comfortable sharing the project in February this year (2026).
+
+It got five up-votes and eight stars on GitHub.
+Perhaps there is not enough interest in terminal-based EPUB readers.
+Perhaps there is a general dislike of AI-built software.
+But had this project been published a few years earlier,
+I doubt the interest would have been so little.
+
+With the recent release of Claude Fable 5 and GPT Sol 5.6,
+I added quite a few more features.
+Yet I doubt it would get even five up-votes this time.
+
+With the abundance of software comes the devaluation of software.
+"Why would I use this, when I can ask my agent to spit out something similar,
+but closer to my own likes and dislikes?"
+A thing anyone can have made at will is a thing nobody treasures.
+
+Books may be an analogue,
+even before authors began publishing hundreds of AI-generated novels.
+I used to read a lot, sometimes two dozen books a year.
+I kept an eye on authors I liked and tracked what they were publishing.
+Then I realized there are already far more good books than I can read in this
+lifetime.
+So new books, even great ones, mean nothing to me anymore.
+It is not that the books got worse.
+It is that my time was always the scarce thing, and now I can see it.
+
+If we are really seeing the dawn of AGI,
+perhaps humans have to reckon with this:
+when there are far more intellectual artifacts --- games, software, books,
+music, films --- than anyone could consume in a lifetime,
+what is the meaning of creating more?
+
+But maybe the question is older than it looks.
+Seneca complained two thousand years ago that the abundance of books distracts.
+There was already more than one life could hold;
+only the speed is new.
+And nobody ever wrote to finish writing, or read to finish reading.
+I did not port epy because the world lacked an e-book reader.
+I ported it to have something to fiddle with --- an afternoon that became months.
+The worth of making was never in being consumed.
+If it keeps my mind off the depressing things happening in the world,
+that is meaning enough, five up-votes or none.
+
 ## ⚠️ MASSIVE WARNING ⚠️
 
 **This is 100% AI-generated code.** Every single line was written by
 [Codex CLI](https://github.com/openai/codex), [Gemini CLI](https://github.com/google-gemini/gemini-cli),
-and [Claude Code](https://claude.ai/claude-code) — the human has not written a single line of Rust.
+and [Claude Code](https://claude.ai/claude-code) --- the human has not written a single line of Rust.
 That said, it works well for daily use. No guarantee it won't eat your epub, delete your database,
 or crash your terminal. You're on your own. PRs welcome.
 
@@ -38,7 +107,7 @@ Reading state and preferences are persisted per-book.
 
 **Supported formats:** EPUB, FictionBook (`.fb2` and `.fb2.zip`), MOBI6
 (`.mobi`), plain text (`.txt`), Markdown (`.md`), and comic book archives
-(`.cbz` — set `"inline_images": "shown"` and use a graphics-capable terminal
+(`.cbz` --- set `"inline_images": "shown"` and use a graphics-capable terminal
 such as kitty to see the pages). AZW/AZW3 files are accepted on a best-effort
 basis; KF8-only content may not be readable by the MOBI6 parser.
 
@@ -155,47 +224,47 @@ Search functionality supports regular expressions.
 Press `?` in the TUI to see the help window at any time (`Help (?)`).
 
 ### Navigation
-- `k` / `Up` — Line Up
-- `j` / `Down` — Line Down
-- `h` / `Left` — Page Up
-- `l` / `Right` — Page Down
-- `Space` — Page Down
-- `Ctrl+u` — Half Page Up
-- `Ctrl+d` — Half Page Down
-- `L` — Next Chapter
-- `H` — Previous Chapter
-- `g` — Chapter Start
-- `G` — Chapter End
-- `Home` — Book Start
-- `End` — Book End
+- `k` / `Up` --- Line Up
+- `j` / `Down` --- Line Down
+- `h` / `Left` --- Page Up
+- `l` / `Right` --- Page Down
+- `Space` --- Page Down
+- `Ctrl+u` --- Half Page Up
+- `Ctrl+d` --- Half Page Down
+- `L` --- Next Chapter
+- `H` --- Previous Chapter
+- `g` --- Chapter Start
+- `G` --- Chapter End
+- `Home` --- Book Start
+- `End` --- Book End
 
 ### Jump History
-- `Ctrl+o` — Jump Back
-- `Ctrl+i` / `Tab` — Jump Forward
+- `Ctrl+o` --- Jump Back
+- `Ctrl+i` / `Tab` --- Jump Forward
 
 ### Display
-- `+` / `-` — Increase/Decrease Width
-- `=` — Reset Width
-- `T` — Toggle Top Bar
-- `c` — Cycle Color Theme
+- `+` / `-` --- Increase/Decrease Width
+- `=` --- Reset Width
+- `T` --- Toggle Top Bar
+- `c` --- Cycle Color Theme
 
 ### Annotations
-- `A` — Highlights list
-- `Enter` in highlights list — Jump to selected highlight
-- `e` in highlights list — Edit comment
-- `d` in highlights list — Delete highlight
-- `d` in cursor mode — Delete highlight under cursor
+- `A` --- Highlights list
+- `Enter` in highlights list --- Jump to selected highlight
+- `e` in highlights list --- Edit comment
+- `d` in highlights list --- Delete highlight
+- `d` in cursor mode --- Delete highlight under cursor
 
 ### Windows & Tools
-- `/` — Search
-- `!` — Text-to-Speech (Toggle)
-- `v` — Cursor Mode
-- `t` — Table of Contents
-- `m<char>` — Set a persistent mark (a-z, A-Z, 0-9)
-- `` `<char> `` — Jump to a persistent mark
-- `B` — Bookmarks (`a` to add, `d` to delete, `Enter` to jump)
-- `u` — Links on Page (`Enter` previews internal links; `Enter` again jumps)
-- `o` — Images on Page
+- `/` --- Search
+- `!` --- Text-to-Speech (Toggle)
+- `v` --- Cursor Mode
+- `t` --- Table of Contents
+- `m<char>` --- Set a persistent mark (a-z, A-Z, 0-9)
+- `` `<char> `` --- Jump to a persistent mark
+- `B` --- Bookmarks (`a` to add, `d` to delete, `Enter` to jump)
+- `u` --- Links on Page (`Enter` previews internal links; `Enter` again jumps)
+- `o` --- Images on Page
   - `Enter` shows the selected image in the terminal (kitty, iTerm2, or sixel
     graphics when the terminal supports them, halfblocks otherwise);
     `Esc`/`q` returns to the list
@@ -204,14 +273,14 @@ Press `?` in the TUI to see the help window at any time (`Help (?)`).
   - With `"inline_images": "shown"` (also toggleable in Settings), images
     render directly in the reading flow: space is reserved under each
     placeholder and the image appears once its block is fully on screen
-- `i` — Metadata
-- `s` — Settings, including typography controls:
+- `i` --- Metadata
+- `s` --- Settings, including typography controls:
   - paragraph style cycles through `spaced`, `compact`, and `indented`;
     indented paragraphs use a two-column first-line indent
   - line spacing cycles through `1.0`, `1.5`, and `2.0`
   - justification expands eligible prose lines while leaving final lines,
     headings, lists, code, centered text, and CJK-only lines unchanged
-- `r` — Library (reading history merged with books found on disk)
+- `r` --- Library (reading history merged with books found on disk)
   - `j`/`k` to select an entry
   - `Enter` to open the selected book
   - `c` to show or hide the selected book's details and cover (off by default)
@@ -225,12 +294,12 @@ Press `?` in the TUI to see the help window at any time (`Help (?)`).
     available formats; supported graphics terminals also show the cover
     (Calibre-style `cover.jpg` files are used directly, otherwise the cover is
     read from the ebook)
-- `R` — Reading Statistics
-- `s` — Settings
+- `R` --- Reading Statistics
+- `s` --- Settings
   - `Enter`: Activate (toggle boolean, input for dictionary client)
   - `r`: Reset to default
   - Dictionary command templates use `%q` as the query placeholder
-- `q` — Quit / Close Window
+- `q` --- Quit / Close Window
 
 In the Table of Contents, Bookmarks, Highlights, and Library windows, press
 `/` to fuzzy-filter the list. Matches narrow as you type, best match first.
@@ -273,9 +342,9 @@ Highlights are anchored to normalized chapter text with prefix/suffix context, s
 Press `!` to toggle reading aloud from the current paragraph.
 
 - **Engine Support**: Defaults to `purr`. Cycle through built-in presets by pressing `Enter` on the **TTS Engine** row in Settings (`s`):
-  - `purr` — KittenTTS local neural TTS (default); requires [purr](https://github.com/rany2/purr)
-  - `edge-tts` — Microsoft Edge neural TTS; requires [edge-tts](https://github.com/rany2/edge-tts) and `mpv` or `ffplay`
-  - `trans` — Google Translate TTS; requires [translate-shell](https://github.com/soimort/translate-shell)
+  - `purr` --- KittenTTS local neural TTS (default); requires [purr](https://github.com/rany2/purr)
+  - `edge-tts` --- Microsoft Edge neural TTS; requires [edge-tts](https://github.com/rany2/edge-tts) and `mpv` or `ffplay`
+  - `trans` --- Google Translate TTS; requires [translate-shell](https://github.com/soimort/translate-shell)
 - **Custom engine**: set `preferred_tts_engine` in `configuration.json` to a command template:
   - `{}` is replaced with the spoken text; `{output}` is replaced with a temp audio file path
   - If `{output}` is present, repy expects the command to write audio to that path, then plays it via mpv/ffplay (with prefetch, same as edge-tts). Example:
@@ -411,16 +480,16 @@ memory.
 To place a pulled position accurately, `repy` reads the **CREngine XPointer**
 KOReader stores alongside the percentage (e.g.
 `/body/DocFragment[14]/body/p[1]/text().0`). The `DocFragment` index pins the
-exact chapter, and the element path places you within it — so a "start of
+exact chapter, and the element path places you within it --- so a "start of
 chapter 14" bookmark lands at the start of chapter 14 rather than drifting by a
 paragraph. `repy` only *reads* this pointer; it still cannot generate one, which
 is why sync stays pull-only. When the pointer is absent or cannot be resolved
 (e.g. heavily transformed markup), `repy` falls back to a width-independent
-**content percentage** — the fraction of the book's characters before your
+**content percentage** --- the fraction of the book's characters before your
 current line. `repy` pulls on open and prompts before jumping when KOReader is
 further ahead; the Settings window also offers a **Pull KOReader progress now**
 action. The sync service receives only the KOReader document fingerprint,
-percentage, device label, and timestamp — not the ebook, filename, highlights,
+percentage, device label, and timestamp --- not the ebook, filename, highlights,
 or notes.
 
 KOReader identifies a document using sampled bytes from the file. Both devices
@@ -470,28 +539,28 @@ The database file (`states.db`) is located in the same directory as your config 
 
 ### Database schema
 
-- **`reading_states`** — Current position for each book
+- **`reading_states`** --- Current position for each book
   - `filepath`, `content_index`, `textwidth`, `row`, `rel_pctg`, optional per-book `color_theme`
 
-- **`library`** — Metadata and reading progress
+- **`library`** --- Metadata and reading progress
   - `filepath`, `last_read`, `title`, `author`, `reading_progress`
 
-- **`library_files`** — Metadata cache for books found in `library_directories`
+- **`library_files`** --- Metadata cache for books found in `library_directories`
   - `filepath`, `mtime`, `title`, `author`; refreshed by the background scan
 
-- **`bookmarks`** — Named bookmarks per book
+- **`bookmarks`** --- Named bookmarks per book
   - `id`, `filepath`, `name`, plus position fields
 
-- **`jump_history`** and **`marks`** — Per-book jump list and Vim-style marks
+- **`jump_history`** and **`marks`** --- Per-book jump list and Vim-style marks
   - Jump entries are row lists; marks store a one-character name plus position fields
 
-- **`reading_sessions`** — Reading statistics keyed by stable book identity
+- **`reading_sessions`** --- Reading statistics keyed by stable book identity
   - `book_id`, start/end time, duration, rows, and words
 
-- **`books`** and **`book_aliases`** — Stable EPUB identity and path aliases
+- **`books`** and **`book_aliases`** --- Stable EPUB identity and path aliases
   - Book identity uses metadata plus spine href and content fingerprints, not just file path
 
-- **`highlights`** — Persistent highlight anchors and plain-text comments
+- **`highlights`** --- Persistent highlight anchors and plain-text comments
   - Stores exact text, prefix/suffix context, approximate normalized offset, color, comment, and resolution status
 
 When you quit (`q` from the reader window), `repy` saves your current position,
