@@ -4,7 +4,7 @@
 
 repy is already strong on the "reading mechanics" side: vim navigation, regex search, visual/cursor mode with motions, context-anchored highlights with comments (`src/annotations.rs`), bookmarks, TTS, jump history, per-book width. To match major GUI readers (Calibre viewer, Thorium, Apple Books, KOReader), the gaps are: in-terminal images, user theming, reading statistics, richer search, real library management, multi-format support, sync, and typography. Several advertised features are also half-wired (CLI `-r`/`-d`, mouse, line numbers, double-spread).
 
-This is a phased roadmap (Phase 1 = high value / low friction → Phase 6 = pipeline-perturbing). Each phase can ship as one or more releases per the "commit small and often" project convention.
+This is a phased roadmap (Phase 1 = high value / low friction → Phases 6–7 = pipeline-perturbing). Each phase can ship as one or more releases per the "commit small and often" project convention.
 
 **Load-bearing architectural constraint** (affects Phases 3 and 6): HTML is flattened to plain-text lines (`html2text`), and all styling/search/highlight/TTS coordinates are `(row, col)` on the wrapped text (`src/parser.rs` → `TextStructure`). Any feature that changes line layout must happen *before* styling recovery in the parse pipeline, and triggers a re-parse (the width-change machinery already handles this pattern).
 
@@ -66,6 +66,16 @@ All changes go inside/around `wrap_text` in `src/parser.rs` *before* styling rec
 1. **Paragraph spacing** and **line spacing 1.5/2.0** — ✅ done: global paragraph-style and line-spacing controls insert layout rows before coordinate recovery; vertical motions skip generated gaps and changes trigger a full-book re-parse.
 2. **Justification** — ✅ done: display-width-aware space distribution skips structural, centered, CJK-only, and paragraph-final lines while recovered formatting and links retain correct coordinates.
 3. **First-line indent** mode — ✅ done: the `indented` paragraph style removes prose gaps and applies a two-column first-line indent; `compact` provides the same gapless layout without indentation.
+
+## Phase 7 — Layout-independent coordinates and deferred hard problems
+
+Phase 6 exposed the structural limit of the current pipeline: semantics (search hits, styling, links, selections) are *recovered from* the rendered `(row, col)` grid, so every layout feature that perturbs whitespace degrades them. This phase moves the hard consumers onto layout-independent text. Items 1–3 share machinery; item 4 is an independent research problem.
+
+1. **Layout-independent search** (M-L) — search currently regexes each rendered line, so with justification on, a multi-word pattern like `foo bar` misses the stretched `foo  bar`, and no phrase split across a wrap boundary ever matches. Fix: run the regex over a whitespace-normalized chapter string and map hits back to rendered `(row, col)` ranges. `src/annotations.rs` already builds exactly this (`build_normalized_chapter`: normalized chars + per-char row/col map) for highlight anchoring — lift it into a shared module and reuse it. Multi-row hits need highlight rendering and `n`/`p` navigation to accept ranges instead of single rows.
+2. **Whitespace-robust styling/link recovery** (M) — `match_sequence` in `src/parser.rs` scans a fixed 20-byte `lookahead_limit` for the next token, so a sparsely justified line (two words, wide gap) silently drops its bold/italic/link coordinates. Short-term: make the lookahead skip whitespace runs before counting. Real fix (L, optional): thread source spans through `wrap_text` so coordinates are *produced* during wrapping instead of recovered by text matching afterwards — this would retire the whole matcher family.
+3. **Normalized selection output** (S) — yanked text, dictionary lookups, and TTS input currently include layout artifacts (justification spaces, first-line indents). Collapse whitespace on the way out, mirroring what `Board::content_fraction` already does for progress.
+4. **KOReader-compatible push sync** (L) — deferred from Phase 5. Requires generating a crengine-compatible XPointer for an arbitrary reading position, i.e. reproducing crengine's DOM normalization closely enough that KOReader resolves it; getting it wrong corrupts the user's KOReader bookmark, so it must ship behind an opt-in setting and be verified against a real KOReader install on the same files.
+5. **Smaller deferred follow-ups** (S-M, independent) — OPDS 2.0 JSON catalogs (Phase 5 note), `inline_images: off`/`always` policy variants (Phase 3 note), more built-in themes (Solarized, Nord, Catppuccin; Phase 1 note), KF8-only AZW3 support if a viable crate appears (Phase 4 note).
 
 ## Explicitly skipped (poor TUI fits)
 
