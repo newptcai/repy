@@ -17,6 +17,10 @@ pub const DICT_PRESET_LIST: &[&str] = &["dict", "sdcv", "wkdict"];
 pub const TTS_PRESET_LIST: &[&str] = &["purr", "edge-tts", "trans"];
 pub const DEFAULT_KOSYNC_SERVER: &str = "https://sync.koreader.rocks";
 
+/// Text width used when the `width` setting is absent: for new books and
+/// for the `=` width reset.
+pub const DEFAULT_TEXT_WIDTH: usize = 80;
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OpdsCatalogConfig {
     pub name: String,

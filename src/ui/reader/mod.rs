@@ -35,7 +35,8 @@ use crate::opds;
 use crate::parser::TypographyOptions;
 use crate::renderer::{self, build_chapter_break};
 use crate::settings::{
-    DEFAULT_KOSYNC_SERVER, DICT_PRESET_LIST, InlineImages, LineSpacing, ParagraphStyle,
+    DEFAULT_KOSYNC_SERVER, DEFAULT_TEXT_WIDTH, DICT_PRESET_LIST, InlineImages, LineSpacing,
+    ParagraphStyle,
 };
 use crate::state::State;
 use crate::sync::{self, KosyncConfig, RemoteProgress};
@@ -1480,13 +1481,23 @@ where
         }
 
         // Load last reading state early to get preferred textwidth
-        let db_state = self.db_state.get_last_reading_state(epub.as_ref()).ok();
+        let db_state = self
+            .db_state
+            .get_last_reading_state(epub.as_ref())
+            .ok()
+            .flatten();
 
-        // Determine textwidth: use DB value if available, otherwise use config default (70)
+        // Determine textwidth: use the stored per-book value if this book was
+        // opened before, otherwise the configured width.
         let textwidth = if let Some(ref s) = db_state {
             s.textwidth
         } else {
-            self.state.borrow().config.settings.width.unwrap_or(70)
+            self.state
+                .borrow()
+                .config
+                .settings
+                .width
+                .unwrap_or(DEFAULT_TEXT_WIDTH)
         };
 
         let term_width = self.term_width();
@@ -1503,11 +1514,6 @@ where
             has_highlights,
         );
         let text_width = compute_wrap_width(term_width, textwidth, gutter_width);
-
-        // Also update the state with the decided textwidth immediately so we are consistent
-        if let Some(mut s) = db_state.clone() {
-            s.textwidth = textwidth;
-        }
 
         let page_height = self.chapter_break_page_height();
         let inline_image_rows = self.inline_image_max_rows();
@@ -7810,7 +7816,7 @@ where
                 state.config.settings.preferred_tts_engine = Some(options[next_index].to_string());
             }
             SettingItem::Width => {
-                let textwidth = state.config.settings.width.unwrap_or(70);
+                let textwidth = state.config.settings.width.unwrap_or(DEFAULT_TEXT_WIDTH);
                 drop(state);
                 self.rebuild_text_structure_with_textwidth(textwidth)?;
                 self.persist_state()?;
@@ -7861,8 +7867,15 @@ where
     }
 
     fn reset_width(&mut self) -> eyre::Result<()> {
-        // Reset to default textwidth of 70
-        self.rebuild_text_structure_with_textwidth(70)?;
+        // Reset to the configured global width
+        let textwidth = self
+            .state
+            .borrow()
+            .config
+            .settings
+            .width
+            .unwrap_or(DEFAULT_TEXT_WIDTH);
+        self.rebuild_text_structure_with_textwidth(textwidth)?;
         self.persist_state()
     }
 
@@ -7898,7 +7911,13 @@ where
                 );
             }
             Some(SettingItem::Width) => {
-                let textwidth = self.state.borrow().config.settings.width.unwrap_or(70);
+                let textwidth = self
+                    .state
+                    .borrow()
+                    .config
+                    .settings
+                    .width
+                    .unwrap_or(DEFAULT_TEXT_WIDTH);
                 self.rebuild_text_structure_with_textwidth(textwidth)?;
                 self.persist_state()?;
                 self.state.borrow_mut().ui_state.set_message(

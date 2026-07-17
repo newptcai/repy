@@ -748,10 +748,13 @@ impl State {
         Ok(library.into_iter().next().map(|item| item.filepath))
     }
 
+    /// The stored reading state for this book, or `None` when it has never
+    /// been opened — callers pick the textwidth default (configured width)
+    /// for new books.
     pub fn get_last_reading_state(
         &self,
         ebook: &dyn crate::formats::Ebook,
-    ) -> Result<ReadingState> {
+    ) -> Result<Option<ReadingState>> {
         let mut stmt = self.conn.prepare(
             "SELECT content_index, textwidth, row, rel_pctg FROM reading_states WHERE filepath=?",
         )?;
@@ -766,14 +769,8 @@ impl State {
         });
 
         match result {
-            Ok(reading_state) => Ok(reading_state),
-            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(ReadingState {
-                content_index: 0,
-                textwidth: 80,
-                row: 0,
-                rel_pctg: None,
-                section: None,
-            }),
+            Ok(reading_state) => Ok(Some(reading_state)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
             Err(e) => Err(e.into()),
         }
     }
@@ -1978,11 +1975,9 @@ mod tests {
         let (state, _temp_dir) = setup_test_state();
         let ebook = MockEbook::new("/path/to/test.epub", "Test Book", "Test Author");
 
-        let reading_state = state.get_last_reading_state(&ebook).unwrap();
-        assert_eq!(reading_state.content_index, 0);
-        assert_eq!(reading_state.textwidth, 80);
-        assert_eq!(reading_state.row, 0);
-        assert_eq!(reading_state.rel_pctg, None);
+        // A book that has never been opened has no stored state; the caller
+        // decides the textwidth default.
+        assert!(state.get_last_reading_state(&ebook).unwrap().is_none());
 
         let new_state = ReadingState {
             content_index: 5,
@@ -1993,7 +1988,7 @@ mod tests {
         };
         state.set_last_reading_state(&ebook, &new_state).unwrap();
 
-        let retrieved_state = state.get_last_reading_state(&ebook).unwrap();
+        let retrieved_state = state.get_last_reading_state(&ebook).unwrap().unwrap();
         assert_eq!(retrieved_state.content_index, 5);
         assert_eq!(retrieved_state.textwidth, 80);
         assert_eq!(retrieved_state.row, 42);
@@ -2011,7 +2006,7 @@ mod tests {
             .set_last_reading_state(&ebook, &updated_state)
             .unwrap();
 
-        let final_state = state.get_last_reading_state(&ebook).unwrap();
+        let final_state = state.get_last_reading_state(&ebook).unwrap().unwrap();
         assert_eq!(final_state.content_index, 10);
         assert_eq!(final_state.textwidth, 80);
         assert_eq!(final_state.row, 100);
@@ -2178,8 +2173,7 @@ mod tests {
         let (state, _temp_dir) = setup_test_state();
         let fake_ebook = MockEbook::new("/nonexistent/path.epub", "Fake Book", "Fake Author");
 
-        let reading_state = state.get_last_reading_state(&fake_ebook).unwrap();
-        assert_eq!(reading_state.content_index, 0);
+        assert!(state.get_last_reading_state(&fake_ebook).unwrap().is_none());
 
         let bookmarks = state.get_bookmarks(&fake_ebook).unwrap();
         assert!(bookmarks.is_empty());
@@ -2246,7 +2240,7 @@ mod tests {
         assert_eq!(history.len(), 1);
         assert_eq!(history[0].filepath, "/path/to/new.epub");
 
-        let migrated_state = state.get_last_reading_state(&new_ebook).unwrap();
+        let migrated_state = state.get_last_reading_state(&new_ebook).unwrap().unwrap();
         assert_eq!(migrated_state.content_index, 2);
 
         let bookmarks = state.get_bookmarks(&new_ebook).unwrap();
@@ -2277,7 +2271,7 @@ mod tests {
         };
         state.set_last_reading_state(&ebook, &state2).unwrap();
 
-        let final_state = state.get_last_reading_state(&ebook).unwrap();
+        let final_state = state.get_last_reading_state(&ebook).unwrap().unwrap();
         assert_eq!(final_state.content_index, 5);
         assert_eq!(final_state.textwidth, 80);
         assert_eq!(final_state.row, 50);
@@ -2318,9 +2312,9 @@ mod tests {
         state.set_last_reading_state(&ebook2, &state2).unwrap();
         state.set_last_reading_state(&ebook3, &state3).unwrap();
 
-        let retrieved1 = state.get_last_reading_state(&ebook1).unwrap();
-        let retrieved2 = state.get_last_reading_state(&ebook2).unwrap();
-        let retrieved3 = state.get_last_reading_state(&ebook3).unwrap();
+        let retrieved1 = state.get_last_reading_state(&ebook1).unwrap().unwrap();
+        let retrieved2 = state.get_last_reading_state(&ebook2).unwrap().unwrap();
+        let retrieved3 = state.get_last_reading_state(&ebook3).unwrap().unwrap();
 
         assert_eq!(retrieved1.content_index, 1);
         assert_eq!(retrieved2.content_index, 2);

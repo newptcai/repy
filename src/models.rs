@@ -241,7 +241,7 @@ impl Default for ReadingState {
     fn default() -> Self {
         Self {
             content_index: 0,
-            textwidth: 80,
+            textwidth: crate::settings::DEFAULT_TEXT_WIDTH,
             row: 0,
             rel_pctg: None,
             section: None,

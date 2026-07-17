@@ -268,7 +268,7 @@ When debugging or fixing HTML parsing bugs (links, footnotes, sections, formatti
 
 ### Page Width Adjustment
 - Users can dynamically adjust the text width using `+` and `-`.
-- `=` resets the width to the global default (default 80 columns).
+- `=` resets the width to the global default: the `width` setting in `configuration.json`, or 80 columns when unset. The same default applies the first time a book is opened.
 - The width preference is saved per-book in the database (`reading_states` table).
 - Manual adjustments are preserved even when resizing the terminal window.
 - Width changes trigger per-chapter re-parsing (cached, very fast) instead of full book re-parsing.
