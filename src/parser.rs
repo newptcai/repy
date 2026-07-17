@@ -384,7 +384,7 @@ fn wrap_text_with_typography(
         for (wrapped_index, l) in lines_wrapped.into_iter().enumerate() {
             let mut visible = l.trim_end().to_string();
             if typography.justify && prose && wrapped_index < last {
-                visible = justify_line(&visible, width);
+                visible = justify_line(&visible, width, result.lines.len());
             }
             result.lines.push(visible);
             let insert_spacing = match typography.line_spacing {
@@ -473,7 +473,7 @@ fn next_content_is_prose(index: usize, lines: &[String], structural: &[bool]) ->
         .is_some_and(|i| !structural[i])
 }
 
-fn justify_line(line: &str, width: usize) -> String {
+fn justify_line(line: &str, width: usize, row: usize) -> String {
     let display_width = UnicodeWidthStr::width(line);
     if display_width >= width || !line.chars().any(|ch| ch.is_ascii_alphabetic()) {
         return line.to_string();
@@ -488,12 +488,28 @@ fn justify_line(line: &str, width: usize) -> String {
     let gaps = words.len() - 1;
     let base = extra / gaps;
     let remainder = extra % gaps;
+    // Spread the `remainder` one-column-wider gaps evenly across the line
+    // instead of stacking them all at the left margin, and alternate the
+    // sweep direction by row so the wide gaps on consecutive lines don't
+    // align into vertical rivers of whitespace.
+    let mut wide = vec![false; gaps];
+    let mut acc = 0;
+    for slot in wide.iter_mut() {
+        acc += remainder;
+        if acc >= gaps {
+            acc -= gaps;
+            *slot = true;
+        }
+    }
+    if row % 2 == 1 {
+        wide.reverse();
+    }
     let mut out = String::with_capacity(line.len() + extra);
     out.push_str(&" ".repeat(leading));
     for (i, word) in words.iter().enumerate() {
         out.push_str(word);
         if i < gaps {
-            out.push_str(&" ".repeat(1 + base + usize::from(i < remainder)));
+            out.push_str(&" ".repeat(1 + base + usize::from(wide[i])));
         }
     }
     out
@@ -1640,8 +1656,8 @@ mod tests {
 
     #[test]
     fn test_justification_and_structural_exclusions() {
-        assert_eq!(justify_line("alpha beta", 16), "alpha       beta");
-        assert_eq!(justify_line("纯中文内容", 16), "纯中文内容");
+        assert_eq!(justify_line("alpha beta", 16, 0), "alpha       beta");
+        assert_eq!(justify_line("纯中文内容", 16, 0), "纯中文内容");
 
         let fragment = Html::parse_fragment("<pre>code block words here</pre>");
         let wrapped = wrap_text_with_typography(
@@ -1655,6 +1671,29 @@ mod tests {
             },
         );
         assert_eq!(wrapped.lines[0], "code block");
+    }
+
+    #[test]
+    fn test_justify_spreads_remainder_and_alternates_by_row() {
+        // 4 words, 3 gaps, 2 leftover columns: the wide gaps must not both
+        // sit at the start of the line.
+        let even = justify_line("aa bb cc dd", 13, 0);
+        assert_eq!(UnicodeWidthStr::width(even.as_str()), 13);
+        assert_eq!(even.split("  ").count(), 3, "two double gaps: {even:?}");
+        assert_ne!(even, "aa  bb  cc dd", "remainder must not stack left");
+
+        // Odd rows mirror the distribution so wide gaps don't line up into
+        // vertical rivers across consecutive lines.
+        let odd = justify_line("aa bb cc dd", 13, 1);
+        assert_eq!(UnicodeWidthStr::width(odd.as_str()), 13);
+        assert_ne!(even, odd);
+        let mirrored: String = even
+            .chars()
+            .rev()
+            .collect::<String>()
+            .replace(|c: char| c.is_alphabetic(), "x");
+        let odd_masked: String = odd.replace(|c: char| c.is_alphabetic(), "x");
+        assert_eq!(mirrored, odd_masked, "odd rows reverse the gap pattern");
     }
 
     #[test]
@@ -1721,8 +1760,7 @@ mod tests {
 
     #[test]
     fn test_double_spacing_keeps_paragraph_gap_distinct() {
-        let fragment =
-            Html::parse_fragment("<p>one two three four</p><p>five six seven eight</p>");
+        let fragment = Html::parse_fragment("<p>one two three four</p><p>five six seven eight</p>");
         let raw = vec![
             "one two three four".to_string(),
             String::new(),
