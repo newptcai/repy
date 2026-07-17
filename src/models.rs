@@ -384,6 +384,8 @@ pub struct HighlightRange {
 #[derive(Debug, Clone, PartialEq)]
 pub struct LinkEntry {
     pub row: usize,
+    /// Chapter-local character offset in the normalized source text.
+    pub source_offset: Option<usize>,
     pub label: String,
     pub url: String,
     pub target_row: Option<usize>,
@@ -453,6 +455,8 @@ pub struct TextStructure {
     pub text_lines: Vec<String>,
     pub image_maps: HashMap<usize, String>,
     pub section_rows: HashMap<String, usize>,
+    /// Chapter-local source offsets for section and anchor ids.
+    pub section_offsets: HashMap<String, usize>,
     pub formatting: Vec<InlineStyle>,
     pub links: Vec<LinkEntry>,
     pub pagebreak_map: HashMap<usize, String>,
@@ -793,9 +797,11 @@ mod tests {
             text_lines: vec!["Line 1 of text".to_string(), "Line 2 of text".to_string()],
             image_maps,
             section_rows,
+            section_offsets: std::collections::HashMap::new(),
             formatting,
             links: vec![LinkEntry {
                 row: 1,
+                source_offset: Some(12),
                 label: "Example".to_string(),
                 url: "https://example.com".to_string(),
                 target_row: None,

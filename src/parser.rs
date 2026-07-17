@@ -239,20 +239,21 @@ pub fn parse_html_with_styles_and_typography(
 
     // Extract structure information using the parsed fragment
     let image_maps = extract_images(&fragment, starting_line, &plain_text)?;
-    let section_rows = extract_sections(
+    let (section_offsets, section_rows) = extract_sections(
         &fragment,
         &section_ids.unwrap_or_default(),
         starting_line,
-        &plain_text,
+        &source_map,
     )?;
     let mut formatting = extract_formatting(&fragment, starting_line, &plain_text, styled_classes)?;
     convert_formatting_bytes_to_chars(&mut formatting, &plain_text, starting_line);
-    let links = extract_links(&fragment, starting_line, &plain_text)?;
+    let links = extract_links(&fragment, starting_line, &source_map)?;
 
     Ok(TextStructure {
         text_lines: plain_text,
         image_maps,
         section_rows,
+        section_offsets,
         formatting,
         links,
         pagebreak_map,
@@ -1010,86 +1011,123 @@ fn resolve_element_text(element: &scraper::ElementRef, heading_selector: &Select
     text
 }
 
-/// Search for the line matching a set of words using progressively shorter word-prefix strategies.
-/// Returns the matched line number (relative to `text_lines`), or None.
-fn find_line_by_words(words: &[&str], text_lines: &[String], search_start: usize) -> Option<usize> {
-    let attempts = [
-        (0, 32),
-        (0, 10),
-        (0, 5),
-        (1, 32), // Skip first word (handles "[1] Text" vs "1. Text")
-        (1, 10),
-        (1, 5),
-    ];
+/// Find normalized `needle` at or after a character-indexed source cursor.
+fn find_source_offset(source_text: &str, cursor: usize, needle: &str) -> Option<usize> {
+    if needle.is_empty() {
+        return Some(cursor.min(source_text.chars().count()));
+    }
+    let byte_cursor = source_text
+        .char_indices()
+        .nth(cursor)
+        .map_or(source_text.len(), |(byte, _)| byte);
+    let relative_byte = source_text.get(byte_cursor..)?.find(needle)?;
+    Some(cursor + source_text[byte_cursor..byte_cursor + relative_byte].chars().count())
+}
 
-    for (skip, take) in attempts {
-        if skip >= words.len() {
-            continue;
+/// Minimum normalized length for a DOM text node to advance the link-walk
+/// cursor. Short fragments (digits, backlink markers) are often transformed
+/// by the HTML renderer and would false-match far ahead in the source text.
+const CURSOR_ADVANCE_MIN_CHARS: usize = 12;
+
+/// Record the source cursor at which each selected element opens, advancing
+/// through long intervening DOM text nodes so a target cannot attach to an
+/// identical phrase that appeared earlier outside the target element.
+fn selected_element_cursors(
+    fragment: &Html,
+    selector: &Selector,
+    source_text: &str,
+) -> Vec<usize> {
+    let selected_ids = fragment
+        .select(selector)
+        .map(|element| element.id())
+        .collect::<Vec<_>>();
+    let mut offsets = Vec::with_capacity(selected_ids.len());
+    let mut selected_index = 0usize;
+    let mut cursor = 0usize;
+
+    for node in fragment.tree.root().descendants() {
+        if selected_ids.get(selected_index) == Some(&node.id()) {
+            offsets.push(cursor);
+            selected_index += 1;
         }
-        let end = (skip + take).min(words.len());
-        if end <= skip {
-            continue;
-        }
-        let search_str = words[skip..end].join(" ");
-        if search_str.len() < 3 {
-            continue;
-        }
-        for (line_num, line) in text_lines.iter().enumerate().skip(search_start) {
-            if line.contains(&search_str) {
-                return Some(line_num);
+        if let Some(text) = node.value().as_text() {
+            // Text under non-rendered elements (<title>, <style>, ...) never
+            // reaches the source text; matching it would consume source
+            // occurrences of the same words.
+            let unrendered = node.ancestors().any(|ancestor| {
+                ancestor.value().as_element().is_some_and(|element| {
+                    matches!(element.name(), "head" | "title" | "style" | "script")
+                })
+            });
+            if unrendered {
+                continue;
+            }
+            let needle = normalize_text(text);
+            if needle.chars().count() >= CURSOR_ADVANCE_MIN_CHARS
+                && let Some(offset) = find_source_offset(source_text, cursor, &needle)
+            {
+                cursor = offset.saturating_add(needle.chars().count());
             }
         }
     }
 
-    // Fallback: try normalized text or a 32-char prefix
-    let normalized = words.join(" ");
-    if normalized.is_empty() {
-        return None;
-    }
-    let prefix: String = normalized.chars().take(32).collect();
-    for (line_num, line) in text_lines.iter().enumerate().skip(search_start) {
-        if line.contains(&normalized) || (!prefix.is_empty() && line.contains(&prefix)) {
-            return Some(line_num);
-        }
-    }
-
-    None
+    offsets
 }
+
 
 /// Extract section/anchor ids from HTML for TOC navigation and internal link jumps.
 fn extract_sections(
     fragment: &Html,
     _section_ids: &HashSet<String>,
     starting_line: usize,
-    text_lines: &[String],
-) -> Result<HashMap<String, usize>> {
-    let mut sections = HashMap::new();
-    let mut search_start = 0usize;
+    source_map: &SourceMap,
+) -> Result<(HashMap<String, usize>, HashMap<String, usize>)> {
+    let mut section_offsets = HashMap::new();
+    let mut section_rows = HashMap::new();
 
     let id_selector = Selector::parse("*[id]").unwrap();
     let heading_selector = Selector::parse("h1, h2, h3, h4, h5, h6").unwrap();
+    // Elements arrive in document order, so each found element advances a
+    // monotonic cursor into the source text (the offset-space analog of the
+    // old wrapped-line search_start).
+    let mut cursor = 0usize;
 
     for element in fragment.select(&id_selector) {
         if let Some(id) = element.value().attr("id") {
-            let element_text = resolve_element_text(&element, &heading_selector);
-            let words: Vec<&str> = element_text.split_whitespace().collect();
-
-            if words.is_empty() {
-                sections.insert(id.to_string(), starting_line + search_start);
-                continue;
-            }
-
-            if let Some(line_num) = find_line_by_words(&words, text_lines, search_start) {
-                sections.insert(id.to_string(), starting_line + line_num);
-                search_start = line_num;
+            let own_text = normalize_text(&element.text().collect::<String>());
+            let offset = if own_text.is_empty() {
+                cursor
             } else {
-                // Final fallback: anchor targets often align with the current cursor.
-                sections.insert(id.to_string(), starting_line + search_start);
-            }
+                let needle = normalize_text(&resolve_element_text(&element, &heading_selector));
+                // Renderers decorate footnote markers ("1. Text" becomes
+                // "[1]. Text"), so retry without the first word on a miss.
+                let found = find_source_offset(&source_map.source_text, cursor, &needle)
+                    .or_else(|| {
+                        needle
+                            .split_once(' ')
+                            .map(|(_, rest)| rest)
+                            .filter(|rest| rest.len() >= 3)
+                            .and_then(|rest| {
+                                find_source_offset(&source_map.source_text, cursor, rest)
+                            })
+                    });
+                match found {
+                    Some(found) => {
+                        cursor = found;
+                        found
+                    }
+                    None => cursor,
+                }
+            };
+            section_offsets.insert(id.to_string(), offset);
+            section_rows.insert(
+                id.to_string(),
+                starting_line + source_map.row_for_offset(offset),
+            );
         }
     }
 
-    Ok(sections)
+    Ok((section_offsets, section_rows))
 }
 
 /// Extract basic formatting information (headers, bold, italic)
@@ -1431,14 +1469,21 @@ fn is_valid_gap(gap: &str) -> bool {
 fn extract_links(
     fragment: &Html,
     starting_line: usize,
-    text_lines: &[String],
+    source_map: &SourceMap,
 ) -> Result<Vec<LinkEntry>> {
     let mut links = Vec::new();
     let link_selector = Selector::parse("a[href]").unwrap();
     let sup_selector = Selector::parse("sup").unwrap();
+    // Links arrive in document order; the DOM walk skips past long preceding
+    // text so a label repeated earlier as plain text cannot capture the link,
+    // and each found label advances a monotonic cursor of its own.
+    let element_cursors =
+        selected_element_cursors(fragment, &link_selector, &source_map.source_text);
+    let mut cursor = 0usize;
     let mut sup_counter = 0usize;
 
-    for element in fragment.select(&link_selector) {
+    for (element, walk_cursor) in fragment.select(&link_selector).zip(element_cursors) {
+        let cursor_floor = walk_cursor.max(cursor);
         let href = match element.value().attr("href") {
             Some(value) if !value.trim().is_empty() => value.trim(),
             _ => continue,
@@ -1510,18 +1555,22 @@ fn extract_links(
             (label, search_text)
         };
 
-        let mut row = None;
-        if !search_text.is_empty() {
-            for (line_num, line) in text_lines.iter().enumerate() {
-                if line.contains(&search_text) {
-                    row = Some(starting_line + line_num);
-                    break;
+        let needle = normalize_text(&search_text);
+        let source_offset = if needle.is_empty() {
+            cursor_floor
+        } else {
+            match find_source_offset(&source_map.source_text, cursor_floor, &needle) {
+                Some(found) => {
+                    cursor = found;
+                    found
                 }
+                None => cursor_floor,
             }
-        }
+        };
 
         links.push(LinkEntry {
-            row: row.unwrap_or(starting_line),
+            row: starting_line + source_map.row_for_offset(source_offset),
+            source_offset: Some(source_offset),
             label: if label.is_empty() {
                 href.to_string()
             } else {
@@ -1693,6 +1742,28 @@ fn collect_marker_positions(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn source_map_for_lines(lines: &[String]) -> SourceMap {
+        let source_text = normalized_source_text(lines);
+        let mut cursor = 0usize;
+        let row_spans = lines
+            .iter()
+            .map(|line| {
+                let len = normalize_text(line).chars().count();
+                let span = (source_offset_u32(cursor), source_offset_u32(cursor + len));
+                if len > 0 {
+                    cursor += len + 1;
+                }
+                span
+            })
+            .collect();
+        SourceMap {
+            row_spans,
+            source_len: source_offset_u32(source_text.chars().count()),
+            source_text,
+            normalization_version: NORMALIZATION_VERSION,
+        }
+    }
 
     #[test]
     fn test_html_parser() {
@@ -2498,7 +2569,8 @@ mod tests {
         let mut section_ids = HashSet::new();
         section_ids.insert("chapter1".to_string());
         let text_lines = vec!["# Chapter 1".to_string()];
-        let sections = extract_sections(&fragment, &section_ids, 0, &text_lines).unwrap();
+        let source_map = source_map_for_lines(&text_lines);
+        let (_, sections) = extract_sections(&fragment, &section_ids, 0, &source_map).unwrap();
         assert_eq!(sections.len(), 1);
         assert_eq!(sections.get("chapter1"), Some(&0));
     }
@@ -2526,7 +2598,8 @@ mod tests {
             "Conclusion".to_string(),
         ];
 
-        let sections = extract_sections(&fragment, &section_ids, 0, &text_lines).unwrap();
+        let source_map = source_map_for_lines(&text_lines);
+        let (_, sections) = extract_sections(&fragment, &section_ids, 0, &source_map).unwrap();
         assert_eq!(sections.len(), 3);
         assert_eq!(sections.get("intro"), Some(&0));
         assert_eq!(sections.get("chapter1"), Some(&2));
@@ -2545,7 +2618,8 @@ mod tests {
         let section_ids = HashSet::new();
         let text_lines = vec!["## Chapter 1".to_string(), "Some content here.".to_string()];
 
-        let sections = extract_sections(&fragment, &section_ids, 0, &text_lines).unwrap();
+        let source_map = source_map_for_lines(&text_lines);
+        let (_, sections) = extract_sections(&fragment, &section_ids, 0, &source_map).unwrap();
         assert_eq!(sections.len(), 1);
         assert_eq!(sections.get("chapter1"), Some(&0));
     }
@@ -2556,7 +2630,8 @@ mod tests {
         let fragment = Html::parse_fragment(html);
         let section_ids = HashSet::new();
         let text_lines = vec!["# Chapter 1".to_string()];
-        let sections = extract_sections(&fragment, &section_ids, 0, &text_lines).unwrap();
+        let source_map = source_map_for_lines(&text_lines);
+        let (_, sections) = extract_sections(&fragment, &section_ids, 0, &source_map).unwrap();
         assert_eq!(sections.len(), 1);
         assert_eq!(sections.get("chapter1"), Some(&0));
     }
@@ -2568,7 +2643,8 @@ mod tests {
         let mut section_ids = HashSet::new();
         section_ids.insert("nonexistent".to_string());
         let text_lines = vec!["# Chapter 1".to_string()];
-        let sections = extract_sections(&fragment, &section_ids, 0, &text_lines).unwrap();
+        let source_map = source_map_for_lines(&text_lines);
+        let (_, sections) = extract_sections(&fragment, &section_ids, 0, &source_map).unwrap();
         assert_eq!(sections.len(), 1);
         assert_eq!(sections.get("chapter1"), Some(&0));
     }
@@ -2579,9 +2655,50 @@ mod tests {
         let fragment = Html::parse_fragment(html);
         let section_ids = HashSet::new();
         let text_lines = vec!["# Chapter 1".to_string()];
-        let sections = extract_sections(&fragment, &section_ids, 0, &text_lines).unwrap();
+        let source_map = source_map_for_lines(&text_lines);
+        let (_, sections) = extract_sections(&fragment, &section_ids, 0, &source_map).unwrap();
         assert_eq!(sections.len(), 1);
         assert_eq!(sections.get("chapter1"), Some(&0));
+    }
+
+    #[test]
+    fn section_offset_survives_wrapped_hyphenated_heading() {
+        let html = r#"
+            <p>Opening paragraph before the section.</p>
+            <h2 id="durable">Extraordinarily comprehensive considerations for navigation</h2>
+            <p>Section body.</p>
+        "#;
+        let narrow = parse_html(html, Some(20), None, 0).unwrap();
+        let wide = parse_html(html, Some(80), None, 0).unwrap();
+
+        let narrow_offset = *narrow.section_offsets.get("durable").unwrap();
+        let wide_offset = *wide.section_offsets.get("durable").unwrap();
+        assert_eq!(narrow_offset, wide_offset);
+        assert_eq!(
+            narrow.section_rows.get("durable"),
+            Some(&narrow.source_map.row_for_offset(narrow_offset))
+        );
+        assert!(narrow.text_lines.iter().any(|line| line.ends_with('-')));
+    }
+
+    #[test]
+    fn link_offset_skips_identical_plain_text_before_link_element() {
+        let html = r#"
+            <p>The phrase read more appears here as plain text.</p>
+            <p>Now follow <a href="chapter2.xhtml">read more</a> for details.</p>
+        "#;
+        let parsed = parse_html(html, Some(32), None, 0).unwrap();
+        let link = parsed.links.first().expect("link should be extracted");
+        let first_offset = parsed.source_map.source_text.find("read more").unwrap();
+
+        assert!(link.source_offset.unwrap() > first_offset);
+        assert_eq!(
+            link.row,
+            parsed
+                .source_map
+                .row_for_offset(link.source_offset.expect("source offset"))
+        );
+        assert!(parsed.text_lines[link.row].contains("read more"));
     }
 
     #[test]
@@ -3099,7 +3216,8 @@ mod tests {
             "1 Gavampati Sutta, Samyutta Nikaya V, 436.".to_string(),
             "2 Dhammacakkappavattana Sutta, Samyutta Nikaya LVI, 11.".to_string(),
         ];
-        let links = extract_links(&fragment, 0, &text_lines).unwrap();
+        let source_map = source_map_for_lines(&text_lines);
+        let links = extract_links(&fragment, 0, &source_map).unwrap();
         // Should only have 2 footnote reference links, not 4 (backlinks filtered)
         assert_eq!(
             links.len(),
@@ -3129,7 +3247,8 @@ mod tests {
             "".to_string(),
             "2 Dhammacakkappavattana Sutta, Samyutta Nikaya LVI, 11.".to_string(),
         ];
-        let sections = extract_sections(&fragment, &section_ids, 0, &text_lines).unwrap();
+        let source_map = source_map_for_lines(&text_lines);
+        let (_, sections) = extract_sections(&fragment, &section_ids, 0, &source_map).unwrap();
         // fn8_11 should map to line 6 (the footnote definition), not line 0 or 2
         let fn8_11_line = sections
             .get("fn8_11")

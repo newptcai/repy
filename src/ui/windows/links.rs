@@ -216,6 +216,7 @@ mod tests {
     fn link_to(row: usize) -> LinkEntry {
         LinkEntry {
             row: 0,
+            source_offset: None,
             label: "note".to_string(),
             url: "#note".to_string(),
             target_row: Some(row),
