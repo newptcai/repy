@@ -7863,20 +7863,35 @@ where
             Some(SettingItem::ParagraphStyle) => {
                 self.state.borrow_mut().config.settings.paragraph_style = ParagraphStyle::Spaced;
                 self.state.borrow().config.save()?;
+                self.stop_tts();
                 let width = self.state.borrow().reading_state.textwidth;
                 self.rebuild_text_structure_with_textwidth(width)?;
+                self.state.borrow_mut().ui_state.set_message(
+                    format!("Paragraph style reset to {}", ParagraphStyle::Spaced.label()),
+                    MessageType::Info,
+                );
             }
             Some(SettingItem::LineSpacing) => {
                 self.state.borrow_mut().config.settings.line_spacing = LineSpacing::Single;
                 self.state.borrow().config.save()?;
+                self.stop_tts();
                 let width = self.state.borrow().reading_state.textwidth;
                 self.rebuild_text_structure_with_textwidth(width)?;
+                self.state.borrow_mut().ui_state.set_message(
+                    format!("Line spacing reset to {}", LineSpacing::Single.label()),
+                    MessageType::Info,
+                );
             }
             Some(SettingItem::JustifyText) => {
                 self.state.borrow_mut().config.settings.justify_text = false;
                 self.state.borrow().config.save()?;
+                self.stop_tts();
                 let width = self.state.borrow().reading_state.textwidth;
                 self.rebuild_text_structure_with_textwidth(width)?;
+                self.state.borrow_mut().ui_state.set_message(
+                    "Justify text reset to false".to_string(),
+                    MessageType::Info,
+                );
             }
             Some(SettingItem::ColorTheme) => {
                 self.set_effective_color_theme(None)?;
@@ -8684,10 +8699,14 @@ where
         let mut raw_paragraphs: Vec<(usize, usize)> = Vec::new();
         let mut start: Option<usize> = None;
         for (i, line) in lines.iter().enumerate() {
-            let is_content = self.board.is_typography_spacing_row(i)
-                || (!line.is_empty()
-                    && line != CHAPTER_BREAK_MARKER
-                    && !line.starts_with("[Image:"));
+            let is_text = !line.is_empty()
+                && line != CHAPTER_BREAK_MARKER
+                && !line.starts_with("[Image:");
+            // A blank spacing row keeps a wrapped paragraph together, but a
+            // paragraph must never begin on one (spacing rows also pad
+            // paragraph gaps under double line spacing).
+            let is_content =
+                is_text || (start.is_some() && self.board.is_typography_spacing_row(i));
             if is_content {
                 if start.is_none() {
                     start = Some(i);

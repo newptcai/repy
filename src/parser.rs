@@ -327,17 +327,30 @@ fn wrap_text_with_typography(
     for (index, line) in lines.iter().enumerate() {
         let line = line.trim_end();
         if line.trim().is_empty() {
-            let compact_gap = typography.paragraph_style != ParagraphStyle::Spaced
-                && previous_content_is_prose(index, &lines, &structural)
-                && next_content_is_prose(index, &lines, &structural);
+            let prev_prose = previous_content_is_prose(index, &lines, &structural);
+            let next_prose = next_content_is_prose(index, &lines, &structural);
+            let compact_gap =
+                typography.paragraph_style != ParagraphStyle::Spaced && prev_prose && next_prose;
             if !compact_gap {
+                // Double line spacing widens paragraph gaps too, otherwise a
+                // paragraph break is indistinguishable from the blank spacing
+                // row between every pair of wrapped lines.
+                if typography.line_spacing == LineSpacing::Double && (prev_prose || next_prose) {
+                    let row = result.lines.len();
+                    result.lines.push(String::new());
+                    result.spacing_rows.insert(row);
+                }
                 result.lines.push(String::new());
             }
             continue;
         }
 
         let prose = !structural[index];
-        if prose {
+        // Prose lines each start a paragraph; structural lines start a block
+        // only after a gap, so paragraph motions step over headings and whole
+        // lists the same way blank-line scanning used to.
+        let follows_gap = result.lines.last().is_none_or(|prev| prev.is_empty());
+        if prose || follows_gap {
             result.paragraph_starts.push(result.lines.len());
         }
 
@@ -431,16 +444,20 @@ fn structural_block_text(fragment: &Html, styled_classes: &StyledClasses) -> Vec
 }
 
 fn is_structural_line(line: &str, structural: &[String]) -> bool {
+    let trimmed = line.trim_start();
     let normalized = line.split_whitespace().collect::<Vec<_>>().join(" ");
-    line.starts_with("- ")
-        || line.starts_with("* ")
-        || line.starts_with("> ")
-        || RE_ORDERED_LIST.is_match(line)
+    // Containment is checked in one direction only: the line must sit fully
+    // inside a structural block's text. The reverse test would let a short
+    // heading or inline <code> span (e.g. "I", "ls") capture every prose
+    // line containing it as a substring.
+    trimmed.starts_with("- ")
+        || trimmed.starts_with("* ")
+        || trimmed.starts_with("> ")
+        || trimmed.starts_with('#')
+        || RE_ORDERED_LIST.is_match(trimmed)
         || line.starts_with("    ")
         || line.contains("[Image:")
-        || structural
-            .iter()
-            .any(|text| text.contains(&normalized) || normalized.contains(text))
+        || (!normalized.is_empty() && structural.iter().any(|text| text.contains(&normalized)))
 }
 
 fn previous_content_is_prose(index: usize, lines: &[String], structural: &[bool]) -> bool {
@@ -1638,6 +1655,106 @@ mod tests {
             },
         );
         assert_eq!(wrapped.lines[0], "code block");
+    }
+
+    #[test]
+    fn test_short_structural_text_does_not_poison_prose() {
+        // "I" (a chapter-numeral heading) and "ls" (an inline code span) are
+        // substrings of most prose lines; they must not mark those lines
+        // structural.
+        let fragment = Html::parse_fragment(
+            "<h2>I</h2><p>It is a truth universally acknowledged.</p>\
+             <p>Run <code>ls</code> to list files also.</p>",
+        );
+        let raw = vec![
+            "# I".to_string(),
+            String::new(),
+            "It is a truth universally acknowledged.".to_string(),
+            String::new(),
+            "Run ls to list files also.".to_string(),
+        ];
+        let wrapped = wrap_text_with_typography(
+            raw,
+            80,
+            &fragment,
+            &StyledClasses::default(),
+            TypographyOptions {
+                paragraph_style: ParagraphStyle::Indented,
+                ..Default::default()
+            },
+        );
+        assert_eq!(wrapped.lines[0], "# I", "heading keeps no indent");
+        assert_eq!(
+            wrapped.lines[2], "  It is a truth universally acknowledged.",
+            "prose after a one-letter heading is still indented"
+        );
+        assert_eq!(
+            wrapped.lines[3], "  Run ls to list files also.",
+            "prose containing an inline code span is still indented"
+        );
+    }
+
+    #[test]
+    fn test_structural_blocks_get_paragraph_starts_after_gaps() {
+        let fragment = Html::parse_fragment(
+            "<h1>Title</h1><p>First paragraph.</p><ul><li>alpha</li><li>beta</li></ul>",
+        );
+        let raw = vec![
+            "# Title".to_string(),
+            String::new(),
+            "First paragraph.".to_string(),
+            String::new(),
+            "- alpha".to_string(),
+            "- beta".to_string(),
+        ];
+        let wrapped = wrap_text_with_typography(
+            raw,
+            40,
+            &fragment,
+            &StyledClasses::default(),
+            TypographyOptions::default(),
+        );
+        // Heading and the list's first item start blocks; the second list
+        // item continues its block.
+        assert_eq!(wrapped.paragraph_starts, [0, 2, 4]);
+    }
+
+    #[test]
+    fn test_double_spacing_keeps_paragraph_gap_distinct() {
+        let fragment =
+            Html::parse_fragment("<p>one two three four</p><p>five six seven eight</p>");
+        let raw = vec![
+            "one two three four".to_string(),
+            String::new(),
+            "five six seven eight".to_string(),
+        ];
+        let wrapped = wrap_text_with_typography(
+            raw,
+            10,
+            &fragment,
+            &StyledClasses::default(),
+            TypographyOptions {
+                line_spacing: LineSpacing::Double,
+                ..Default::default()
+            },
+        );
+        let second_start = wrapped
+            .lines
+            .iter()
+            .position(|line| line == "five six")
+            .unwrap();
+        let first_end = wrapped.lines[..second_start]
+            .iter()
+            .rposition(|line| !line.is_empty())
+            .unwrap();
+        // The paragraph gap is two blank rows — wider than the single blank
+        // spacing row between wrapped lines — and only one of them is a
+        // layout-only spacing row.
+        assert_eq!(second_start - first_end, 3);
+        let gap_spacing = (first_end + 1..second_start)
+            .filter(|row| wrapped.spacing_rows.contains(row))
+            .count();
+        assert_eq!(gap_spacing, 1);
     }
 
     #[test]
