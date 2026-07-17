@@ -393,6 +393,58 @@ pub struct TocEntry {
     pub section: Option<String>,
 }
 
+/// Per-chapter bidirectional projection between wrapped rows and char offsets
+/// into the normalized chapter source text.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct SourceMap {
+    /// One entry per chapter-local wrapped row. Synthetic rows use an empty
+    /// span at the source offset carried from the preceding text row.
+    pub row_spans: Vec<(u32, u32)>,
+    pub source_len: u32,
+    pub source_text: String,
+    pub normalization_version: i64,
+}
+
+impl SourceMap {
+    /// Return the source offset at the start of `row`. Rows beyond the mapped
+    /// parser output (for example, chapter-break padding) clamp to source end.
+    pub fn offset_for_row(&self, row: usize) -> usize {
+        self.row_spans
+            .get(row)
+            .map_or(self.source_len as usize, |&(start, _)| start as usize)
+    }
+
+    /// Project a source offset back to a wrapped row. At boundaries and in
+    /// separator gaps, prefer the following non-empty text row.
+    pub fn row_for_offset(&self, offset: usize) -> usize {
+        if self.row_spans.is_empty() {
+            return 0;
+        }
+
+        let offset = offset.min(self.source_len as usize) as u32;
+        let candidate = self.row_spans.partition_point(|&(_, end)| end <= offset);
+
+        if let Some((row, _)) = self
+            .row_spans
+            .iter()
+            .enumerate()
+            .skip(candidate)
+            .find(|&(_, &(start, end))| start < end && start <= offset)
+        {
+            return row;
+        }
+
+        self.row_spans
+            .iter()
+            .enumerate()
+            .rfind(|&(_, &(start, end))| start < end && start <= offset)
+            .map_or_else(
+                || candidate.min(self.row_spans.len().saturating_sub(1)),
+                |(row, _)| row,
+            )
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct TextStructure {
     pub text_lines: Vec<String>,
@@ -410,6 +462,9 @@ pub struct TextStructure {
     pub paragraph_starts: Vec<usize>,
     /// Blank rows inserted by typography options, in absolute document rows.
     pub typography_spacing_rows: HashSet<usize>,
+    /// Chapter-local source coordinates. Combined book structures leave this
+    /// empty; the reader retains this map on each chapter structure.
+    pub source_map: SourceMap,
 }
 
 pub const CHAPTER_BREAK_MARKER: &str = "<repy:chapter-break>";
@@ -728,6 +783,7 @@ mod tests {
         }];
 
         let text_structure = TextStructure {
+            source_map: Default::default(),
             text_lines: vec!["Line 1 of text".to_string(), "Line 2 of text".to_string()],
             image_maps,
             section_rows,

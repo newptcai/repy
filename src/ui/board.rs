@@ -945,6 +945,7 @@ mod tests {
     #[test]
     fn test_board_builder() {
         let text_structure = TextStructure {
+            source_map: Default::default(),
             text_lines: vec!["Line 1".to_string(), "Line 2".to_string()],
             image_maps: HashMap::new(),
             section_rows: HashMap::new(),
@@ -966,6 +967,7 @@ mod tests {
         let mut image_block_rows = HashMap::new();
         image_block_rows.insert(10, 5); // block spans rows 10..15
         let text_structure = TextStructure {
+            source_map: Default::default(),
             text_lines: vec![String::new(); 30],
             image_maps: HashMap::new(),
             section_rows: HashMap::new(),
@@ -994,6 +996,7 @@ mod tests {
         assert_eq!(board.total_lines(), 0);
 
         let text_structure = TextStructure {
+            source_map: Default::default(),
             text_lines: vec![
                 "Line 1".to_string(),
                 "Line 2".to_string(),
@@ -1019,6 +1022,7 @@ mod tests {
         assert!(!board.is_valid_line(0));
 
         let text_structure = TextStructure {
+            source_map: Default::default(),
             text_lines: vec!["Line 1".to_string(), "Line 2".to_string()],
             image_maps: HashMap::new(),
             section_rows: HashMap::new(),
@@ -1042,6 +1046,7 @@ mod tests {
         assert_eq!(board.get_line(0), None);
 
         let text_structure = TextStructure {
+            source_map: Default::default(),
             text_lines: vec!["Line 1".to_string(), "Line 2".to_string()],
             image_maps: HashMap::new(),
             section_rows: HashMap::new(),
@@ -1064,6 +1069,7 @@ mod tests {
         let mut board = Board::new();
 
         let text_structure = TextStructure {
+            source_map: Default::default(),
             text_lines: vec!["New line".to_string()],
             image_maps: HashMap::new(),
             section_rows: HashMap::new(),
@@ -1243,6 +1249,7 @@ mod tests {
 
     fn board_from_lines(lines: &[&str]) -> Board {
         let text_structure = TextStructure {
+            source_map: Default::default(),
             text_lines: lines.iter().map(|s| s.to_string()).collect(),
             image_maps: HashMap::new(),
             section_rows: HashMap::new(),

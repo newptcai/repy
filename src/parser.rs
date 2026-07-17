@@ -1,5 +1,6 @@
+use crate::annotations::{NORMALIZATION_VERSION, normalize_text};
 use crate::css::StyledClasses;
-use crate::models::{InlineStyle, LinkEntry, TextStructure};
+use crate::models::{InlineStyle, LinkEntry, SourceMap, TextStructure};
 use crate::settings::{LineSpacing, ParagraphStyle};
 use eyre::Result;
 use html2text::config;
@@ -76,6 +77,7 @@ pub struct TypographyOptions {
 #[derive(Default)]
 struct WrappedText {
     lines: Vec<String>,
+    line_source_spans: Vec<(u32, u32)>,
     paragraph_starts: Vec<usize>,
     spacing_rows: HashSet<usize>,
 }
@@ -162,6 +164,12 @@ pub fn parse_html_with_styles_and_typography(
     // Indent <blockquote> content by 4 spaces.
     indent_blockquote_lines(&fragment, &mut raw_lines);
 
+    // Pagebreak markers are parser metadata, not source text. Remove them
+    // before wrapping so they cannot desynchronize the row/source projection.
+    let pagebreak_offsets = strip_pagebreak_sentinels(&mut raw_lines);
+    let source_text = normalized_source_text(&raw_lines);
+    let source_len = u32::try_from(source_text.chars().count()).unwrap_or(u32::MAX);
+
     let mut wrapped =
         wrap_text_with_typography(raw_lines, text_width, &fragment, styled_classes, typography);
     let mut plain_text = std::mem::take(&mut wrapped.lines);
@@ -190,6 +198,15 @@ pub fn parse_html_with_styles_and_typography(
         blocks.sort_unstable();
         for (row, rows) in blocks {
             let added = rows.saturating_sub(1);
+            let carry = wrapped
+                .line_source_spans
+                .get(row)
+                .map_or(source_len, |&(_, end)| end);
+            let insert_at = (row + 1).min(wrapped.line_source_spans.len());
+            wrapped.line_source_spans.splice(
+                insert_at..insert_at,
+                std::iter::repeat_n((carry, carry), added),
+            );
             for start in &mut wrapped.paragraph_starts {
                 if *start > row {
                     *start += added;
@@ -209,7 +226,16 @@ pub fn parse_html_with_styles_and_typography(
         }
     }
 
-    let pagebreak_map = extract_pagebreak_map(&mut plain_text, starting_line);
+    let source_map = SourceMap {
+        row_spans: wrapped.line_source_spans,
+        source_len,
+        source_text,
+        normalization_version: NORMALIZATION_VERSION,
+    };
+    let pagebreak_map = pagebreak_offsets
+        .into_iter()
+        .map(|(offset, label)| (starting_line + source_map.row_for_offset(offset), label))
+        .collect();
 
     // Extract structure information using the parsed fragment
     let image_maps = extract_images(&fragment, starting_line, &plain_text)?;
@@ -241,6 +267,7 @@ pub fn parse_html_with_styles_and_typography(
             .into_iter()
             .map(|row| starting_line + row)
             .collect(),
+        source_map,
     })
 }
 
@@ -318,12 +345,14 @@ fn wrap_text_with_typography(
     styled_classes: &StyledClasses,
     typography: TypographyOptions,
 ) -> WrappedText {
+    let source_len = normalized_source_text(&lines).chars().count();
     let structural_text = structural_block_text(fragment, styled_classes);
     let structural: Vec<bool> = lines
         .iter()
         .map(|line| is_structural_line(line, &structural_text))
         .collect();
     let mut result = WrappedText::default();
+    let mut chapter_cursor = 0usize;
     for (index, line) in lines.iter().enumerate() {
         let line = line.trim_end();
         if line.trim().is_empty() {
@@ -338,12 +367,20 @@ fn wrap_text_with_typography(
                 if typography.line_spacing == LineSpacing::Double && (prev_prose || next_prose) {
                     let row = result.lines.len();
                     result.lines.push(String::new());
+                    let carry = source_offset_u32(chapter_cursor.min(source_len));
+                    result.line_source_spans.push((carry, carry));
                     result.spacing_rows.insert(row);
                 }
                 result.lines.push(String::new());
+                let carry = source_offset_u32(chapter_cursor.min(source_len));
+                result.line_source_spans.push((carry, carry));
             }
             continue;
         }
+
+        let normalized_line = normalize_text(line);
+        let normalized_chars: Vec<char> = normalized_line.chars().collect();
+        let line_start = chapter_cursor.min(source_len);
 
         let prose = !structural[index];
         // Prose lines each start a paragraph; structural lines start a block
@@ -379,10 +416,20 @@ fn wrap_text_with_typography(
             .initial_indent(first_indent)
             .subsequent_indent(&subsequent_indent);
 
-        let lines_wrapped = textwrap::wrap(line, &options);
+        let lines_wrapped: Vec<String> = textwrap::wrap(line, &options)
+            .into_iter()
+            .map(|line| line.trim_end().to_string())
+            .collect();
+        let local_spans = match_wrapped_source_spans(&lines_wrapped, &normalized_chars);
         let last = lines_wrapped.len().saturating_sub(1);
-        for (wrapped_index, l) in lines_wrapped.into_iter().enumerate() {
-            let mut visible = l.trim_end().to_string();
+        for (wrapped_index, (line, (local_start, local_end))) in
+            lines_wrapped.into_iter().zip(local_spans).enumerate()
+        {
+            let mut visible = line;
+            result.line_source_spans.push((
+                source_offset_u32(line_start + local_start),
+                source_offset_u32(line_start + local_end),
+            ));
             if typography.justify && prose && wrapped_index < last {
                 visible = justify_line(&visible, width, result.lines.len());
             }
@@ -395,11 +442,108 @@ fn wrap_text_with_typography(
             if prose && insert_spacing {
                 let row = result.lines.len();
                 result.lines.push(String::new());
+                let carry = source_offset_u32(line_start + local_end);
+                result.line_source_spans.push((carry, carry));
                 result.spacing_rows.insert(row);
             }
         }
+        chapter_cursor = chapter_cursor
+            .saturating_add(normalized_chars.len())
+            .saturating_add(1);
     }
+    debug_assert_eq!(result.lines.len(), result.line_source_spans.len());
     result
+}
+
+fn source_offset_u32(offset: usize) -> u32 {
+    u32::try_from(offset).unwrap_or(u32::MAX)
+}
+
+fn normalized_source_text(lines: &[String]) -> String {
+    lines
+        .iter()
+        .map(|line| normalize_text(line))
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Match pre-justification wrapped pieces back to one normalized raw line.
+/// Returned spans are local char offsets into `source`.
+fn match_wrapped_source_spans(
+    pieces: &[String],
+    source: &[char],
+) -> Vec<(usize, usize)> {
+    let mut spans = Vec::with_capacity(pieces.len());
+    let mut source_cursor = 0usize;
+
+    for piece in pieces {
+        if source_cursor < source.len() && source[source_cursor].is_whitespace() {
+            source_cursor += 1;
+        }
+        let start = source_cursor;
+        let mut mismatch = false;
+
+        // Normalization removes raw leading whitespace, while textwrap may
+        // prepend typography, blockquote, or list-continuation indentation.
+        for ch in piece.chars().skip_while(|ch| ch.is_whitespace()) {
+            if source_cursor < source.len()
+                && (ch == source[source_cursor]
+                    || (ch.is_whitespace() && source[source_cursor].is_whitespace()))
+            {
+                source_cursor += 1;
+            } else if ch == '-' && source.get(source_cursor).is_some_and(|src| *src != '-') {
+                // Dictionary hyphenation inserts a visible hyphen which has
+                // no corresponding source character.
+            } else {
+                mismatch = true;
+                break;
+            }
+        }
+
+        if mismatch {
+            debug_assert!(source_cursor <= source.len());
+            let first_remaining = spans.len();
+            return proportional_source_spans(pieces, spans, first_remaining, start, source.len());
+        }
+        spans.push((start, source_cursor));
+    }
+
+    if source_cursor < source.len()
+        && let Some(last) = spans.last_mut()
+    {
+        last.1 = source.len();
+    }
+    spans
+}
+
+fn proportional_source_spans(
+    pieces: &[String],
+    mut spans: Vec<(usize, usize)>,
+    first_remaining: usize,
+    source_start: usize,
+    source_end: usize,
+) -> Vec<(usize, usize)> {
+    let widths: Vec<usize> = pieces[first_remaining..]
+        .iter()
+        .map(|piece| UnicodeWidthStr::width(piece.as_str()).max(1))
+        .collect();
+    let total_width: usize = widths.iter().sum();
+    let source_chars = source_end.saturating_sub(source_start);
+    let mut cumulative_width = 0usize;
+    let mut start = source_start;
+
+    for (remaining_index, width) in widths.into_iter().enumerate() {
+        cumulative_width += width;
+        let end = if remaining_index + first_remaining + 1 == pieces.len() {
+            source_end
+        } else {
+            source_start + source_chars.saturating_mul(cumulative_width) / total_width
+        };
+        spans.push((start, end));
+        start = end;
+    }
+    spans
 }
 
 fn structural_block_text(fragment: &Html, styled_classes: &StyledClasses) -> Vec<String> {
@@ -679,20 +823,37 @@ fn preprocess_pagebreaks(html: &str) -> String {
         .to_string()
 }
 
-fn extract_pagebreak_map(
-    text_lines: &mut Vec<String>,
-    starting_line: usize,
-) -> HashMap<usize, String> {
-    let mut map = HashMap::new();
-    for (i, line) in text_lines.iter_mut().enumerate() {
-        if line.contains("@@PB:") {
-            if let Some(cap) = RE_PB_SENTINEL.captures(line) {
-                map.insert(starting_line + i, cap[1].trim().to_string());
-            }
-            *line = RE_PB_SENTINEL.replace_all(line, "").trim().to_string();
+fn strip_pagebreak_sentinels(lines: &mut [String]) -> Vec<(usize, String)> {
+    let mut pagebreaks = Vec::new();
+    let mut chapter_cursor = 0usize;
+
+    for line in lines {
+        let original = std::mem::take(line);
+        let mut stripped = String::with_capacity(original.len());
+        let mut previous_end = 0usize;
+
+        for captures in RE_PB_SENTINEL.captures_iter(&original) {
+            let sentinel = captures.get(0).expect("pagebreak match has group zero");
+            stripped.push_str(&original[previous_end..sentinel.start()]);
+            let relative_offset = normalize_text(&stripped).chars().count();
+            pagebreaks.push((
+                chapter_cursor.saturating_add(relative_offset),
+                captures[1].trim().to_string(),
+            ));
+            previous_end = sentinel.end();
+        }
+        stripped.push_str(&original[previous_end..]);
+        *line = stripped;
+
+        let normalized_len = normalize_text(line).chars().count();
+        if normalized_len > 0 {
+            chapter_cursor = chapter_cursor
+                .saturating_add(normalized_len)
+                .saturating_add(1);
         }
     }
-    map
+
+    pagebreaks
 }
 
 fn preprocess_inline_annotations(html: &str) -> String {
@@ -1578,6 +1739,237 @@ mod tests {
                 .map(|(src, wh)| (src.to_string(), *wh))
                 .collect(),
             max_rows,
+        }
+    }
+
+    fn assert_source_map_invariants(parsed: &TextStructure) {
+        let map = &parsed.source_map;
+        assert_eq!(
+            map.row_spans.len(),
+            parsed.text_lines.len(),
+            "every parser row must have a source span"
+        );
+        assert_eq!(
+            map.source_len as usize,
+            map.source_text.chars().count(),
+            "source_len is a char count, not a byte count"
+        );
+        assert_eq!(map.normalization_version, NORMALIZATION_VERSION);
+
+        let mut previous_end = 0u32;
+        let mut covered = vec![false; map.source_len as usize];
+        for (row, &(start, end)) in map.row_spans.iter().enumerate() {
+            assert!(start <= end, "row {row} has reversed span {start}..{end}");
+            assert!(
+                previous_end <= start,
+                "row {row} overlaps or moves backward: previous end {previous_end}, start {start}"
+            );
+            assert!(
+                end <= map.source_len,
+                "row {row} ends past source_len: {end} > {}",
+                map.source_len
+            );
+            for offset in start as usize..end as usize {
+                assert!(!covered[offset], "source char {offset} covered twice");
+                covered[offset] = true;
+            }
+            previous_end = end;
+        }
+
+        for (offset, ch) in map.source_text.chars().enumerate() {
+            assert!(
+                covered[offset] || ch.is_whitespace(),
+                "non-separator source char {ch:?} at {offset} is not covered"
+            );
+        }
+    }
+
+    fn assert_offset_projects_to_row(map: &SourceMap, offset: usize) {
+        let row = map.row_for_offset(offset);
+        let (start, end) = map.row_spans[row];
+        assert!(
+            start < end && start as usize <= offset && offset < end as usize,
+            "offset {offset} projected to non-containing row {row} ({start}..{end})"
+        );
+    }
+
+    #[test]
+    fn source_map_spans_satisfy_invariants_on_html_fixtures() {
+        let fixtures = [
+            r#"<h1>Heading</h1><p>Ordinary prose with enough words to wrap across several rows.</p>"#,
+            r#"<ol><li>First list item with continued text</li><li>Second item</li></ol><blockquote>Quoted words spanning more than one line at a narrow width.</blockquote>"#,
+            r#"<p>English followed by 中文段落，包含全角标点和多个字符。</p><p>well-established characteristically long words</p>"#,
+        ];
+
+        for html in fixtures {
+            let parsed = parse_html(html, Some(24), None, 0).unwrap();
+            assert_source_map_invariants(&parsed);
+        }
+    }
+
+    #[test]
+    fn source_map_round_trip_is_stable_across_widths_and_typography() {
+        let html = r#"
+            <h2>Stable Coordinates</h2>
+            <p>Characteristically thoughtful readers compare well-established ideas across widths without losing their canonical place.</p>
+            <blockquote>引用文字也应当使用字符偏移，而不是 UTF-8 字节偏移。</blockquote>
+            <ul><li>A list item whose continuation indentation is synthetic.</li></ul>
+            <p>Another paragraph supplies enough words for justification and line spacing.</p>
+        "#;
+        let widths = [30, 40, 60, 80, 120];
+        let mut parsed_versions = Vec::new();
+
+        for paragraph_style in [ParagraphStyle::Indented, ParagraphStyle::Spaced] {
+            for line_spacing in [LineSpacing::Single, LineSpacing::Double] {
+                for justify in [false, true] {
+                    let typography = TypographyOptions {
+                        paragraph_style,
+                        line_spacing,
+                        justify,
+                    };
+                    let versions: Vec<TextStructure> = widths
+                        .iter()
+                        .map(|&width| {
+                            parse_html_with_styles_and_typography(
+                                html,
+                                Some(width),
+                                None,
+                                0,
+                                &StyledClasses::default(),
+                                None,
+                                typography,
+                            )
+                            .unwrap()
+                        })
+                        .collect();
+                    for parsed in &versions {
+                        assert_source_map_invariants(parsed);
+                        assert_eq!(
+                            parsed.source_map.source_text, versions[0].source_map.source_text,
+                            "canonical source changed with width or typography"
+                        );
+                    }
+                    parsed_versions.push(versions);
+                }
+            }
+        }
+
+        for versions in &parsed_versions {
+            for source in versions {
+                for (source_row, &(start, end)) in
+                    source.source_map.row_spans.iter().enumerate()
+                {
+                    if start == end {
+                        continue;
+                    }
+                    let offset = source.source_map.offset_for_row(source_row);
+                    assert_eq!(offset, start as usize);
+                    assert_eq!(source.source_map.row_for_offset(offset), source_row);
+
+                    for target in versions {
+                        assert_offset_projects_to_row(&target.source_map, offset);
+                        let target_row = target.source_map.row_for_offset(offset);
+                        let (target_start, target_end) = target.source_map.row_spans[target_row];
+                        assert!(
+                            target_start as usize <= offset && offset < target_end as usize,
+                            "canonical offset {offset} was not stable across widths"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn source_map_handles_hyphenation_cjk_blockquotes_and_pagebreaks() {
+        let dictionary = parse_html(
+            "<p>characteristically characteristically</p>",
+            Some(10),
+            None,
+            0,
+        )
+        .unwrap();
+        assert!(
+            dictionary.text_lines.iter().any(|line| line.ends_with('-')),
+            "fixture must exercise dictionary-inserted hyphenation: {:?}",
+            dictionary.text_lines
+        );
+        assert_source_map_invariants(&dictionary);
+
+        let compound = parse_html(
+            "<p>well-established well-established</p>",
+            Some(10),
+            None,
+            0,
+        )
+        .unwrap();
+        assert!(compound.source_map.source_text.contains("well-established"));
+        assert_source_map_invariants(&compound);
+
+        let cjk = parse_html(
+            "<p>这是一个用于验证字符偏移而不是字节偏移的中文段落。</p>",
+            Some(12),
+            None,
+            0,
+        )
+        .unwrap();
+        assert!(cjk.source_map.source_text.len() > cjk.source_map.source_len as usize);
+        assert_source_map_invariants(&cjk);
+
+        let blockquote = parse_html(
+            "<blockquote>Quoted content wraps while its leading indentation remains synthetic.</blockquote>",
+            Some(18),
+            None,
+            0,
+        )
+        .unwrap();
+        assert!(
+            blockquote
+                .text_lines
+                .iter()
+                .filter(|line| !line.is_empty())
+                .all(|line| line.starts_with("    "))
+        );
+        assert_source_map_invariants(&blockquote);
+
+        let pagebreak = parse_html(
+            "<p>alpha beta gamma @@PB:42@@ delta epsilon zeta</p>",
+            Some(15),
+            None,
+            0,
+        )
+        .unwrap();
+        assert!(!pagebreak.source_map.source_text.contains("@@PB:"));
+        assert!(!pagebreak.text_lines.iter().any(|line| line.contains("@@PB:")));
+        let page_offset = "alpha beta gamma".chars().count();
+        assert_eq!(
+            pagebreak.pagebreak_map.get(&pagebreak.source_map.row_for_offset(page_offset)),
+            Some(&"42".to_string())
+        );
+        assert_source_map_invariants(&pagebreak);
+    }
+
+    #[test]
+    fn source_map_replays_reserved_image_row_splices() {
+        let html = r#"<p>Before.</p><p><img src="pic.jpg" alt="picture"></p><p>After.</p>"#;
+        let options = inline_options(&[("pic.jpg", (800, 600))], 8);
+        let parsed = parse_html_with_styles(
+            html,
+            Some(40),
+            None,
+            0,
+            &StyledClasses::default(),
+            Some(&options),
+        )
+        .unwrap();
+        assert_source_map_invariants(&parsed);
+
+        let (&placeholder_row, &rows) = parsed.image_block_rows.iter().next().unwrap();
+        let carry = parsed.source_map.row_spans[placeholder_row].1;
+        assert!(rows > 1);
+        for row in placeholder_row + 1..placeholder_row + rows {
+            assert_eq!(parsed.text_lines[row], "");
+            assert_eq!(parsed.source_map.row_spans[row], (carry, carry));
         }
     }
 
