@@ -15,6 +15,20 @@ pub struct State {
     conn: Connection,
 }
 
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+struct JumpHistoryEntrySerde {
+    row: usize,
+    #[serde(default)]
+    source_offset: Option<usize>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(untagged)]
+enum JumpHistoryEntryCompat {
+    Structured(JumpHistoryEntrySerde),
+    LegacyRow(usize),
+}
+
 fn cache_entry_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<LibraryCacheEntry> {
     let tags_json: String = row.get(10)?;
     Ok(LibraryCacheEntry {
@@ -183,6 +197,17 @@ impl State {
             conn.execute_batch("BEGIN IMMEDIATE TRANSACTION;")?;
             if let Err(err) = Self::migrate_v7(conn).and_then(|_| {
                 conn.pragma_update(None, "user_version", 7)
+                    .map_err(Into::into)
+            }) {
+                let _ = conn.execute_batch("ROLLBACK;");
+                return Err(err);
+            }
+            conn.execute_batch("COMMIT;")?;
+        }
+        if current_version < 8 {
+            conn.execute_batch("BEGIN IMMEDIATE TRANSACTION;")?;
+            if let Err(err) = Self::migrate_v8(conn).and_then(|_| {
+                conn.pragma_update(None, "user_version", 8)
                     .map_err(Into::into)
             }) {
                 let _ = conn.execute_batch("ROLLBACK;");
@@ -400,6 +425,15 @@ impl State {
             "UPDATE library_files SET book_key=filepath WHERE book_key='';
              CREATE INDEX IF NOT EXISTS idx_library_files_root ON library_files(library_root);
              CREATE INDEX IF NOT EXISTS idx_library_files_book ON library_files(book_key);",
+        )?;
+        Ok(())
+    }
+
+    fn migrate_v8(conn: &Connection) -> Result<()> {
+        conn.execute_batch(
+            "ALTER TABLE reading_states ADD COLUMN source_offset INTEGER;
+             ALTER TABLE bookmarks ADD COLUMN source_offset INTEGER;
+             ALTER TABLE marks ADD COLUMN source_offset INTEGER;",
         )?;
         Ok(())
     }
@@ -649,8 +683,8 @@ impl State {
 
         if !new_exists {
             tx.execute(
-                "INSERT INTO reading_states (filepath, content_index, textwidth, row, rel_pctg, color_theme)
-                 SELECT ?, content_index, textwidth, row, rel_pctg, color_theme FROM reading_states WHERE filepath=?",
+                "INSERT INTO reading_states (filepath, content_index, source_offset, textwidth, row, rel_pctg, color_theme)
+                 SELECT ?, content_index, source_offset, textwidth, row, rel_pctg, color_theme FROM reading_states WHERE filepath=?",
                 params![new_path, old_path],
             )?;
         }
@@ -690,10 +724,11 @@ impl State {
                     )?;
                 }
                 tx.execute(
-                    "INSERT INTO reading_states (filepath, content_index, textwidth, row, rel_pctg, color_theme)
-                     SELECT ?, content_index, textwidth, row, rel_pctg, color_theme FROM reading_states WHERE filepath=?
+                    "INSERT INTO reading_states (filepath, content_index, source_offset, textwidth, row, rel_pctg, color_theme)
+                     SELECT ?, content_index, source_offset, textwidth, row, rel_pctg, color_theme FROM reading_states WHERE filepath=?
                      ON CONFLICT(filepath) DO UPDATE SET
                         content_index=excluded.content_index,
+                        source_offset=excluded.source_offset,
                         textwidth=excluded.textwidth,
                         row=excluded.row,
                         rel_pctg=excluded.rel_pctg,
@@ -756,14 +791,15 @@ impl State {
         ebook: &dyn crate::formats::Ebook,
     ) -> Result<Option<ReadingState>> {
         let mut stmt = self.conn.prepare(
-            "SELECT content_index, textwidth, row, rel_pctg FROM reading_states WHERE filepath=?",
+            "SELECT content_index, source_offset, textwidth, row, rel_pctg FROM reading_states WHERE filepath=?",
         )?;
         let result = stmt.query_row(params![ebook.path()], |row| {
             Ok(ReadingState {
                 content_index: row.get(0)?,
-                textwidth: row.get(1)?,
-                row: row.get(2)?,
-                rel_pctg: row.get(3)?,
+                source_offset: row.get(1)?,
+                textwidth: row.get(2)?,
+                row: row.get(3)?,
+                rel_pctg: row.get(4)?,
                 section: None,
             })
         });
@@ -781,16 +817,18 @@ impl State {
         reading_state: &ReadingState,
     ) -> Result<()> {
         self.conn.execute(
-            "INSERT INTO reading_states (filepath, content_index, textwidth, row, rel_pctg)
-             VALUES (?, ?, ?, ?, ?)
+            "INSERT INTO reading_states (filepath, content_index, source_offset, textwidth, row, rel_pctg)
+             VALUES (?, ?, ?, ?, ?, ?)
              ON CONFLICT(filepath) DO UPDATE SET
                 content_index=excluded.content_index,
+                source_offset=excluded.source_offset,
                 textwidth=excluded.textwidth,
                 row=excluded.row,
                 rel_pctg=excluded.rel_pctg",
             params![
                 ebook.path(),
                 reading_state.content_index,
+                reading_state.source_offset,
                 reading_state.textwidth,
                 reading_state.row,
                 reading_state.rel_pctg,
@@ -837,12 +875,13 @@ impl State {
         let id = &hex::encode(hash)[..10];
 
         self.conn.execute(
-            "INSERT INTO bookmarks (id, filepath, name, content_index, textwidth, row, rel_pctg) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO bookmarks (id, filepath, name, content_index, source_offset, textwidth, row, rel_pctg) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             params![
                 id,
                 ebook.path(),
                 name,
                 reading_state.content_index,
+                reading_state.source_offset,
                 reading_state.textwidth,
                 reading_state.row,
                 reading_state.rel_pctg,
@@ -864,16 +903,17 @@ impl State {
         ebook: &dyn crate::formats::Ebook,
     ) -> Result<Vec<(String, ReadingState)>> {
         let mut stmt = self.conn.prepare(
-            "SELECT name, content_index, textwidth, row, rel_pctg FROM bookmarks WHERE filepath=?",
+            "SELECT name, content_index, source_offset, textwidth, row, rel_pctg FROM bookmarks WHERE filepath=?",
         )?;
         let bookmarks_iter = stmt.query_map(params![ebook.path()], |row| {
             Ok((
                 row.get(0)?,
                 ReadingState {
                     content_index: row.get(1)?,
-                    textwidth: row.get(2)?,
-                    row: row.get(3)?,
-                    rel_pctg: row.get(4)?,
+                    source_offset: row.get(2)?,
+                    textwidth: row.get(3)?,
+                    row: row.get(4)?,
+                    rel_pctg: row.get(5)?,
                     section: None,
                 },
             ))
@@ -893,7 +933,15 @@ impl State {
         entries: &[usize],
         current_index: usize,
     ) -> Result<()> {
-        let entries_json = serde_json::to_string(entries)?;
+        let entries = entries
+            .iter()
+            .copied()
+            .map(|row| JumpHistoryEntrySerde {
+                row,
+                source_offset: None,
+            })
+            .collect::<Vec<_>>();
+        let entries_json = serde_json::to_string(&entries)?;
         let current_index = current_index.min(entries.len());
         self.conn.execute(
             "INSERT INTO jump_history (filepath, entries_json, current_index, updated_at)
@@ -922,7 +970,14 @@ impl State {
         let Some((entries_json, current_index)) = stored else {
             return Ok((Vec::new(), 0));
         };
-        let entries: Vec<usize> = serde_json::from_str(&entries_json).unwrap_or_default();
+        let entries = serde_json::from_str::<Vec<JumpHistoryEntryCompat>>(&entries_json)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|entry| match entry {
+                JumpHistoryEntryCompat::Structured(entry) => entry.row,
+                JumpHistoryEntryCompat::LegacyRow(row) => row,
+            })
+            .collect::<Vec<_>>();
         let current_index = current_index.min(entries.len());
         Ok((entries, current_index))
     }
@@ -935,10 +990,11 @@ impl State {
     ) -> Result<()> {
         self.conn.execute(
             "INSERT INTO marks
-             (filepath, name, content_index, textwidth, row, rel_pctg, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?, datetime('now'))
+             (filepath, name, content_index, source_offset, textwidth, row, rel_pctg, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))
              ON CONFLICT(filepath, name) DO UPDATE SET
                 content_index=excluded.content_index,
+                source_offset=excluded.source_offset,
                 textwidth=excluded.textwidth,
                 row=excluded.row,
                 rel_pctg=excluded.rel_pctg,
@@ -947,6 +1003,7 @@ impl State {
                 ebook.path(),
                 name.to_string(),
                 reading_state.content_index,
+                reading_state.source_offset,
                 reading_state.textwidth,
                 reading_state.row,
                 reading_state.rel_pctg,
@@ -960,7 +1017,7 @@ impl State {
         ebook: &dyn crate::formats::Ebook,
     ) -> Result<Vec<(char, ReadingState)>> {
         let mut stmt = self.conn.prepare(
-            "SELECT name, content_index, textwidth, row, rel_pctg
+            "SELECT name, content_index, source_offset, textwidth, row, rel_pctg
              FROM marks WHERE filepath=? ORDER BY name",
         )?;
         let rows = stmt.query_map(params![ebook.path()], |row| {
@@ -969,9 +1026,10 @@ impl State {
                 name.chars().next().unwrap_or('\0'),
                 ReadingState {
                     content_index: row.get(1)?,
-                    textwidth: row.get(2)?,
-                    row: row.get(3)?,
-                    rel_pctg: row.get(4)?,
+                    source_offset: row.get(2)?,
+                    textwidth: row.get(3)?,
+                    row: row.get(4)?,
+                    rel_pctg: row.get(5)?,
                     section: None,
                 },
             ))
@@ -1518,11 +1576,12 @@ mod tests {
             .collect();
         assert!(columns.contains(&"textwidth".to_string()));
         assert!(columns.contains(&"color_theme".to_string()));
+        assert!(columns.contains(&"source_offset".to_string()));
 
         let version: i64 = conn
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .unwrap();
-        assert_eq!(version, 7);
+        assert_eq!(version, 8);
     }
 
     fn sample_identity(book_id: &str) -> BookIdentity {
@@ -1673,7 +1732,7 @@ mod tests {
         let version: i64 = conn
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .unwrap();
-        assert_eq!(version, 7);
+        assert_eq!(version, 8);
 
         let row: i64 = conn
             .query_row(
@@ -1715,6 +1774,63 @@ mod tests {
     }
 
     #[test]
+    fn test_migration_from_v7_adds_nullable_source_offsets() {
+        let conn = Connection::open_in_memory().unwrap();
+        State::migrate_v1(&conn).unwrap();
+        State::migrate_v2(&conn).unwrap();
+        State::migrate_v3(&conn).unwrap();
+        State::migrate_v4(&conn).unwrap();
+        State::migrate_v5(&conn).unwrap();
+        State::migrate_v6(&conn).unwrap();
+        State::migrate_v7(&conn).unwrap();
+        conn.pragma_update(None, "user_version", 7).unwrap();
+
+        conn.execute(
+            "INSERT INTO reading_states (filepath, content_index, textwidth, row, rel_pctg)
+             VALUES (?, ?, ?, ?, ?)",
+            params!["/legacy-v7.epub", 1, 70, 19, 0.4],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO bookmarks (id, filepath, name, content_index, textwidth, row, rel_pctg)
+             VALUES (?, ?, ?, ?, ?, ?, ?)",
+            params![
+                "legacy-bookmark",
+                "/legacy-v7.epub",
+                "Legacy",
+                1,
+                70,
+                20,
+                0.42
+            ],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO marks (filepath, name, content_index, textwidth, row, rel_pctg)
+             VALUES (?, ?, ?, ?, ?, ?)",
+            params!["/legacy-v7.epub", "a", 1, 70, 21, 0.44],
+        )
+        .unwrap();
+
+        State::init_db(&conn).unwrap();
+        let version: i64 = conn
+            .query_row("PRAGMA user_version", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(version, 8);
+
+        let state = State { conn };
+        let ebook = MockEbook::new("/legacy-v7.epub", "Legacy", "Author");
+        let reading_state = state.get_last_reading_state(&ebook).unwrap().unwrap();
+        assert_eq!(reading_state.source_offset, None);
+        assert_eq!(reading_state.rel_pctg, Some(0.4));
+        assert_eq!(
+            state.get_bookmarks(&ebook).unwrap()[0].1.source_offset,
+            None
+        );
+        assert_eq!(state.get_marks(&ebook).unwrap()[0].1.source_offset, None);
+    }
+
+    #[test]
     fn test_alias_path_change_reuses_book_id() {
         let state = State::new_for_test();
         let identity = sample_identity("book-stable");
@@ -1744,6 +1860,7 @@ mod tests {
         let ebook = MockEbook::new("/tmp/book.epub", "Title", "Author");
         let reading_state = ReadingState {
             content_index: 2,
+            source_offset: Some(123),
             textwidth: 86,
             row: 42,
             rel_pctg: Some(0.4),
@@ -1764,12 +1881,29 @@ mod tests {
 
         state.set_jump_history(&ebook, &[3, 9, 42], 2).unwrap();
         assert_eq!(state.get_jump_history(&ebook).unwrap(), (vec![3, 9, 42], 2));
+        state
+            .conn
+            .execute(
+                "UPDATE jump_history SET entries_json=? WHERE filepath=?",
+                params![r#"[{"row":3},{"row":9},{"row":42}]"#, ebook.path()],
+            )
+            .unwrap();
+        assert_eq!(state.get_jump_history(&ebook).unwrap(), (vec![3, 9, 42], 2));
+        state
+            .conn
+            .execute(
+                "UPDATE jump_history SET entries_json=? WHERE filepath=?",
+                params!["[3,9,42]", ebook.path()],
+            )
+            .unwrap();
+        assert_eq!(state.get_jump_history(&ebook).unwrap(), (vec![3, 9, 42], 2));
 
         state.upsert_mark(&ebook, 'a', &reading_state).unwrap();
         let marks = state.get_marks(&ebook).unwrap();
         assert_eq!(marks.len(), 1);
         assert_eq!(marks[0].0, 'a');
         assert_eq!(marks[0].1.row, 42);
+        assert_eq!(marks[0].1.source_offset, Some(123));
 
         let updated_state = ReadingState {
             row: 100,
@@ -1918,6 +2052,7 @@ mod tests {
 
         let default_state = ReadingState {
             content_index: 0,
+            source_offset: None,
             textwidth: 80,
             row: 0,
             rel_pctg: None,
@@ -1981,6 +2116,7 @@ mod tests {
 
         let new_state = ReadingState {
             content_index: 5,
+            source_offset: Some(321),
             textwidth: 80,
             row: 42,
             rel_pctg: Some(0.678),
@@ -1990,6 +2126,7 @@ mod tests {
 
         let retrieved_state = state.get_last_reading_state(&ebook).unwrap().unwrap();
         assert_eq!(retrieved_state.content_index, 5);
+        assert_eq!(retrieved_state.source_offset, Some(321));
         assert_eq!(retrieved_state.textwidth, 80);
         assert_eq!(retrieved_state.row, 42);
         assert_eq!(retrieved_state.rel_pctg, Some(0.678));
@@ -1997,6 +2134,7 @@ mod tests {
 
         let updated_state = ReadingState {
             content_index: 10,
+            source_offset: Some(654),
             textwidth: 80,
             row: 100,
             rel_pctg: Some(0.890),
@@ -2008,6 +2146,7 @@ mod tests {
 
         let final_state = state.get_last_reading_state(&ebook).unwrap().unwrap();
         assert_eq!(final_state.content_index, 10);
+        assert_eq!(final_state.source_offset, Some(654));
         assert_eq!(final_state.textwidth, 80);
         assert_eq!(final_state.row, 100);
         assert_eq!(final_state.rel_pctg, Some(0.890));
@@ -2023,6 +2162,7 @@ mod tests {
 
         let initial_state = ReadingState {
             content_index: 0,
+            source_offset: None,
             textwidth: 80,
             row: 0,
             rel_pctg: None,
@@ -2034,6 +2174,7 @@ mod tests {
 
         let state1 = ReadingState {
             content_index: 2,
+            source_offset: Some(101),
             textwidth: 80,
             row: 15,
             rel_pctg: Some(0.2),
@@ -2041,6 +2182,7 @@ mod tests {
         };
         let state2 = ReadingState {
             content_index: 5,
+            source_offset: None,
             textwidth: 80,
             row: 42,
             rel_pctg: Some(0.5),
@@ -2061,6 +2203,7 @@ mod tests {
 
         let (_, state1_retrieved) = chapter1_bookmark.unwrap();
         assert_eq!(state1_retrieved.content_index, 2);
+        assert_eq!(state1_retrieved.source_offset, Some(101));
         assert_eq!(state1_retrieved.textwidth, 80);
         assert_eq!(state1_retrieved.row, 15);
         assert_eq!(state1_retrieved.rel_pctg, Some(0.2));
@@ -2085,6 +2228,7 @@ mod tests {
 
         let reading_state = ReadingState {
             content_index: 1,
+            source_offset: None,
             textwidth: 80,
             row: 10,
             rel_pctg: None,
@@ -2093,6 +2237,7 @@ mod tests {
 
         let default_state = ReadingState {
             content_index: 0,
+            source_offset: None,
             textwidth: 80,
             row: 0,
             rel_pctg: None,
@@ -2132,6 +2277,7 @@ mod tests {
 
         let reading_state = ReadingState {
             content_index: 1,
+            source_offset: None,
             textwidth: 80,
             row: 10,
             rel_pctg: Some(0.1),
@@ -2189,6 +2335,7 @@ mod tests {
 
         let default_state = ReadingState {
             content_index: 0,
+            source_offset: None,
             textwidth: 80,
             row: 0,
             rel_pctg: None,
@@ -2219,6 +2366,7 @@ mod tests {
 
         let reading_state = ReadingState {
             content_index: 2,
+            source_offset: Some(77),
             textwidth: 80,
             row: 5,
             rel_pctg: Some(0.2),
@@ -2246,6 +2394,7 @@ mod tests {
         let bookmarks = state.get_bookmarks(&new_ebook).unwrap();
         assert_eq!(bookmarks.len(), 1);
         assert_eq!(bookmarks[0].0, "Bookmark");
+        assert_eq!(bookmarks[0].1.source_offset, Some(77));
     }
 
     #[test]
@@ -2255,6 +2404,7 @@ mod tests {
 
         let state1 = ReadingState {
             content_index: 1,
+            source_offset: None,
             textwidth: 80,
             row: 10,
             rel_pctg: Some(0.1),
@@ -2264,6 +2414,7 @@ mod tests {
 
         let state2 = ReadingState {
             content_index: 5,
+            source_offset: None,
             textwidth: 80,
             row: 50,
             rel_pctg: Some(0.5),
@@ -2288,6 +2439,7 @@ mod tests {
 
         let state1 = ReadingState {
             content_index: 1,
+            source_offset: None,
             textwidth: 80,
             row: 10,
             rel_pctg: Some(0.1),
@@ -2295,6 +2447,7 @@ mod tests {
         };
         let state2 = ReadingState {
             content_index: 2,
+            source_offset: None,
             textwidth: 80,
             row: 20,
             rel_pctg: Some(0.2),
@@ -2302,6 +2455,7 @@ mod tests {
         };
         let state3 = ReadingState {
             content_index: 3,
+            source_offset: None,
             textwidth: 80,
             row: 30,
             rel_pctg: Some(0.3),

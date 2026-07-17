@@ -231,6 +231,8 @@ impl LibrarySortMode {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ReadingState {
     pub content_index: usize,
+    /// Chapter-local character offset in the normalized source text.
+    pub source_offset: Option<usize>,
     pub textwidth: usize,
     pub row: usize,
     pub rel_pctg: Option<f32>,
@@ -241,6 +243,7 @@ impl Default for ReadingState {
     fn default() -> Self {
         Self {
             content_index: 0,
+            source_offset: None,
             textwidth: crate::settings::DEFAULT_TEXT_WIDTH,
             row: 0,
             rel_pctg: None,
@@ -550,6 +553,7 @@ mod tests {
     fn test_reading_state_default() {
         let state = ReadingState::default();
         assert_eq!(state.content_index, 0);
+        assert_eq!(state.source_offset, None);
         assert_eq!(state.textwidth, 80);
         assert_eq!(state.row, 0);
         assert_eq!(state.rel_pctg, None);
@@ -560,6 +564,7 @@ mod tests {
     fn test_reading_state_with_values() {
         let state = ReadingState {
             content_index: 5,
+            source_offset: Some(250),
             textwidth: 80,
             row: 100,
             rel_pctg: Some(0.75),
@@ -567,6 +572,7 @@ mod tests {
         };
 
         assert_eq!(state.content_index, 5);
+        assert_eq!(state.source_offset, Some(250));
         assert_eq!(state.textwidth, 80);
         assert_eq!(state.row, 100);
         assert_eq!(state.rel_pctg, Some(0.75));

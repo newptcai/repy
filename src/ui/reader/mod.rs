@@ -1577,11 +1577,13 @@ where
             } else {
                 ReadingState::default()
             };
+            reading_state.row = self.restore_row(&reading_state, textwidth);
             reading_state.textwidth = textwidth;
-
-            let total_lines = self.board.total_lines();
-            if total_lines > 0 && reading_state.row >= total_lines {
-                reading_state.row = total_lines - 1;
+            if let Some((content_index, source_offset)) =
+                self.source_position_for_row(reading_state.row)
+            {
+                reading_state.content_index = content_index;
+                reading_state.source_offset = Some(source_offset);
             }
 
             // Persist the reading state first (required for foreign key constraint)
@@ -1980,6 +1982,17 @@ where
                 None
             };
             let mut to_save = reading_state.clone();
+            if let Some((content_index, source_offset)) =
+                self.source_position_for_row(reading_state.row)
+            {
+                to_save.content_index = content_index;
+                to_save.source_offset = Some(source_offset);
+            } else {
+                to_save.content_index = self
+                    .content_index_for_row(reading_state.row)
+                    .unwrap_or(reading_state.content_index);
+                to_save.source_offset = None;
+            }
             to_save.rel_pctg = rel_pctg;
             self.db_state
                 .set_last_reading_state(epub.as_ref(), &to_save)?;
@@ -6699,6 +6712,57 @@ where
         Some(index)
     }
 
+    /// Translate a global rendered row into its canonical chapter-local source
+    /// coordinate. Chapter-break padding clamps to the end of the chapter.
+    fn source_position_for_row(&self, row: usize) -> Option<(usize, usize)> {
+        let content_index = self.content_index_for_row(row)?;
+        let chapter_start = *self.content_start_rows.get(content_index)?;
+        let source_map = &self.chapter_text_structures.get(content_index)?.source_map;
+        let local_row = row.saturating_sub(chapter_start);
+        // Post-parse chapter-break padding has no source-map row. Its clamped
+        // end offset cannot distinguish one padding row from another, so let
+        // restore fall through to the legacy coordinates instead.
+        source_map.row_spans.get(local_row)?;
+        Some((
+            content_index,
+            source_map.offset_for_row(local_row),
+        ))
+    }
+
+    /// Restore a persisted position using canonical source coordinates first,
+    /// followed by the downgrade-compatible legacy fields.
+    fn restore_row(&self, saved: &ReadingState, current_textwidth: usize) -> usize {
+        let total_lines = self.board.total_lines();
+        if total_lines == 0 {
+            return 0;
+        }
+
+        if let Some(source_offset) = saved.source_offset
+            && let (Some(&chapter_start), Some(chapter)) = (
+                self.content_start_rows.get(saved.content_index),
+                self.chapter_text_structures.get(saved.content_index),
+            )
+        {
+            let chapter_end = self
+                .content_start_rows
+                .get(saved.content_index + 1)
+                .copied()
+                .unwrap_or(total_lines);
+            let row = chapter_start + chapter.source_map.row_for_offset(source_offset);
+            return row.min(chapter_end.saturating_sub(1).max(chapter_start));
+        }
+
+        if saved.textwidth == current_textwidth {
+            return saved.row.min(total_lines - 1);
+        }
+
+        if let Some(rel_pctg) = saved.rel_pctg {
+            return self.board.row_for_fraction(rel_pctg as f64);
+        }
+
+        saved.row.min(total_lines - 1)
+    }
+
     fn chapter_bounds_for_index(&self, index: usize) -> Option<(usize, usize)> {
         let start = *self.content_start_rows.get(index)?;
         let end = if index + 1 < self.content_start_rows.len() {
@@ -7997,20 +8061,13 @@ where
     fn rebuild_text_structure_with_textwidth(&mut self, textwidth: usize) -> eyre::Result<()> {
         let old_row = self.state.borrow().reading_state.row;
         let old_content_fraction = self.board.content_fraction(old_row);
-        // Capture current position semantically to restore it after rebuild
-        let (current_chapter_idx, current_chapter_offset) = {
-            let row = self.state.borrow().reading_state.row;
-            if self.content_start_rows.is_empty() {
-                (0, 0)
-            } else {
-                let idx = match self.content_start_rows.binary_search(&row) {
-                    Ok(i) => i,
-                    Err(i) => i.saturating_sub(1),
-                };
-                let start = self.content_start_rows[idx];
-                (idx, row.saturating_sub(start))
-            }
-        };
+        // Capture the canonical chapter-local source position before rows are
+        // invalidated by the rebuild.
+        let source_position = self.source_position_for_row(old_row);
+        let current_chapter_idx = source_position
+            .map(|(index, _)| index)
+            .or_else(|| self.content_index_for_row(old_row))
+            .unwrap_or(0);
 
         let gutter_width = {
             let state = self.state.borrow();
@@ -8125,29 +8182,27 @@ where
 
         let mut state = self.state.borrow_mut();
         state.reading_state.textwidth = textwidth;
-
-        // Restore position based on semantic location
-        if !self.content_start_rows.is_empty() {
-            let idx = current_chapter_idx.min(self.content_start_rows.len().saturating_sub(1));
-            let start_row = self.content_start_rows[idx];
-
-            // Calculate length of this chapter in new structure
-            let chapter_len = if idx + 1 < self.content_start_rows.len() {
-                self.content_start_rows[idx + 1] - start_row
-            } else {
-                self.board.total_lines() - start_row
-            };
-
-            let new_offset = current_chapter_offset.min(chapter_len.saturating_sub(1));
-            state.reading_state.row = start_row + new_offset;
-        }
-
         let total_lines = self.board.total_lines();
-        if typography_changed && total_lines > 0 {
-            state.reading_state.row = self.board.row_for_fraction(old_content_fraction);
-        }
-        if total_lines > 0 && state.reading_state.row >= total_lines {
-            state.reading_state.row = total_lines - 1;
+        if total_lines > 0 {
+            let restored = source_position
+                .and_then(|(content_index, source_offset)| {
+                    let chapter_start = *self.content_start_rows.get(content_index)?;
+                    let chapter = self.chapter_text_structures.get(content_index)?;
+                    let chapter_end = self
+                        .content_start_rows
+                        .get(content_index + 1)
+                        .copied()
+                        .unwrap_or(total_lines);
+                    Some(
+                        (chapter_start + chapter.source_map.row_for_offset(source_offset))
+                            .min(chapter_end.saturating_sub(1).max(chapter_start)),
+                    )
+                })
+                .unwrap_or_else(|| self.board.row_for_fraction(old_content_fraction));
+            state.reading_state.row = restored;
+            if let Some(content_index) = self.content_index_for_row(restored) {
+                state.reading_state.content_index = content_index;
+            }
         }
         Ok(())
     }

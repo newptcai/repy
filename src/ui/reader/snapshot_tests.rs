@@ -3,6 +3,7 @@
 
 use super::{READING_JUMP_MIN_THRESHOLD_ROWS, Reader, SettingItem};
 use crate::config::Config;
+use crate::models::ReadingState;
 use crate::settings::{CfgDefaultKeymaps, Settings};
 use crate::state::State;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -395,6 +396,93 @@ fn position_persists_across_book_switch() {
         .load_ebook(&first)
         .expect("failed to reload first book");
     assert_eq!(reader.state.borrow().reading_state.row, 7);
+}
+
+#[test]
+fn legacy_position_without_source_offset_uses_restore_ladder() {
+    let reader = test_reader();
+    let legacy = ReadingState {
+        content_index: 0,
+        source_offset: None,
+        textwidth: 40,
+        row: usize::MAX,
+        rel_pctg: Some(0.5),
+        section: None,
+    };
+
+    assert_eq!(
+        reader.restore_row(&legacy, 80),
+        reader.board.row_for_fraction(0.5)
+    );
+
+    let same_width = ReadingState {
+        textwidth: 80,
+        ..legacy.clone()
+    };
+    assert_eq!(
+        reader.restore_row(&same_width, 80),
+        reader.board.total_lines() - 1
+    );
+
+    let raw_fallback = ReadingState {
+        rel_pctg: None,
+        ..legacy
+    };
+    assert_eq!(
+        reader.restore_row(&raw_fallback, 80),
+        reader.board.total_lines() - 1
+    );
+}
+
+#[test]
+fn width_change_preserves_first_visible_sentence() {
+    let mut settings = Settings {
+        width: Some(50),
+        ..Settings::default()
+    };
+    settings.seamless_between_chapters = true;
+    let mut reader = test_reader_with_settings(settings);
+
+    let (content_index, local_row) = reader
+        .chapter_text_structures
+        .iter()
+        .enumerate()
+        .find_map(|(content_index, chapter)| {
+            chapter
+                .text_lines
+                .iter()
+                .position(|line| line.starts_with("O’Reilly books may be purchased"))
+                .map(|local_row| (content_index, local_row))
+        })
+        .expect("known fixture paragraph should be present");
+    let row = reader.content_start_rows[content_index] + local_row;
+    {
+        let mut state = reader.state.borrow_mut();
+        state.reading_state.row = row;
+        state.reading_state.content_index = content_index;
+    }
+    let source_position = reader.source_position_for_row(row);
+
+    press_char(&mut reader, '+');
+
+    let restored_row = reader.state.borrow().reading_state.row;
+    assert_eq!(reader.source_position_for_row(restored_row), source_position);
+    let stored = reader
+        .db_state
+        .get_last_reading_state(reader.ebook.as_ref().unwrap().as_ref())
+        .unwrap()
+        .unwrap();
+    assert_eq!(stored.content_index, content_index);
+    assert_eq!(stored.source_offset, source_position.map(|(_, offset)| offset));
+    assert_eq!(stored.textwidth, 55);
+    assert_eq!(stored.row, restored_row);
+    assert!(stored.rel_pctg.is_some());
+    let restored_local_row = restored_row - reader.content_start_rows[content_index];
+    assert!(
+        reader.chapter_text_structures[content_index].text_lines[restored_local_row]
+            .starts_with("O’Reilly books may be purchased")
+    );
+    insta::assert_snapshot!(reader.terminal.backend());
 }
 
 /// Paging must never start the window inside a reserved image block (the
