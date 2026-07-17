@@ -349,7 +349,7 @@ impl Board {
                                     .map(|(_, cursor_col)| cursor_col),
                             ));
                         }
-                        return Line::from(Self::trim_leading_whitespace(spans));
+                        return Line::from(spans);
                     }
                 }
 
@@ -363,11 +363,11 @@ impl Board {
                     } else {
                         spans.extend(Self::apply_cursor_range(line_spans, cursor_col));
                     }
-                    return Line::from(Self::trim_leading_whitespace(spans));
+                    return Line::from(spans);
                 }
 
                 spans.extend(line_spans);
-                Line::from(Self::trim_leading_whitespace(spans))
+                Line::from(spans)
             })
             .collect();
 
@@ -378,27 +378,6 @@ impl Board {
         let paragraph = Paragraph::new(visible_lines).block(Block::default());
 
         frame.render_widget(paragraph, text_area);
-    }
-
-    /// Match `Paragraph::wrap(Wrap { trim: true })`'s leading-whitespace
-    /// behavior without allowing the widget to introduce additional rows.
-    fn trim_leading_whitespace(spans: Vec<Span<'static>>) -> Vec<Span<'static>> {
-        let mut result = Vec::with_capacity(spans.len());
-        let mut trimming = true;
-        for span in spans {
-            if !trimming {
-                result.push(span);
-                continue;
-            }
-
-            let trimmed = span.content.trim_start_matches(char::is_whitespace);
-            if trimmed.is_empty() {
-                continue;
-            }
-            trimming = false;
-            result.push(Span::styled(trimmed.to_string(), span.style));
-        }
-        result
     }
 
     fn apply_visual_selection_range(
