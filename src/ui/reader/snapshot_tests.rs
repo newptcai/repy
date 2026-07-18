@@ -948,6 +948,8 @@ fn warning_toast_persists_until_key_dismisses_it() {
     reader.draw().expect("draw");
     let screen = format!("{}", reader.terminal.backend());
     assert!(screen.contains("press any key to dismiss"), "{screen}");
+    // Capped-width, centered toast box.
+    insta::assert_snapshot!("warning_toast_centered", reader.terminal.backend());
     // ...and the dismissing key is consumed instead of scrolling the reader.
     press_char(&mut reader, 'j');
     assert!(reader.state.borrow().ui_state.message.is_none());

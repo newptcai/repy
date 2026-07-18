@@ -5208,14 +5208,17 @@ where
         };
 
         let frame_area = frame.area();
-        let max_width = frame_area.width.saturating_sub(4);
+        // Long messages read better in a narrow box than as one screen-wide
+        // line, so cap the toast at 80 columns and center it.
+        let width = frame_area.width.saturating_sub(4).min(80);
+        let wrap_width = width.saturating_sub(2).max(1) as usize;
 
         // Simple line wrapping calculation to estimate height
         let mut lines = 1;
         let mut current_line_len = 0;
         for word in message.split_whitespace() {
             let word_len = word.chars().count();
-            if current_line_len + word_len + 1 > max_width as usize {
+            if current_line_len + word_len + 1 > wrap_width {
                 lines += 1;
                 current_line_len = word_len;
             } else {
@@ -5236,9 +5239,9 @@ where
             .wrap(Wrap { trim: true });
 
         let area = Rect {
-            x: frame_area.x + 2,
-            y: frame_area.y + 2,
-            width: max_width,
+            x: frame_area.x + (frame_area.width.saturating_sub(width)) / 2,
+            y: frame_area.y + (frame_area.height.saturating_sub(height)) / 2,
+            width,
             height,
         };
 
