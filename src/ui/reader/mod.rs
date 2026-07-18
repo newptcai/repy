@@ -2220,6 +2220,10 @@ impl Reader {
                 // Wake up soon: a debounced cover load or the next inline
                 // image decode is due.
                 Duration::from_millis(50)
+            } else if self.calibre_import_rx.is_some() {
+                // A background calibredb import is running; poll for its
+                // outcome so the toast/library refresh don't wait for a key.
+                Duration::from_millis(200)
             } else {
                 let state = self.state.borrow();
                 if state.ui_state.tts_converting {
@@ -2234,6 +2238,9 @@ impl Reader {
                     Duration::from_millis(100)
                 } else {
                     match state.ui_state.message_time {
+                        // Persistent messages only leave on a keypress, so
+                        // there is no expiry to wake up for.
+                        Some(_) if state.ui_state.message_persistent => Duration::from_secs(60),
                         Some(t) => {
                             let elapsed = t.elapsed();
                             let expiry = Duration::from_secs(3);

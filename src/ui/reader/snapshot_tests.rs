@@ -345,6 +345,24 @@ fn library_cover_panel() {
         reader.library_cover_redraw_pending,
         "a newly decoded cover should schedule a follow-up frame"
     );
+    // The details panel shows the full (wrapped) file path, which would
+    // embed this machine's repo location; remap the entry (and its cached
+    // cover) to a fixed path so the snapshot is deterministic.
+    let real_path = reader
+        .selected_library_path()
+        .expect("a book should be selected");
+    let fixed_path = "/books/small.epub".to_string();
+    {
+        let mut state = reader.state.borrow_mut();
+        let index = state
+            .ui_state
+            .selected_list_index(state.ui_state.library_selected_index)
+            .expect("selection resolves");
+        state.ui_state.library_items[index].filepath = fixed_path.clone();
+    }
+    if let Some(cover) = reader.library_covers.remove(&real_path) {
+        reader.library_covers.insert(fixed_path, cover);
+    }
     reader.draw().expect("failed to draw with cover panel");
     insta::with_settings!({filters => library_snapshot_filters()}, {
         insta::assert_snapshot!(reader.terminal.backend());

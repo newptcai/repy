@@ -18,7 +18,7 @@ expression: reader.terminal.backend()
 "             │                           │Accessible EPUB 3      │              "
 "             │                           │Author: Matt Garrish   │              "
 "             │                           │Formats: EPUB          │              "
-"             │                           │Path: …ures/small.epub │              "
+"             │                           │Path: /books/small.epub│              "
 "             │                           │                       │              "
 "             │                           │                       │              "
 "             │                           │                       │              "
