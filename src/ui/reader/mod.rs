@@ -333,6 +333,8 @@ pub struct UiState {
     /// 1-based [/] page number within the current feed, for the window title.
     pub opds_page: usize,
     pub metadata: Option<BookMetadata>,
+    /// Path of the book shown in the Metadata window.
+    pub metadata_filepath: Option<String>,
     pub statistics: ReadingStatistics,
     pub dictionary_word: String,
     pub dictionary_definition: String,
@@ -458,6 +460,7 @@ impl UiState {
             opds_search_query: String::new(),
             opds_page: 1,
             metadata: None,
+            metadata_filepath: None,
             statistics: ReadingStatistics::default(),
             dictionary_word: String::new(),
             dictionary_definition: String::new(),
@@ -1371,7 +1374,10 @@ where
             self.state.borrow().ui_state.active_window,
             WindowType::Reader | WindowType::Visual
         );
-        let inline_blocks = if reader_visible {
+        // Terminal graphics draw over text cells, so a rendered image would
+        // hide any status toast underneath it; images resume when it expires.
+        let message_visible = self.state.borrow().ui_state.message.is_some();
+        let inline_blocks = if reader_visible && !message_visible {
             self.visible_inline_image_blocks()
         } else {
             Vec::new()
@@ -1384,6 +1390,7 @@ where
         };
         let library_cover = if self.state.borrow().ui_state.show_library
             && self.state.borrow().ui_state.library_cover_visible
+            && !message_visible
         {
             self.selected_library_path()
                 .and_then(|path| self.library_covers.get_mut(&path))
@@ -1629,6 +1636,7 @@ where
             state.jump_history_index = jump_history_index.min(state.jump_history.len());
             state.marks = marks;
             state.ui_state.metadata = Some(epub.get_meta().clone());
+            state.ui_state.metadata_filepath = Some(normalized_path.clone());
             state.ui_state.book_identity = Some(identity);
             state.ui_state.toc_entries = epub.toc_entries().clone();
             state.ui_state.toc_selected_index = 0;
@@ -2133,19 +2141,24 @@ impl Reader {
                                     .borrow_mut()
                                     .ui_state
                                     .open_window(WindowType::Reader);
-                                match calibre {
-                                    Some(Ok(note)) => self
-                                        .state
-                                        .borrow_mut()
-                                        .ui_state
-                                        .set_message(note, MessageType::Info),
-                                    Some(Err(e)) => self
-                                        .state
-                                        .borrow_mut()
-                                        .ui_state
-                                        .set_message(e, MessageType::Warning),
-                                    None => {}
-                                }
+                                // Always name the saved file: the library
+                                // window lists the book either way, and the
+                                // path is the only clue to where it lives.
+                                let saved = crate::library::abbreviate_home(&path);
+                                let (message, message_type) = match calibre {
+                                    Some(Ok(note)) => {
+                                        (format!("{note} · saved to {saved}"), MessageType::Info)
+                                    }
+                                    Some(Err(e)) => (
+                                        format!("{e} — book saved to {saved}"),
+                                        MessageType::Warning,
+                                    ),
+                                    None => (format!("Saved to {saved}"), MessageType::Info),
+                                };
+                                self.state
+                                    .borrow_mut()
+                                    .ui_state
+                                    .set_message(message, message_type);
                             }
                             Err(e) => self.state.borrow_mut().ui_state.opds_error = Some(e),
                         }
@@ -4694,6 +4707,7 @@ where
                 frame,
                 frame.area(),
                 state.ui_state.metadata.as_ref(),
+                state.ui_state.metadata_filepath.as_deref(),
                 &theme,
             );
         } else if state.ui_state.show_statistics {
@@ -5956,8 +5970,10 @@ where
 
     fn open_metadata_window(&mut self) -> eyre::Result<()> {
         let metadata = self.ebook.as_ref().map(|epub| epub.get_meta().clone());
+        let filepath = self.ebook.as_ref().map(|epub| epub.path().to_string());
         let mut state = self.state.borrow_mut();
         state.ui_state.metadata = metadata;
+        state.ui_state.metadata_filepath = filepath;
         state.ui_state.open_window(WindowType::Metadata);
         Ok(())
     }

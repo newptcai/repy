@@ -11,7 +11,13 @@ use ratatui::{
 pub struct MetadataWindow;
 
 impl MetadataWindow {
-    pub fn render(frame: &mut Frame, area: Rect, metadata: Option<&BookMetadata>, theme: &Theme) {
+    pub fn render(
+        frame: &mut Frame,
+        area: Rect,
+        metadata: Option<&BookMetadata>,
+        filepath: Option<&str>,
+        theme: &Theme,
+    ) {
         let popup_area = super::centered_popup_area(area, 60, 80);
 
         frame.render_widget(Clear, popup_area);
@@ -46,6 +52,12 @@ impl MetadataWindow {
                 Line::from(format!(
                     "Format: {}",
                     metadata.format.as_deref().unwrap_or("Unknown")
+                )),
+                Line::from(format!(
+                    "Path: {}",
+                    filepath
+                        .map(|p| crate::library::abbreviate_home(std::path::Path::new(p)))
+                        .unwrap_or_else(|| "Unknown".into())
                 )),
                 Line::from(""),
                 Line::from("Description:"),

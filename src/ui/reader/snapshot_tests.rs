@@ -909,3 +909,28 @@ fn opds_long_variant_label_keeps_counter() {
         "label over-truncated:\n{screen}"
     );
 }
+
+#[test]
+fn status_message_not_covered_by_inline_image() {
+    let mut settings = Settings::default();
+    settings.inline_images = crate::settings::InlineImages::Shown;
+    let mut reader = test_reader_with_settings(settings);
+    reader.graphics = crate::ui::graphics::Graphics::halfblocks_for_test();
+    reader.poll_inline_images();
+    while reader.inline_images_pending {
+        reader.poll_inline_images();
+    }
+    // A toast (e.g. the calibredb outcome) must stay readable even though
+    // the cover image block overlaps its area: images pause while visible.
+    reader
+        .state
+        .borrow_mut()
+        .ui_state
+        .set_message("Added to Calibre library".into(), super::MessageType::Info);
+    reader.draw().expect("draw");
+    let screen = format!("{}", reader.terminal.backend());
+    assert!(
+        screen.contains("Added to Calibre library"),
+        "message hidden by inline image:\n{screen}"
+    );
+}

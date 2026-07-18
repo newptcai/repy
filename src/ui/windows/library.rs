@@ -213,6 +213,27 @@ impl LibraryWindow {
         if let Some(publisher) = &entry.publisher {
             lines.push(Line::from(format!("Publisher: {publisher}")));
         }
+        // One line, keeping the tail (directory + file name) when the
+        // panel is too narrow; the metadata window shows the full path.
+        let path = crate::library::abbreviate_home(std::path::Path::new(&entry.filepath));
+        let max = (text_area.width as usize).saturating_sub(7);
+        let shown = if path.chars().count() > max {
+            let tail: String = path
+                .chars()
+                .rev()
+                .take(max.saturating_sub(1))
+                .collect::<Vec<_>>()
+                .into_iter()
+                .rev()
+                .collect();
+            format!("…{tail}")
+        } else {
+            path
+        };
+        lines.push(Line::styled(
+            format!("Path: {shown}"),
+            Style::default().fg(theme.muted_fg),
+        ));
         if let Some(description) = &entry.description {
             lines.push(Line::from(""));
             lines.push(Line::from(description.as_str()));

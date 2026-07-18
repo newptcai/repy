@@ -32,6 +32,19 @@ pub fn expand_tilde(dir: &str) -> PathBuf {
     }
 }
 
+/// Replace a leading home-directory prefix with `~` for compact display.
+pub fn abbreviate_home(path: &Path) -> String {
+    let home = std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .ok();
+    if let Some(home) = home
+        && let Ok(rest) = path.strip_prefix(&home)
+    {
+        return format!("~/{}", rest.display());
+    }
+    path.display().to_string()
+}
+
 /// The first configured library directory that is a Calibre library root
 /// (contains `metadata.db`).
 pub fn find_calibre_library(dirs: &[String]) -> Option<PathBuf> {
@@ -476,6 +489,18 @@ fn unescape_xml(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn abbreviates_home_prefix() {
+        if let Ok(home) = std::env::var("HOME") {
+            let inside = Path::new(&home).join("Downloads/repy/book.epub");
+            assert_eq!(abbreviate_home(&inside), "~/Downloads/repy/book.epub");
+        }
+        assert_eq!(
+            abbreviate_home(Path::new("/srv/books/a.epub")),
+            "/srv/books/a.epub"
+        );
+    }
 
     #[test]
     fn calibredb_output_classification() {
