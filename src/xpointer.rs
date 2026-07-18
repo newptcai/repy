@@ -167,10 +167,7 @@ mod tests {
     fn parses_full_xpointer() {
         let xp = parse("/body/DocFragment[14]/body/div/p[3]/text().42").unwrap();
         assert_eq!(xp.doc_fragment, 14);
-        assert_eq!(
-            xp.steps,
-            vec![("div".to_string(), 1), ("p".to_string(), 3)]
-        );
+        assert_eq!(xp.steps, vec![("div".to_string(), 1), ("p".to_string(), 3)]);
         assert_eq!(xp.text_offset, 42);
     }
 

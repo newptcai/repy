@@ -13,7 +13,10 @@ mod tests {
 
         // 1. Record jump (simulate moving from 10 to somewhere else)
         state.record_jump(state.reading_state.clone()); // Saves 10
-        assert_eq!(state.jump_history.iter().map(|s| s.row).collect::<Vec<_>>(), vec![10]);
+        assert_eq!(
+            state.jump_history.iter().map(|s| s.row).collect::<Vec<_>>(),
+            vec![10]
+        );
         assert_eq!(state.jump_history_index, 1);
 
         // Simulate move to 20
@@ -21,7 +24,10 @@ mod tests {
 
         // 2. Record jump (simulate moving from 20 to 30)
         state.record_jump(state.reading_state.clone()); // Saves 20
-        assert_eq!(state.jump_history.iter().map(|s| s.row).collect::<Vec<_>>(), vec![10, 20]);
+        assert_eq!(
+            state.jump_history.iter().map(|s| s.row).collect::<Vec<_>>(),
+            vec![10, 20]
+        );
         assert_eq!(state.jump_history_index, 2);
 
         // Simulate move to 30
@@ -34,7 +40,10 @@ mod tests {
         // History should now be [10, 20, 30]
         // Index should be at 1 (pointing to 20)
         assert_eq!(state.reading_state.row, 20);
-        assert_eq!(state.jump_history.iter().map(|s| s.row).collect::<Vec<_>>(), vec![10, 20, 30]);
+        assert_eq!(
+            state.jump_history.iter().map(|s| s.row).collect::<Vec<_>>(),
+            vec![10, 20, 30]
+        );
         assert_eq!(state.jump_history_index, 1);
 
         // 4. Jump Back again
@@ -80,7 +89,10 @@ mod tests {
         // Add current (20). Last is 20. Duplicate check prevents adding.
         // Index becomes 2.
 
-        assert_eq!(state.jump_history.iter().map(|s| s.row).collect::<Vec<_>>(), vec![10, 20]);
+        assert_eq!(
+            state.jump_history.iter().map(|s| s.row).collect::<Vec<_>>(),
+            vec![10, 20]
+        );
         assert_eq!(state.jump_history_index, 2);
 
         // Now simulate user moved to 50
@@ -88,7 +100,10 @@ mod tests {
 
         // Record another jump from 50
         state.record_jump(state.reading_state.clone());
-        assert_eq!(state.jump_history.iter().map(|s| s.row).collect::<Vec<_>>(), vec![10, 20, 50]);
+        assert_eq!(
+            state.jump_history.iter().map(|s| s.row).collect::<Vec<_>>(),
+            vec![10, 20, 50]
+        );
         assert_eq!(state.jump_history_index, 3);
     }
 }

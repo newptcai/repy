@@ -1921,10 +1921,11 @@ mod tests {
                 ..ReadingState::default()
             })
             .collect::<Vec<_>>();
-        state
-            .set_jump_history(&ebook, &jump_history, 2)
-            .unwrap();
-        assert_eq!(state.get_jump_history(&ebook).unwrap(), (jump_history.clone(), 2));
+        state.set_jump_history(&ebook, &jump_history, 2).unwrap();
+        assert_eq!(
+            state.get_jump_history(&ebook).unwrap(),
+            (jump_history.clone(), 2)
+        );
         state
             .conn
             .execute(

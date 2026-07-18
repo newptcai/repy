@@ -471,10 +471,7 @@ fn normalized_source_text(lines: &[String]) -> String {
 
 /// Match pre-justification wrapped pieces back to one normalized raw line.
 /// Returned spans are local char offsets into `source`.
-fn match_wrapped_source_spans(
-    pieces: &[String],
-    source: &[char],
-) -> Vec<(usize, usize)> {
+fn match_wrapped_source_spans(pieces: &[String], source: &[char]) -> Vec<(usize, usize)> {
     let mut spans = Vec::with_capacity(pieces.len());
     let mut source_cursor = 0usize;
 
@@ -1021,7 +1018,12 @@ fn find_source_offset(source_text: &str, cursor: usize, needle: &str) -> Option<
         .nth(cursor)
         .map_or(source_text.len(), |(byte, _)| byte);
     let relative_byte = source_text.get(byte_cursor..)?.find(needle)?;
-    Some(cursor + source_text[byte_cursor..byte_cursor + relative_byte].chars().count())
+    Some(
+        cursor
+            + source_text[byte_cursor..byte_cursor + relative_byte]
+                .chars()
+                .count(),
+    )
 }
 
 /// Minimum normalized length for a DOM text node to advance the link-walk
@@ -1032,11 +1034,7 @@ const CURSOR_ADVANCE_MIN_CHARS: usize = 12;
 /// Record the source cursor at which each selected element opens, advancing
 /// through long intervening DOM text nodes so a target cannot attach to an
 /// identical phrase that appeared earlier outside the target element.
-fn selected_element_cursors(
-    fragment: &Html,
-    selector: &Selector,
-    source_text: &str,
-) -> Vec<usize> {
+fn selected_element_cursors(fragment: &Html, selector: &Selector, source_text: &str) -> Vec<usize> {
     let selected_ids = fragment
         .select(selector)
         .map(|element| element.id())
@@ -1927,9 +1925,7 @@ mod tests {
 
         for versions in &parsed_versions {
             for source in versions {
-                for (source_row, &(start, end)) in
-                    source.source_map.row_spans.iter().enumerate()
-                {
+                for (source_row, &(start, end)) in source.source_map.row_spans.iter().enumerate() {
                     if start == end {
                         continue;
                     }
@@ -2011,10 +2007,17 @@ mod tests {
         )
         .unwrap();
         assert!(!pagebreak.source_map.source_text.contains("@@PB:"));
-        assert!(!pagebreak.text_lines.iter().any(|line| line.contains("@@PB:")));
+        assert!(
+            !pagebreak
+                .text_lines
+                .iter()
+                .any(|line| line.contains("@@PB:"))
+        );
         let page_offset = "alpha beta gamma".chars().count();
         assert_eq!(
-            pagebreak.pagebreak_map.get(&pagebreak.source_map.row_for_offset(page_offset)),
+            pagebreak
+                .pagebreak_map
+                .get(&pagebreak.source_map.row_for_offset(page_offset)),
             Some(&"42".to_string())
         );
         assert_source_map_invariants(&pagebreak);
