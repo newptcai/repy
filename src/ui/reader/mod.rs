@@ -2086,11 +2086,20 @@ impl Reader {
             drop(state);
 
             // Auto-clear expired messages before rendering
-            {
+            let message_expired = {
                 let mut state = self.state.borrow_mut();
                 if state.ui_state.message_expired() {
                     state.ui_state.clear_message();
+                    true
+                } else {
+                    false
                 }
+            };
+            if message_expired {
+                // Graphics were paused under the toast; a full redraw makes
+                // the terminal re-emit every cell so kitty/sixel images are
+                // reliably re-transmitted instead of relying on cell diffs.
+                self.terminal.clear()?;
             }
             self.close_idle_reading_session()?;
 
@@ -2343,18 +2352,28 @@ where
 {
     /// Handle keyboard input events
     fn handle_key_event(&mut self, key: KeyEvent) -> eyre::Result<()> {
-        {
+        let (message_dismissed, key_consumed) = {
             let mut state = self.state.borrow_mut();
             if state.ui_state.message.is_some() && state.ui_state.message_persistent {
                 // A sticky warning/error: this key only dismisses it.
                 state.ui_state.clear_message();
-                return Ok(());
-            }
-            if state.ui_state.message.is_some()
+                (true, true)
+            } else if state.ui_state.message.is_some()
                 && state.ui_state.active_window == WindowType::Reader
             {
                 state.ui_state.clear_message();
+                (true, false)
+            } else {
+                (false, false)
             }
+        };
+        if message_dismissed {
+            // Re-emit the whole screen so graphics paused under the toast
+            // (covers, inline images) reliably come back on any protocol.
+            self.terminal.clear()?;
+        }
+        if key_consumed {
+            return Ok(());
         }
 
         if self.handle_pending_mark_key(key)? {
