@@ -110,10 +110,24 @@ pub fn pull(config: &KosyncConfig, document: &str) -> Result<Option<RemoteProgre
     if !response.status().is_success() {
         return Err(eyre!("kosync pull failed: HTTP {}", response.status()));
     }
-    Ok(Some(
-        response
-            .json()
+    parse_pull_body(
+        &response
+            .text()
             .wrap_err("invalid kosync progress response")?,
+    )
+}
+
+/// Parse a kosync progress body. The common server implementations answer
+/// HTTP 200 with an empty (or document-only) JSON object when they have no
+/// progress stored for the document, so that case is `None`, not an error.
+fn parse_pull_body(body: &str) -> Result<Option<RemoteProgress>> {
+    let value: serde_json::Value =
+        serde_json::from_str(body).wrap_err("invalid kosync progress response")?;
+    if value.get("progress").is_none() || value.get("percentage").is_none() {
+        return Ok(None);
+    }
+    Ok(Some(
+        serde_json::from_value(value).wrap_err("invalid kosync progress response")?,
     ))
 }
 
@@ -121,6 +135,19 @@ pub fn pull(config: &KosyncConfig, document: &str) -> Result<Option<RemoteProgre
 mod tests {
     use super::*;
     use std::io::Write;
+
+    #[test]
+    fn empty_progress_response_is_none_not_an_error() {
+        // Sync servers answer 200 with an empty or document-only object
+        // for books they have never seen.
+        assert_eq!(parse_pull_body("{}").unwrap(), None);
+        assert_eq!(parse_pull_body(r#"{"document": "abc123"}"#).unwrap(), None);
+        let full = r#"{"document":"abc","progress":"0.42","percentage":0.42,"device":"KOReader"}"#;
+        let parsed = parse_pull_body(full).unwrap().unwrap();
+        assert_eq!(parsed.percentage, 0.42);
+        assert_eq!(parsed.device, "KOReader");
+        assert!(parse_pull_body("not json").is_err());
+    }
 
     #[test]
     fn derives_protocol_password_key() {

@@ -1743,11 +1743,21 @@ where
                 MessageType::Info,
             ),
             Ok(None) => {}
-            Err(error) => self
+            // Only a manually requested pull earns a sticky warning; the
+            // automatic pull on book open reports transiently so a flaky
+            // server never blocks the UI (persistent toasts pause covers).
+            Err(error) if manual => self
                 .state
                 .borrow_mut()
                 .ui_state
                 .set_message(format!("KOReader sync: {error}"), MessageType::Warning),
+            Err(error) => {
+                logging::debug(format!("KOReader sync pull failed: {error}"));
+                self.state
+                    .borrow_mut()
+                    .ui_state
+                    .set_message(format!("KOReader sync: {error}"), MessageType::Info);
+            }
         }
     }
 

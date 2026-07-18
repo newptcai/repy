@@ -1006,3 +1006,65 @@ fn move_to_calibre_guards_missing_file() {
     assert!(message.contains("missing"), "unexpected message: {message}");
     assert!(reader.calibre_import_rx.is_none());
 }
+
+#[test]
+fn cover_reloads_after_move_without_keypress() {
+    let mut reader = test_reader();
+    reader.graphics = crate::ui::graphics::Graphics::halfblocks_for_test();
+    press_char(&mut reader, 'r');
+    press_char(&mut reader, 'c');
+    reader.poll_library_cover();
+    std::thread::sleep(super::LIBRARY_COVER_DEBOUNCE);
+    reader.poll_library_cover();
+    let old_path = reader.selected_library_path().expect("selection");
+    assert!(matches!(
+        reader.library_covers.get(&old_path),
+        Some(Some(_))
+    ));
+
+    // Simulate a completed move: the entry now points at the new location
+    // and the outcome toast is showing.
+    let dir = tempfile::tempdir().unwrap();
+    let new_path = dir.path().join("moved.epub");
+    std::fs::copy(&old_path, &new_path).unwrap();
+    let new_path = new_path.to_string_lossy().into_owned();
+    {
+        let mut state = reader.state.borrow_mut();
+        let index = state
+            .ui_state
+            .selected_list_index(state.ui_state.library_selected_index)
+            .unwrap();
+        state.ui_state.library_items[index].filepath = new_path.clone();
+        state
+            .ui_state
+            .set_message("Moved to Calibre".into(), super::MessageType::Info);
+    }
+
+    // Run-loop equivalents only — no key events. First iterations happen
+    // while the toast is up (cover suppressed but decoding proceeds).
+    reader.poll_library_cover();
+    std::thread::sleep(super::LIBRARY_COVER_DEBOUNCE);
+    reader.poll_library_cover();
+    reader.draw().expect("draw while toast visible");
+    assert!(
+        matches!(reader.library_covers.get(&new_path), Some(Some(_))),
+        "new cover should decode while the toast is visible"
+    );
+
+    // Then the toast expires and the next iteration draws the cover.
+    reader.state.borrow_mut().ui_state.message_time =
+        Some(std::time::Instant::now() - std::time::Duration::from_secs(4));
+    {
+        let mut state = reader.state.borrow_mut();
+        if state.ui_state.message_expired() {
+            state.ui_state.clear_message();
+        }
+    }
+    reader.poll_library_cover();
+    reader.draw().expect("draw after toast expired");
+    let screen = format!("{}", reader.terminal.backend());
+    assert!(
+        screen.contains('▄') || screen.contains('▀'),
+        "cover should be visible without any keypress:\n{screen}"
+    );
+}
