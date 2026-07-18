@@ -362,6 +362,21 @@ pub fn get_feed(
     origin: &Url,
     credentials: Option<(&str, Option<&str>)>,
 ) -> Result<Feed> {
+    get_feed_with_progress(client, url, origin, credentials, |_, _| {})
+}
+
+/// Fetch a feed, streaming the body so `progress(received, total)` reports
+/// real bytes; `total` is the Content-Length when the server sends one.
+pub fn get_feed_with_progress<F>(
+    client: &Client,
+    url: &Url,
+    origin: &Url,
+    credentials: Option<(&str, Option<&str>)>,
+    mut progress: F,
+) -> Result<Feed>
+where
+    F: FnMut(u64, Option<u64>),
+{
     let mut req = client
         .get(url.clone())
         .header(reqwest::header::ACCEPT, OPDS_ACCEPT);
@@ -370,18 +385,34 @@ pub fn get_feed(
             req = req.basic_auth(u, p);
         }
     }
-    let response = req.send()?.error_for_status()?;
+    let mut response = req.send()?.error_for_status()?;
     let final_url = response.url().clone();
-    parse_opds1(&response.text()?, &final_url)
+    let total = response.content_length();
+    progress(0, total);
+    let mut body = Vec::new();
+    let mut buffer = [0u8; 16 * 1024];
+    loop {
+        let count = std::io::Read::read(&mut response, &mut buffer)?;
+        if count == 0 {
+            break;
+        }
+        body.extend_from_slice(&buffer[..count]);
+        progress(body.len() as u64, total);
+    }
+    parse_opds1(&String::from_utf8_lossy(&body), &final_url)
 }
 
-pub fn search_feed(
+pub fn search_feed<F>(
     client: &Client,
     description: &SearchDescription,
     query: &str,
     origin: &Url,
     credentials: Option<(&str, Option<&str>)>,
-) -> Result<Feed> {
+    progress: F,
+) -> Result<Feed>
+where
+    F: FnMut(u64, Option<u64>),
+{
     let template = if description.template.contains("{searchTerms}")
         || description.template.contains("%7BsearchTerms%7D")
     {
@@ -399,7 +430,7 @@ pub fn search_feed(
         parse_search_description(&response.text()?, &final_url)?
     };
     let search_url = expand_search(&template, query)?;
-    get_feed(client, &search_url, origin, credentials)
+    get_feed_with_progress(client, &search_url, origin, credentials, progress)
 }
 
 pub fn supported_extension(media: Option<&str>, href: &str) -> Option<&'static str> {

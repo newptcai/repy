@@ -836,3 +836,21 @@ fn opds_feed_q_returns_to_library() {
         crate::models::WindowType::Library
     );
 }
+
+#[test]
+fn opds_download_progress_centered() {
+    let mut reader = test_reader();
+    {
+        let mut state = reader.state.borrow_mut();
+        state.ui_state.opds_feed = Some(sample_opds_feed());
+        state.ui_state.opds_loading = true;
+        state.ui_state.opds_downloading = true;
+        state.ui_state.opds_downloaded_bytes = 512 * 1024;
+        state.ui_state.opds_total_bytes = Some(1024 * 1024);
+        state
+            .ui_state
+            .open_window(crate::models::WindowType::OpdsFeed);
+    }
+    reader.draw().expect("draw");
+    insta::assert_snapshot!(reader.terminal.backend());
+}

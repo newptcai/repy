@@ -3826,6 +3826,7 @@ where
         self.opds_request_id = self.opds_request_id.wrapping_add(1);
         let id = self.opds_request_id;
         let (tx, rx) = std::sync::mpsc::channel();
+        let progress_tx = tx.clone();
         std::thread::spawn(move || {
             let result = (|| {
                 let client = opds::client(false).map_err(|e| e.to_string())?;
@@ -3833,7 +3834,14 @@ where
                     .username
                     .as_deref()
                     .map(|u| (u, catalog.password.as_deref()));
-                opds::get_feed(&client, &target, &origin, creds).map_err(|e| e.to_string())
+                opds::get_feed_with_progress(&client, &target, &origin, creds, |received, total| {
+                    let _ = progress_tx.send(OpdsWorkerEvent::Progress {
+                        request_id: id,
+                        downloaded: received,
+                        total,
+                    });
+                })
+                .map_err(|e| e.to_string())
             })();
             let _ = tx.send(OpdsWorkerEvent::Feed {
                 request_id: id,
@@ -3844,6 +3852,8 @@ where
         let mut s = self.state.borrow_mut();
         s.ui_state.opds_loading = true;
         s.ui_state.opds_downloading = false;
+        s.ui_state.opds_downloaded_bytes = 0;
+        s.ui_state.opds_total_bytes = None;
         s.ui_state.opds_error = None;
         s.ui_state.opds_selected_index = 0;
         s.ui_state.opds_page = page;
@@ -3936,6 +3946,7 @@ where
         self.opds_request_id = self.opds_request_id.wrapping_add(1);
         let request_id = self.opds_request_id;
         let (tx, rx) = std::sync::mpsc::channel();
+        let progress_tx = tx.clone();
         std::thread::spawn(move || {
             let result = (|| {
                 let client = opds::client(false).map_err(|e| e.to_string())?;
@@ -3943,8 +3954,21 @@ where
                     .username
                     .as_deref()
                     .map(|username| (username, catalog.password.as_deref()));
-                opds::search_feed(&client, &description, &query, &origin, credentials)
-                    .map_err(|e| e.to_string())
+                opds::search_feed(
+                    &client,
+                    &description,
+                    &query,
+                    &origin,
+                    credentials,
+                    |received, total| {
+                        let _ = progress_tx.send(OpdsWorkerEvent::Progress {
+                            request_id,
+                            downloaded: received,
+                            total,
+                        });
+                    },
+                )
+                .map_err(|e| e.to_string())
             })();
             let _ = tx.send(OpdsWorkerEvent::Feed { request_id, result });
         });
@@ -3952,6 +3976,8 @@ where
         let mut state = self.state.borrow_mut();
         state.ui_state.opds_loading = true;
         state.ui_state.opds_downloading = false;
+        state.ui_state.opds_downloaded_bytes = 0;
+        state.ui_state.opds_total_bytes = None;
         state.ui_state.opds_error = None;
         state.ui_state.opds_selected_index = 0;
         state.ui_state.opds_page = 1;

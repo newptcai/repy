@@ -5,7 +5,7 @@ use crate::{
 };
 use ratatui::{
     Frame,
-    layout::Rect,
+    layout::{Alignment, Rect},
     style::Style,
     text::{Line, Span},
     widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap},
@@ -128,7 +128,10 @@ impl OpdsWindow {
                     Some(format!(" {title} · {}/{total} ", start + selected as u64))
                 })
                 .unwrap_or_else(|| {
-                    if page > 1 {
+                    let paginated = feed.is_some_and(|f| {
+                        f.pagination.next.is_some() || f.pagination.previous.is_some()
+                    });
+                    if paginated || page > 1 {
                         format!(
                             " {title} · {}/{} · page {page} ",
                             selected + 1,
@@ -171,42 +174,56 @@ impl OpdsWindow {
         let inner = block.inner(area);
         frame.render_widget(block, area);
         if loading {
-            let tick = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_millis()
-                / 120;
-            let label = if downloading {
-                let human = |bytes: u64| {
-                    if bytes >= 1024 * 1024 {
-                        format!("{:.1} MiB", bytes as f64 / (1024.0 * 1024.0))
-                    } else {
-                        format!("{:.0} KiB", bytes as f64 / 1024.0)
-                    }
-                };
-                if let Some(total) = total_bytes.filter(|total| *total > 0) {
-                    let percent = (downloaded_bytes.saturating_mul(100) / total).min(100);
-                    let filled = (percent as usize * 20 / 100).min(20);
-                    format!(
-                        "Downloading [{:<20}] {:>3}% · {} / {}",
-                        "█".repeat(filled),
-                        percent,
-                        human(downloaded_bytes),
-                        human(total)
-                    )
-                } else {
-                    let position = tick as usize % 17;
-                    let bar = format!("{}████{}", " ".repeat(position), " ".repeat(16 - position));
-                    format!("Downloading [{bar}] · {}", human(downloaded_bytes))
-                }
+            let verb = if downloading {
+                "Downloading"
             } else {
+                "Loading feed"
+            };
+            let human = |bytes: u64| {
+                if bytes >= 1024 * 1024 {
+                    format!("{:.1} MiB", bytes as f64 / (1024.0 * 1024.0))
+                } else {
+                    format!("{:.0} KiB", bytes as f64 / 1024.0)
+                }
+            };
+            let label = if let Some(total) = total_bytes.filter(|total| *total > 0) {
+                // Real progress: bytes received over the Content-Length.
+                let percent = (downloaded_bytes.saturating_mul(100) / total).min(100);
+                let filled = (percent as usize * 16 / 100).min(16);
+                format!(
+                    "{verb} [{:<16}] {:>3}% · {} / {}",
+                    "█".repeat(filled),
+                    percent,
+                    human(downloaded_bytes),
+                    human(total)
+                )
+            } else {
+                // No Content-Length: animate a marquee but still show the
+                // real byte count once data starts arriving.
+                let tick = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_millis()
+                    / 120;
                 let position = tick as usize % 17;
                 let bar = format!("{}████{}", " ".repeat(position), " ".repeat(16 - position));
-                format!("Loading feed [{bar}]")
+                if downloaded_bytes > 0 {
+                    format!("{verb} [{bar}] · {}", human(downloaded_bytes))
+                } else {
+                    format!("{verb} [{bar}]")
+                }
             };
+            let row = Rect::new(
+                inner.x,
+                inner.y + inner.height / 2,
+                inner.width,
+                inner.height.min(1),
+            );
             frame.render_widget(
-                Paragraph::new(label).style(theme.base_style().fg(theme.muted_fg)),
-                inner,
+                Paragraph::new(label)
+                    .alignment(Alignment::Center)
+                    .style(theme.base_style().fg(theme.muted_fg)),
+                row,
             );
             return;
         }
