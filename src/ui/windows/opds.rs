@@ -105,6 +105,7 @@ impl OpdsWindow {
         total_bytes: Option<u64>,
         error: Option<&str>,
         details: bool,
+        page: usize,
         theme: &Theme,
     ) {
         let area = Self::area(area);
@@ -117,7 +118,26 @@ impl OpdsWindow {
             .map(|f| f.navigation.len() + f.publications.len())
             .unwrap_or(0);
         let top_title = if !loading && error.is_none() && total_entries > 0 {
-            format!(" {title} · {}/{} ", selected + 1, total_entries)
+            // Prefer the catalog-wide position (OpenSearch totalResults +
+            // startIndex) so the counter keeps moving across [/] pages;
+            // fall back to a per-page counter with an explicit page number.
+            feed.filter(|f| f.navigation.is_empty())
+                .and_then(|f| {
+                    let total = f.pagination.total_results.filter(|t| *t > 0)?;
+                    let start = f.pagination.start_index.unwrap_or(1).max(1);
+                    Some(format!(" {title} · {}/{total} ", start + selected as u64))
+                })
+                .unwrap_or_else(|| {
+                    if page > 1 {
+                        format!(
+                            " {title} · {}/{} · page {page} ",
+                            selected + 1,
+                            total_entries
+                        )
+                    } else {
+                        format!(" {title} · {}/{} ", selected + 1, total_entries)
+                    }
+                })
         } else {
             format!(" {title} ")
         };

@@ -684,7 +684,7 @@ fn sample_opds_feed() -> crate::opds::Feed {
         ],
         pagination: crate::opds::Pagination {
             next: Some("https://example.test/page2".into()),
-            previous: None,
+            ..Default::default()
         },
         search: None,
     }
@@ -747,4 +747,92 @@ fn opds_catalogs_window_empty() {
         .draw()
         .expect("failed to draw empty OPDS catalogs window");
     insta::assert_snapshot!(reader.terminal.backend());
+}
+
+#[test]
+fn opds_feed_counter_follows_selection() {
+    let mut reader = test_reader();
+    {
+        let mut state = reader.state.borrow_mut();
+        state.ui_state.opds_feed = Some(sample_opds_feed());
+        state.ui_state.opds_selected_index = 0;
+        state
+            .ui_state
+            .open_window(crate::models::WindowType::OpdsFeed);
+    }
+    reader.draw().expect("draw");
+    let before = format!("{}", reader.terminal.backend());
+    press_char(&mut reader, 'j');
+    press_char(&mut reader, 'j');
+    let after = format!("{}", reader.terminal.backend());
+    assert!(before.contains("1/3"), "missing 1/3:\n{before}");
+    assert!(after.contains("3/3"), "counter did not advance:\n{after}");
+}
+
+#[test]
+fn opds_feed_counter_uses_opensearch_totals() {
+    let mut reader = test_reader();
+    {
+        let mut state = reader.state.borrow_mut();
+        let mut feed = sample_opds_feed();
+        feed.title = "All Books".into();
+        feed.navigation.clear();
+        feed.pagination.total_results = Some(1234);
+        feed.pagination.start_index = Some(26);
+        state.ui_state.opds_feed = Some(feed);
+        state.ui_state.opds_selected_index = 0;
+        state
+            .ui_state
+            .open_window(crate::models::WindowType::OpdsFeed);
+    }
+    reader.draw().expect("draw");
+    let screen = format!("{}", reader.terminal.backend());
+    assert!(
+        screen.contains("All Books · 26/1234"),
+        "expected catalog-wide position:\n{screen}"
+    );
+    press_char(&mut reader, 'j');
+    let screen = format!("{}", reader.terminal.backend());
+    assert!(
+        screen.contains("All Books · 27/1234"),
+        "expected counter to advance:\n{screen}"
+    );
+}
+
+#[test]
+fn opds_feed_counter_shows_page_number_without_totals() {
+    let mut reader = test_reader();
+    {
+        let mut state = reader.state.borrow_mut();
+        state.ui_state.opds_feed = Some(sample_opds_feed());
+        state.ui_state.opds_selected_index = 0;
+        state.ui_state.opds_page = 3;
+        state
+            .ui_state
+            .open_window(crate::models::WindowType::OpdsFeed);
+    }
+    reader.draw().expect("draw");
+    let screen = format!("{}", reader.terminal.backend());
+    assert!(
+        screen.contains("Sample Shelf · 1/3 · page 3"),
+        "expected page suffix:\n{screen}"
+    );
+}
+
+#[test]
+fn opds_feed_q_returns_to_library() {
+    let mut reader = test_reader();
+    {
+        let mut state = reader.state.borrow_mut();
+        state.ui_state.opds_feed = Some(sample_opds_feed());
+        state
+            .ui_state
+            .open_window(crate::models::WindowType::OpdsFeed);
+    }
+    reader.draw().expect("draw");
+    press_char(&mut reader, 'q');
+    assert_eq!(
+        reader.state.borrow().ui_state.active_window,
+        crate::models::WindowType::Library
+    );
 }

@@ -56,6 +56,10 @@ pub enum Availability {
 pub struct Pagination {
     pub next: Option<String>,
     pub previous: Option<String>,
+    /// OpenSearch `totalResults`: entries across all pages, when advertised.
+    pub total_results: Option<u64>,
+    /// OpenSearch `startIndex`: 1-based index of this page's first entry.
+    pub start_index: Option<u64>,
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SearchDescription {
@@ -166,6 +170,10 @@ pub fn parse_opds1(xml: &str, base: &Url) -> Result<Feed> {
                     }
                 } else if name == b"title" && feed.title.is_empty() {
                     feed.title = value;
+                } else if name == b"totalResults" {
+                    feed.pagination.total_results = value.parse().ok();
+                } else if name == b"startIndex" {
+                    feed.pagination.start_index = value.parse().ok();
                 }
                 stack.pop();
                 content.clear();
@@ -571,6 +579,14 @@ mod tests {
             Some("https://example.test/catalog/?page=2")
         );
         assert!(f.search.is_some());
+    }
+    #[test]
+    fn parses_opensearch_pagination_totals() {
+        let base = Url::parse("https://example.test/catalog/").unwrap();
+        let xml = r#"<feed xmlns="http://www.w3.org/2005/Atom" xmlns:opensearch="http://a9.com/-/spec/opensearch/1.1/"><title>All Books</title><opensearch:totalResults>1234</opensearch:totalResults><opensearch:startIndex>26</opensearch:startIndex><opensearch:itemsPerPage>25</opensearch:itemsPerPage></feed>"#;
+        let f = parse_opds1(xml, &base).unwrap();
+        assert_eq!(f.pagination.total_results, Some(1234));
+        assert_eq!(f.pagination.start_index, Some(26));
     }
     #[test]
     fn rejects_non_http_and_encodes_search() {

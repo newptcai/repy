@@ -330,6 +330,8 @@ pub struct UiState {
     pub opds_total_bytes: Option<u64>,
     pub opds_error: Option<String>,
     pub opds_search_query: String,
+    /// 1-based [/] page number within the current feed, for the window title.
+    pub opds_page: usize,
     pub metadata: Option<BookMetadata>,
     pub statistics: ReadingStatistics,
     pub dictionary_word: String,
@@ -454,6 +456,7 @@ impl UiState {
             opds_total_bytes: None,
             opds_error: None,
             opds_search_query: String::new(),
+            opds_page: 1,
             metadata: None,
             statistics: ReadingStatistics::default(),
             dictionary_word: String::new(),
@@ -859,7 +862,8 @@ pub struct Reader<B: Backend = CrosstermBackend<io::Stdout>> {
     opds_rx: Option<std::sync::mpsc::Receiver<OpdsWorkerEvent>>,
     opds_request_id: u64,
     opds_catalog_index: Option<usize>,
-    opds_history: Vec<String>,
+    /// Back stack of (url, [/]-page-number) pairs for the h/Backspace key.
+    opds_history: Vec<(String, usize)>,
     opds_current_url: Option<String>,
     /// Channel to receive notification when a TTS chunk finishes speaking
     tts_done_rx: Option<std::sync::mpsc::Receiver<()>>,
@@ -3617,24 +3621,28 @@ where
     }
 
     fn handle_opds_catalog_keys(&mut self, key: KeyEvent, repeat_count: u32) -> eyre::Result<()> {
+        // Before handle_list_nav, which would consume Esc/q and land on the
+        // Reader; the OPDS browser backs out to the Library it came from.
+        if matches!(key.code, KeyCode::Esc | KeyCode::Char('q')) {
+            self.state
+                .borrow_mut()
+                .ui_state
+                .open_window(WindowType::Library);
+            return Ok(());
+        }
         let len = self.state.borrow().config.settings.opds_catalogs.len();
         let mut index = self.state.borrow().ui_state.opds_catalog_selected_index;
         if self.handle_list_nav(&key, repeat_count, len, &mut index) {
             self.state.borrow_mut().ui_state.opds_catalog_selected_index = index;
         } else {
             match key.code {
-                KeyCode::Esc | KeyCode::Char('q') => self
-                    .state
-                    .borrow_mut()
-                    .ui_state
-                    .open_window(WindowType::Library),
                 KeyCode::Enter if index < len => {
                     self.opds_catalog_index = Some(index);
                     self.opds_history.clear();
                     let url = self.state.borrow().config.settings.opds_catalogs[index]
                         .url
                         .clone();
-                    self.spawn_opds_feed(url, false)?;
+                    self.spawn_opds_feed(url, false, 1)?;
                 }
                 _ => {}
             }
@@ -3651,6 +3659,15 @@ where
             .as_ref()
             .map(|f| f.navigation.len() + f.publications.len())
             .unwrap_or(0);
+        // Before handle_list_nav, which would consume Esc/q and land on the
+        // Reader; the OPDS browser backs out to the Library it came from.
+        if matches!(key.code, KeyCode::Esc | KeyCode::Char('q')) {
+            self.state
+                .borrow_mut()
+                .ui_state
+                .open_window(WindowType::Library);
+            return Ok(());
+        }
         let mut index = self.state.borrow().ui_state.opds_selected_index;
         if self.handle_list_nav(&key, repeat_count, len, &mut index) {
             let mut s = self.state.borrow_mut();
@@ -3659,14 +3676,9 @@ where
             return Ok(());
         }
         match key.code {
-            KeyCode::Char('q') | KeyCode::Esc => self
-                .state
-                .borrow_mut()
-                .ui_state
-                .open_window(WindowType::Library),
             KeyCode::Char('h') | KeyCode::Backspace => {
-                if let Some(url) = self.opds_history.pop() {
-                    self.spawn_opds_feed(url, false)?
+                if let Some((url, page)) = self.opds_history.pop() {
+                    self.spawn_opds_feed(url, false, page)?
                 } else {
                     self.state
                         .borrow_mut()
@@ -3708,7 +3720,13 @@ where
                         }
                     });
                 if let Some(url) = url {
-                    self.spawn_opds_feed(url, true)?
+                    let page = self.state.borrow().ui_state.opds_page;
+                    let page = if next {
+                        page + 1
+                    } else {
+                        page.saturating_sub(1).max(1)
+                    };
+                    self.spawn_opds_feed(url, true, page)?
                 }
             }
             KeyCode::Char('f') => {
@@ -3739,7 +3757,7 @@ where
                     })
                 };
                 if let Some((Some(url), _)) = selected {
-                    self.spawn_opds_feed(url, true)?
+                    self.spawn_opds_feed(url, true, 1)?
                 } else if let Some((_, Some(p))) = selected {
                     self.spawn_opds_download(p)?
                 }
@@ -3786,7 +3804,12 @@ where
         Ok(())
     }
 
-    fn spawn_opds_feed(&mut self, url: String, push_history: bool) -> eyre::Result<()> {
+    fn spawn_opds_feed(
+        &mut self,
+        url: String,
+        push_history: bool,
+        page: usize,
+    ) -> eyre::Result<()> {
         let catalog_index = self
             .opds_catalog_index
             .ok_or_else(|| eyre::eyre!("no OPDS catalog selected"))?;
@@ -3795,7 +3818,8 @@ where
         let origin = url::Url::parse(&catalog.url)?;
         if push_history {
             if let Some(current) = self.opds_current_url.take() {
-                self.opds_history.push(current)
+                let current_page = self.state.borrow().ui_state.opds_page;
+                self.opds_history.push((current, current_page))
             }
         }
         self.opds_current_url = Some(url);
@@ -3822,6 +3846,7 @@ where
         s.ui_state.opds_downloading = false;
         s.ui_state.opds_error = None;
         s.ui_state.opds_selected_index = 0;
+        s.ui_state.opds_page = page;
         s.ui_state.open_window(WindowType::OpdsFeed);
         Ok(())
     }
@@ -3905,7 +3930,8 @@ where
         let catalog = self.state.borrow().config.settings.opds_catalogs[catalog_index].clone();
         let origin = url::Url::parse(&catalog.url)?;
         if let Some(current) = self.opds_current_url.take() {
-            self.opds_history.push(current);
+            let current_page = self.state.borrow().ui_state.opds_page;
+            self.opds_history.push((current, current_page));
         }
         self.opds_request_id = self.opds_request_id.wrapping_add(1);
         let request_id = self.opds_request_id;
@@ -3928,6 +3954,7 @@ where
         state.ui_state.opds_downloading = false;
         state.ui_state.opds_error = None;
         state.ui_state.opds_selected_index = 0;
+        state.ui_state.opds_page = 1;
         state.ui_state.open_window(WindowType::OpdsFeed);
         Ok(())
     }
@@ -4540,6 +4567,7 @@ where
                 state.ui_state.opds_total_bytes,
                 state.ui_state.opds_error.as_deref(),
                 state.ui_state.active_window == WindowType::OpdsDetails,
+                state.ui_state.opds_page,
                 &theme,
             );
             if state.ui_state.active_window == WindowType::OpdsSearchInput {
