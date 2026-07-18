@@ -2610,9 +2610,7 @@ where
             state.jump_back(current)
         };
         if let Some(target) = target {
-            let current_textwidth = self
-                .current_text_width
-                .unwrap_or(self.state.borrow().reading_state.textwidth);
+            let current_textwidth = self.state.borrow().reading_state.textwidth;
             let row = self.restore_row(&target, current_textwidth);
             self.state.borrow_mut().reading_state.row = row;
         }
@@ -2625,9 +2623,7 @@ where
             state.jump_forward()
         };
         if let Some(target) = target {
-            let current_textwidth = self
-                .current_text_width
-                .unwrap_or(self.state.borrow().reading_state.textwidth);
+            let current_textwidth = self.state.borrow().reading_state.textwidth;
             let row = self.restore_row(&target, current_textwidth);
             self.state.borrow_mut().reading_state.row = row;
         }
@@ -2693,9 +2689,7 @@ where
                 let target = { self.state.borrow().marks.get(&name).cloned() };
                 if let Some(target) = target {
                     self.record_jump_position();
-                    let current_textwidth = self
-                        .current_text_width
-                        .unwrap_or(self.state.borrow().reading_state.textwidth);
+                    let current_textwidth = self.state.borrow().reading_state.textwidth;
                     let row = self.restore_row(&target, current_textwidth);
                     let mut state = self.state.borrow_mut();
                     state.reading_state.row = row;
@@ -6798,7 +6792,9 @@ where
     fn position_state_for_row(&self, row: usize) -> ReadingState {
         let mut position = self.state.borrow().reading_state.clone();
         position.row = row;
-        position.textwidth = self.current_text_width.unwrap_or(position.textwidth);
+        // Persist the configured per-book width. The effective wrap width is
+        // terminal-dependent and cannot be compared across sessions.
+        position.textwidth = self.state.borrow().reading_state.textwidth;
         position.rel_pctg = (self.board.total_lines() > 0)
             .then_some(row as f32 / self.board.total_lines() as f32);
         if let Some((content_index, source_offset)) = self.source_position_for_row(row) {
@@ -7470,9 +7466,7 @@ where
         };
         if let Some(target) = target {
             self.record_jump_position();
-            let current_textwidth = self
-                .current_text_width
-                .unwrap_or(self.state.borrow().reading_state.textwidth);
+            let current_textwidth = self.state.borrow().reading_state.textwidth;
             let row = self.restore_row(&target, current_textwidth);
             let mut state = self.state.borrow_mut();
             state.reading_state.row = row;

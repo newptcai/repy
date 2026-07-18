@@ -1074,7 +1074,6 @@ fn selected_element_cursors(
     offsets
 }
 
-
 /// Extract section/anchor ids from HTML for TOC navigation and internal link jumps.
 fn extract_sections(
     fragment: &Html,
@@ -1094,14 +1093,14 @@ fn extract_sections(
 
     for element in fragment.select(&id_selector) {
         if let Some(id) = element.value().attr("id") {
-            let own_text = normalize_text(&element.text().collect::<String>());
-            let offset = if own_text.is_empty() {
+            let needle = normalize_text(&resolve_element_text(&element, &heading_selector));
+            let offset = if needle.is_empty() {
                 cursor
             } else {
-                let needle = normalize_text(&resolve_element_text(&element, &heading_selector));
                 // Renderers decorate footnote markers ("1. Text" becomes
                 // "[1]. Text"), so retry without the first word on a miss.
                 let found = find_source_offset(&source_map.source_text, cursor, &needle)
+                    .map(|offset| (offset, needle.chars().count()))
                     .or_else(|| {
                         needle
                             .split_once(' ')
@@ -1109,11 +1108,12 @@ fn extract_sections(
                             .filter(|rest| rest.len() >= 3)
                             .and_then(|rest| {
                                 find_source_offset(&source_map.source_text, cursor, rest)
+                                    .map(|offset| (offset, rest.chars().count()))
                             })
                     });
                 match found {
-                    Some(found) => {
-                        cursor = found;
+                    Some((found, matched_len)) => {
+                        cursor = found.saturating_add(matched_len);
                         found
                     }
                     None => cursor,
@@ -1561,7 +1561,7 @@ fn extract_links(
         } else {
             match find_source_offset(&source_map.source_text, cursor_floor, &needle) {
                 Some(found) => {
-                    cursor = found;
+                    cursor = found.saturating_add(needle.chars().count());
                     found
                 }
                 None => cursor_floor,
@@ -2662,6 +2662,36 @@ mod tests {
     }
 
     #[test]
+    fn empty_anchor_after_content_maps_to_following_heading() {
+        let html = r#"
+            <p>Substantial introductory content before the target anchor.</p>
+            <a id="chapter2"></a><h2>Chapter Two</h2>
+            <p>Chapter body.</p>
+        "#;
+        let parsed = parse_html(html, Some(80), None, 0).unwrap();
+        let offset = *parsed.section_offsets.get("chapter2").unwrap();
+        let row = *parsed.section_rows.get("chapter2").unwrap();
+
+        assert!(offset > 0);
+        assert!(parsed.text_lines[row].contains("Chapter Two"));
+    }
+
+    #[test]
+    fn repeated_section_labels_advance_in_document_order() {
+        let html = r#"
+            <h2 id="first">Repeated Heading</h2>
+            <p>Intervening text.</p>
+            <h2 id="second">Repeated Heading</h2>
+        "#;
+        let parsed = parse_html(html, Some(80), None, 0).unwrap();
+        let first = parsed.section_offsets["first"];
+        let second = parsed.section_offsets["second"];
+
+        assert!(second > first);
+        assert!(parsed.section_rows["second"] > parsed.section_rows["first"]);
+    }
+
+    #[test]
     fn section_offset_survives_wrapped_hyphenated_heading() {
         let html = r#"
             <p>Opening paragraph before the section.</p>
@@ -2699,6 +2729,18 @@ mod tests {
                 .row_for_offset(link.source_offset.expect("source offset"))
         );
         assert!(parsed.text_lines[link.row].contains("read more"));
+    }
+
+    #[test]
+    fn repeated_short_links_advance_in_document_order() {
+        let html = r#"
+            <p><a href="first.xhtml">more</a> x <a href="second.xhtml">more</a></p>
+        "#;
+        let parsed = parse_html(html, Some(8), None, 0).unwrap();
+
+        assert_eq!(parsed.links.len(), 2);
+        assert!(parsed.links[1].source_offset > parsed.links[0].source_offset);
+        assert!(parsed.links[1].row > parsed.links[0].row);
     }
 
     #[test]

@@ -400,7 +400,11 @@ fn position_persists_across_book_switch() {
 
 #[test]
 fn legacy_position_without_source_offset_uses_restore_ladder() {
-    let reader = test_reader();
+    let mut reader = test_reader();
+    let configured_width = reader.state.borrow().reading_state.textwidth;
+    let effective_width = reader.current_text_width.unwrap();
+    assert_ne!(configured_width, effective_width);
+
     let legacy = ReadingState {
         content_index: 0,
         source_offset: None,
@@ -416,13 +420,36 @@ fn legacy_position_without_source_offset_uses_restore_ladder() {
     );
 
     let same_width = ReadingState {
-        textwidth: 80,
+        textwidth: configured_width,
+        row: 5,
         ..legacy.clone()
     };
-    assert_eq!(
-        reader.restore_row(&same_width, 80),
-        reader.board.total_lines() - 1
-    );
+    assert_eq!(reader.restore_row(&same_width, configured_width), 5);
+
+    let captured = reader.position_state_for_row(5);
+    assert_eq!(captured.textwidth, configured_width);
+    assert_ne!(captured.textwidth, effective_width);
+
+    {
+        let mut state = reader.state.borrow_mut();
+        state.reading_state.row = 10;
+        state.jump_history = vec![same_width.clone()];
+        state.jump_history_index = 1;
+    }
+    reader.jump_back();
+    assert_eq!(reader.state.borrow().reading_state.row, 5);
+
+    let bookmark = ReadingState {
+        row: 6,
+        ..same_width
+    };
+    {
+        let mut state = reader.state.borrow_mut();
+        state.ui_state.bookmarks = vec![("Legacy".to_string(), bookmark)];
+        state.ui_state.bookmarks_selected_index = 0;
+    }
+    reader.jump_to_selected_bookmark().unwrap();
+    assert_eq!(reader.state.borrow().reading_state.row, 6);
 
     let raw_fallback = ReadingState {
         rel_pctg: None,

@@ -75,7 +75,7 @@ mod tests {
 
         // Simulate navigation to 50
         state.reading_state.row = 20; // user at 20
-        state.record_jump(state.reading_state.clone()); // user jumps FROM 20. 
+        state.record_jump(state.reading_state.clone()); // user jumps FROM 20.
         // Logic: truncate future (after index 1). History was [10, 20, 30]. Truncate after 1 -> [10, 20].
         // Add current (20). Last is 20. Duplicate check prevents adding.
         // Index becomes 2.
