@@ -1,0 +1,28 @@
+---
+source: src/ui/reader/snapshot_tests.rs
+expression: reader.terminal.backend()
+---
+"                         Accessible EPUB 3                           ~1m left 0%"
+"                                                                                "
+"          ┌ Sample Shelf · 2/3 ────────────────────────────── next ] ┐          "
+"          │› Science Fiction                                         │          "
+"          │A Long Voyage — Ada Author, Bo Writer [EPUB 1/2]          │          "
+"          │Untitled Draft [unavailable]                              │          "
+"          │                                                          │          "
+"          │                                                          │          "
+"          │                                                          │          "
+"          │                                                          │          "
+"          │                                                          │          "
+"          │                                                          │          "
+"          │                                                          │          "
+"          │                                                          │          "
+"          │ Details · c close ───────────────────────────────────────│          "
+"          │A Long Voyage                                             │          "
+"          │Authors: Ada Author, Bo Writer                            │          "
+"          │An expedition drifts far off course.                      │          "
+"          │                                                          │          "
+"          │                                                          │          "
+"          └ ⏎ open · / search · [/] page · f fmt · c details · h back┘          "
+"                                                                                "
+"                                                                                "
+"                                                                                "

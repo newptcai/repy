@@ -1,0 +1,28 @@
+---
+source: src/ui/reader/snapshot_tests.rs
+expression: reader.terminal.backend()
+---
+"                         Accessible EPUB 3                           ~1m left 0%"
+"                                                                                "
+"          ┌ OPDS Catalogs ───────────────────────────────────────────┐          "
+"          │No OPDS catalogs configured.                              │          "
+"          │                                                          │          "
+"          │Add entries to "opds_catalogs" in configuration.json:     │          "
+"          │                                                          │          "
+"          │  { "name": "Project Gutenberg",                          │          "
+"          │    "url": "https://www.gutenberg.org/ebooks.opds/" }     │          "
+"          │                                                          │          "
+"          │                                                          │          "
+"          │                                                          │          "
+"          │                                                          │          "
+"          │                                                          │          "
+"          │                                                          │          "
+"          │                                                          │          "
+"          │                                                          │          "
+"          │                                                          │          "
+"          │                                                          │          "
+"          │                                                          │          "
+"          └ Enter open · q Library ──────────────────────────────────┘          "
+"                                                                                "
+"                                                                                "
+"                                                                                "

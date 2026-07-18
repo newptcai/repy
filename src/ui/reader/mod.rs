@@ -6747,10 +6747,7 @@ where
         // end offset cannot distinguish one padding row from another, so let
         // restore fall through to the legacy coordinates instead.
         source_map.row_spans.get(local_row)?;
-        Some((
-            content_index,
-            source_map.offset_for_row(local_row),
-        ))
+        Some((content_index, source_map.offset_for_row(local_row)))
     }
 
     /// Restore a persisted position using canonical source coordinates first,
@@ -6795,8 +6792,8 @@ where
         // Persist the configured per-book width. The effective wrap width is
         // terminal-dependent and cannot be compared across sessions.
         position.textwidth = self.state.borrow().reading_state.textwidth;
-        position.rel_pctg = (self.board.total_lines() > 0)
-            .then_some(row as f32 / self.board.total_lines() as f32);
+        position.rel_pctg =
+            (self.board.total_lines() > 0).then_some(row as f32 / self.board.total_lines() as f32);
         if let Some((content_index, source_offset)) = self.source_position_for_row(row) {
             position.content_index = content_index;
             position.source_offset = Some(source_offset);

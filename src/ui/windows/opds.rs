@@ -7,7 +7,7 @@ use ratatui::{
     Frame,
     layout::Rect,
     style::Style,
-    text::Line,
+    text::{Line, Span},
     widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap},
 };
 
@@ -21,6 +21,15 @@ impl OpdsWindow {
             area.height * 4 / 5,
         )
     }
+    /// Number of leading rows to skip so `selected` stays visible in `visible` rows.
+    fn scroll_offset(selected: usize, total: usize, visible: usize) -> usize {
+        if visible == 0 || total <= visible {
+            return 0;
+        }
+        selected
+            .saturating_sub(visible.saturating_sub(1))
+            .min(total - visible)
+    }
     pub fn catalogs(
         frame: &mut Frame,
         area: Rect,
@@ -30,28 +39,60 @@ impl OpdsWindow {
     ) {
         let area = Self::area(area);
         frame.render_widget(Clear, area);
+        let title = if catalogs.is_empty() {
+            " OPDS Catalogs ".to_string()
+        } else {
+            format!(" OPDS Catalogs · {}/{} ", selected + 1, catalogs.len())
+        };
         let block = Block::default()
-            .title("OPDS Catalogs")
+            .title(title)
             .title_bottom(" Enter open · q Library ")
             .borders(Borders::ALL)
             .style(theme.base_style());
         let inner = block.inner(area);
         frame.render_widget(block, area);
+        if catalogs.is_empty() {
+            frame.render_widget(
+                Paragraph::new(
+                    "No OPDS catalogs configured.\n\n\
+                     Add entries to \"opds_catalogs\" in configuration.json:\n\n  \
+                     { \"name\": \"Project Gutenberg\",\n    \
+                     \"url\": \"https://www.gutenberg.org/ebooks.opds/\" }",
+                )
+                .wrap(Wrap { trim: false })
+                .style(theme.base_style().fg(theme.muted_fg)),
+                inner,
+            );
+            return;
+        }
+        let offset = Self::scroll_offset(selected, catalogs.len(), inner.height as usize);
         let items: Vec<_> = catalogs
             .iter()
             .enumerate()
+            .skip(offset)
+            .take(inner.height as usize)
             .map(|(i, c)| {
-                ListItem::new(Line::from(c.name.clone())).style(if i == selected {
-                    Style::default()
-                        .bg(theme.highlight_bg)
-                        .fg(theme.highlight_fg)
+                let line = if i == selected {
+                    Line::from(format!("{}  {}", c.name, c.url)).style(
+                        Style::default()
+                            .bg(theme.highlight_bg)
+                            .fg(theme.highlight_fg),
+                    )
                 } else {
-                    theme.base_style()
-                })
+                    Line::from(vec![
+                        Span::raw(c.name.clone()),
+                        Span::styled(
+                            format!("  {}", c.url),
+                            theme.base_style().fg(theme.muted_fg),
+                        ),
+                    ])
+                };
+                ListItem::new(line)
             })
             .collect();
         frame.render_widget(List::new(items), inner);
     }
+    #[allow(clippy::too_many_arguments)]
     pub fn feed(
         frame: &mut Frame,
         area: Rect,
@@ -72,7 +113,41 @@ impl OpdsWindow {
             .map(|f| f.title.as_str())
             .filter(|s| !s.is_empty())
             .unwrap_or("OPDS");
-        let block=Block::default().title(format!(" {title} ")).title_bottom(" Enter open/download · / search · [/] pages · f format · c details · h back · q Library ").borders(Borders::ALL).style(theme.base_style());
+        let total_entries = feed
+            .map(|f| f.navigation.len() + f.publications.len())
+            .unwrap_or(0);
+        let top_title = if !loading && error.is_none() && total_entries > 0 {
+            format!(" {title} · {}/{} ", selected + 1, total_entries)
+        } else {
+            format!(" {title} ")
+        };
+        let full_hint = " Enter open/download · / search · [/] pages · f format · c details · h back · q Library ";
+        let short_hint = " ⏎ open · / search · [/] page · f fmt · c details · h back";
+        let hint = if area.width as usize >= full_hint.chars().count() + 2 {
+            full_hint
+        } else {
+            short_hint
+        };
+        let mut block = Block::default()
+            .title(top_title)
+            .title_bottom(hint)
+            .borders(Borders::ALL)
+            .style(theme.base_style());
+        if let Some(feed) = feed.filter(|_| !loading && error.is_none()) {
+            let mut page_hint = String::new();
+            if feed.pagination.previous.is_some() {
+                page_hint.push_str("[ prev");
+            }
+            if feed.pagination.next.is_some() {
+                if !page_hint.is_empty() {
+                    page_hint.push_str(" · ");
+                }
+                page_hint.push_str("next ]");
+            }
+            if !page_hint.is_empty() {
+                block = block.title_top(Line::from(format!(" {page_hint} ")).right_aligned());
+            }
+        }
         let inner = block.inner(area);
         frame.render_widget(block, area);
         if loading {
@@ -101,28 +176,13 @@ impl OpdsWindow {
                     )
                 } else {
                     let position = tick as usize % 17;
-                    format!(
-                        "Downloading [{}] · {}",
-                        format!(
-                            "{}{}{}",
-                            " ".repeat(position),
-                            "████",
-                            " ".repeat(16 - position)
-                        ),
-                        human(downloaded_bytes)
-                    )
+                    let bar = format!("{}████{}", " ".repeat(position), " ".repeat(16 - position));
+                    format!("Downloading [{bar}] · {}", human(downloaded_bytes))
                 }
             } else {
                 let position = tick as usize % 17;
-                format!(
-                    "Loading feed [{}]",
-                    format!(
-                        "{}{}{}",
-                        " ".repeat(position),
-                        "████",
-                        " ".repeat(16 - position)
-                    )
-                )
+                let bar = format!("{}████{}", " ".repeat(position), " ".repeat(16 - position));
+                format!("Loading feed [{bar}]")
             };
             frame.render_widget(
                 Paragraph::new(label).style(theme.base_style().fg(theme.muted_fg)),
@@ -140,27 +200,60 @@ impl OpdsWindow {
             return;
         }
         let Some(feed) = feed else { return };
-        let mut rows = Vec::new();
-        for n in &feed.navigation {
-            rows.push(format!("› {}", n.title));
+        let selected_style = Style::default()
+            .bg(theme.highlight_bg)
+            .fg(theme.highlight_fg);
+        let mut rows: Vec<Line> = Vec::new();
+        for (i, n) in feed.navigation.iter().enumerate() {
+            let text = format!("› {}", n.title);
+            rows.push(if i == selected {
+                Line::from(text).style(selected_style)
+            } else {
+                Line::from(text).style(theme.base_style().fg(theme.info_fg))
+            });
         }
-        for p in &feed.publications {
+        for (i, p) in feed.publications.iter().enumerate() {
+            let index = feed.navigation.len() + i;
             let readable = p.readable_acquisitions();
-            let status = if readable.is_empty() {
-                "unavailable".into()
+            let tag = if readable.is_empty() {
+                "unavailable".to_string()
             } else {
                 let link = readable[format_index % readable.len()];
-                link.extension().unwrap_or("book").to_uppercase()
+                let ext = link.extension().unwrap_or("book").to_uppercase();
+                if readable.len() > 1 {
+                    format!(
+                        "{ext} {}/{}",
+                        format_index % readable.len() + 1,
+                        readable.len()
+                    )
+                } else {
+                    ext
+                }
             };
-            rows.push(format!(
-                "{} — {} [{}]",
-                p.title,
-                p.authors.join(", "),
-                status
-            ));
+            let authors = if p.authors.is_empty() {
+                String::new()
+            } else {
+                format!(" — {}", p.authors.join(", "))
+            };
+            rows.push(if index == selected {
+                Line::from(format!("{}{} [{}]", p.title, authors, tag)).style(selected_style)
+            } else {
+                Line::from(vec![
+                    Span::raw(p.title.clone()),
+                    Span::styled(authors, theme.base_style().fg(theme.muted_fg)),
+                    Span::styled(
+                        format!(" [{tag}]"),
+                        theme.base_style().fg(if readable.is_empty() {
+                            theme.warning_fg
+                        } else {
+                            theme.muted_fg
+                        }),
+                    ),
+                ])
+            });
         }
         if rows.is_empty() {
-            rows.push("No entries".into())
+            rows.push(Line::from("No entries").style(theme.base_style().fg(theme.muted_fg)));
         }
         let list_height = if details {
             inner.height.saturating_mul(2) / 3
@@ -168,53 +261,53 @@ impl OpdsWindow {
             inner.height
         };
         let list_area = Rect::new(inner.x, inner.y, inner.width, list_height);
+        let offset = Self::scroll_offset(selected, rows.len(), list_height as usize);
         let items: Vec<_> = rows
             .into_iter()
-            .enumerate()
-            .map(|(i, s)| {
-                ListItem::new(s).style(if i == selected {
-                    Style::default()
-                        .bg(theme.highlight_bg)
-                        .fg(theme.highlight_fg)
-                } else {
-                    theme.base_style()
-                })
-            })
+            .skip(offset)
+            .take(list_height as usize)
+            .map(ListItem::new)
             .collect();
         frame.render_widget(List::new(items), list_area);
-        if details {
-            if let Some(p) = selected
+        if details
+            && let Some(p) = selected
                 .checked_sub(feed.navigation.len())
                 .and_then(|i| feed.publications.get(i))
-            {
-                let unavailable = p
-                    .acquisitions
-                    .iter()
-                    .filter(|a| a.availability != Availability::Readable)
-                    .count();
-                let text = format!(
-                    "{}\nAuthors: {}\n{}{}",
-                    p.title,
-                    p.authors.join(", "),
-                    p.summary.as_deref().unwrap_or("No description"),
-                    if unavailable > 0 {
-                        format!("\n{unavailable} unavailable acquisition(s)")
-                    } else {
-                        String::new()
-                    }
-                );
-                frame.render_widget(
-                    Paragraph::new(text)
-                        .wrap(Wrap { trim: false })
-                        .style(theme.base_style()),
-                    Rect::new(
-                        inner.x,
-                        inner.y + list_height,
-                        inner.width,
-                        inner.height - list_height,
-                    ),
-                );
-            }
+        {
+            let unavailable = p
+                .acquisitions
+                .iter()
+                .filter(|a| a.availability != Availability::Readable)
+                .count();
+            let text = format!(
+                "{}\nAuthors: {}\n{}{}",
+                p.title,
+                p.authors.join(", "),
+                p.summary.as_deref().unwrap_or("No description"),
+                if unavailable > 0 {
+                    format!("\n{unavailable} unavailable acquisition(s)")
+                } else {
+                    String::new()
+                }
+            );
+            let details_area = Rect::new(
+                inner.x,
+                inner.y + list_height,
+                inner.width,
+                inner.height - list_height,
+            );
+            let details_block = Block::default()
+                .borders(Borders::TOP)
+                .title(" Details · c close ")
+                .style(theme.base_style());
+            let details_inner = details_block.inner(details_area);
+            frame.render_widget(details_block, details_area);
+            frame.render_widget(
+                Paragraph::new(text)
+                    .wrap(Wrap { trim: false })
+                    .style(theme.base_style()),
+                details_inner,
+            );
         }
     }
     pub fn search(frame: &mut Frame, area: Rect, query: &str, theme: &Theme) {
@@ -230,7 +323,8 @@ impl OpdsWindow {
             Paragraph::new(format!("{query}█"))
                 .block(
                     Block::default()
-                        .title("Search catalog")
+                        .title(" Search catalog ")
+                        .title_bottom(" Enter search · Esc cancel ")
                         .borders(Borders::ALL),
                 )
                 .style(theme.base_style()),

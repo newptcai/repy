@@ -493,14 +493,20 @@ fn width_change_preserves_first_visible_sentence() {
     press_char(&mut reader, '+');
 
     let restored_row = reader.state.borrow().reading_state.row;
-    assert_eq!(reader.source_position_for_row(restored_row), source_position);
+    assert_eq!(
+        reader.source_position_for_row(restored_row),
+        source_position
+    );
     let stored = reader
         .db_state
         .get_last_reading_state(reader.ebook.as_ref().unwrap().as_ref())
         .unwrap()
         .unwrap();
     assert_eq!(stored.content_index, content_index);
-    assert_eq!(stored.source_offset, source_position.map(|(_, offset)| offset));
+    assert_eq!(
+        stored.source_offset,
+        source_position.map(|(_, offset)| offset)
+    );
     assert_eq!(stored.textwidth, 55);
     assert_eq!(stored.row, restored_row);
     assert!(stored.rel_pctg.is_some());
@@ -640,4 +646,105 @@ fn kosync_falls_back_when_no_xpointer() {
     };
     let row = reader.resolve_kosync_target_row(&remote);
     assert_eq!(row, reader.board.row_for_fraction(0.5));
+}
+
+fn sample_opds_feed() -> crate::opds::Feed {
+    use crate::opds::{AcquisitionLink, Availability, NavigationEntry, Publication};
+    let acquisition = |ext: &str, availability| AcquisitionLink {
+        href: format!("https://example.test/book.{ext}"),
+        media_type: None,
+        relation: "http://opds-spec.org/acquisition".into(),
+        availability,
+    };
+    crate::opds::Feed {
+        title: "Sample Shelf".into(),
+        navigation: vec![NavigationEntry {
+            title: "Science Fiction".into(),
+            href: "https://example.test/sf".into(),
+            summary: None,
+        }],
+        publications: vec![
+            Publication {
+                title: "A Long Voyage".into(),
+                authors: vec!["Ada Author".into(), "Bo Writer".into()],
+                summary: Some("An expedition drifts far off course.".into()),
+                cover: None,
+                acquisitions: vec![
+                    acquisition("epub", Availability::Readable),
+                    acquisition("mobi", Availability::Readable),
+                ],
+            },
+            Publication {
+                title: "Untitled Draft".into(),
+                authors: vec![],
+                summary: None,
+                cover: None,
+                acquisitions: vec![acquisition("pdf", Availability::Restricted)],
+            },
+        ],
+        pagination: crate::opds::Pagination {
+            next: Some("https://example.test/page2".into()),
+            previous: None,
+        },
+        search: None,
+    }
+}
+
+#[test]
+fn opds_feed_window() {
+    let mut reader = test_reader();
+    {
+        let mut state = reader.state.borrow_mut();
+        state.ui_state.opds_feed = Some(sample_opds_feed());
+        state.ui_state.opds_selected_index = 1;
+        state
+            .ui_state
+            .open_window(crate::models::WindowType::OpdsFeed);
+    }
+    reader.draw().expect("failed to draw OPDS feed window");
+    insta::assert_snapshot!(reader.terminal.backend());
+}
+
+#[test]
+fn opds_feed_details_pane() {
+    let mut reader = test_reader();
+    {
+        let mut state = reader.state.borrow_mut();
+        state.ui_state.opds_feed = Some(sample_opds_feed());
+        state.ui_state.opds_selected_index = 1;
+        state
+            .ui_state
+            .open_window(crate::models::WindowType::OpdsFeed);
+    }
+    reader.draw().expect("failed to draw OPDS feed window");
+    press_char(&mut reader, 'c');
+    insta::assert_snapshot!(reader.terminal.backend());
+}
+
+#[test]
+fn opds_catalogs_window() {
+    let mut reader = test_reader();
+    reader
+        .state
+        .borrow_mut()
+        .ui_state
+        .open_window(crate::models::WindowType::OpdsCatalogs);
+    reader.draw().expect("failed to draw OPDS catalogs window");
+    insta::assert_snapshot!(reader.terminal.backend());
+}
+
+#[test]
+fn opds_catalogs_window_empty() {
+    let mut settings = Settings::default();
+    settings.opds_catalogs.clear();
+    let mut reader = test_reader_with_settings(settings);
+    reader
+        .state
+        .borrow_mut()
+        .ui_state
+        .open_window(crate::models::WindowType::OpdsCatalogs);
+    reader
+        .draw()
+        .expect("failed to draw empty OPDS catalogs window");
+    insta::assert_snapshot!(reader.terminal.backend());
 }
