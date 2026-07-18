@@ -53,27 +53,94 @@ pub fn find_calibre_library(dirs: &[String]) -> Option<PathBuf> {
         .find(|d| d.join("metadata.db").is_file())
 }
 
+/// Outcome of importing a file into Calibre.
+pub struct CalibreImport {
+    pub message: String,
+    /// The file's new absolute path inside the Calibre library, when the
+    /// book was actually added (None for refused duplicates).
+    pub new_path: Option<String>,
+}
+
 /// Add a downloaded book to the user's Calibre library through `calibredb
 /// add` — Calibre's own CLI — so repy never writes Calibre's database
 /// itself. calibredb refuses title/author duplicates by default, which is
 /// exactly the behaviour we want. Returns a short human-readable outcome.
 pub fn add_to_calibre(file: &Path, library_directories: &[String]) -> Result<String, String> {
+    import_to_calibre(file, library_directories).map(|import| import.message)
+}
+
+/// Like [`add_to_calibre`], but also locates the imported copy inside the
+/// Calibre library (via `calibredb list --for-machine`) so the caller can
+/// re-point reading state at it.
+pub fn import_to_calibre(
+    file: &Path,
+    library_directories: &[String],
+) -> Result<CalibreImport, String> {
+    let library = find_calibre_library(library_directories);
     let mut cmd = std::process::Command::new("calibredb");
     cmd.arg("add").arg(file);
-    if let Some(library) = find_calibre_library(library_directories) {
+    if let Some(library) = &library {
         cmd.arg("--with-library").arg(library);
     }
-    match cmd.output() {
+    let output = match cmd.output() {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            Err("calibredb not found — install Calibre's CLI tools".into())
+            return Err("calibredb not found — install Calibre's CLI tools".into());
         }
-        Err(e) => Err(format!("calibredb failed to start: {e}")),
-        Ok(output) => interpret_calibredb_output(
-            output.status.success(),
-            &String::from_utf8_lossy(&output.stdout),
-            &String::from_utf8_lossy(&output.stderr),
-        ),
+        Err(e) => return Err(format!("calibredb failed to start: {e}")),
+        Ok(output) => output,
+    };
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let message = interpret_calibredb_output(
+        output.status.success(),
+        &stdout,
+        &String::from_utf8_lossy(&output.stderr),
+    )?;
+    let new_path = parse_added_id(&stdout).and_then(|id| {
+        calibre_book_path(
+            library.as_deref(),
+            id,
+            file.extension().and_then(|e| e.to_str()),
+        )
+    });
+    Ok(CalibreImport { message, new_path })
+}
+
+/// First id from calibredb's "Added book ids: 12, 13" line.
+fn parse_added_id(stdout: &str) -> Option<u64> {
+    stdout
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("Added book ids:"))
+        .and_then(|ids| ids.split(',').next())
+        .and_then(|id| id.trim().parse().ok())
+}
+
+/// Ask calibredb where book `id` lives; prefers the format matching
+/// `prefer_ext` when the book has several.
+fn calibre_book_path(library: Option<&Path>, id: u64, prefer_ext: Option<&str>) -> Option<String> {
+    let mut cmd = std::process::Command::new("calibredb");
+    cmd.args(["list", "--for-machine", "--fields", "formats", "--search"])
+        .arg(format!("id:{id}"));
+    if let Some(library) = library {
+        cmd.arg("--with-library").arg(library);
     }
+    let output = cmd.output().ok()?;
+    parse_calibre_list_formats(&output.stdout, prefer_ext)
+}
+
+/// Pull a format path out of `calibredb list --for-machine` JSON.
+fn parse_calibre_list_formats(json: &[u8], prefer_ext: Option<&str>) -> Option<String> {
+    let value: serde_json::Value = serde_json::from_slice(json).ok()?;
+    let formats = value.get(0)?.get("formats")?.as_array()?;
+    let paths: Vec<&str> = formats.iter().filter_map(|f| f.as_str()).collect();
+    let preferred = prefer_ext.and_then(|ext| {
+        paths
+            .iter()
+            .find(|p| Path::new(p).extension().and_then(|e| e.to_str()) == Some(ext))
+            .copied()
+    });
+    preferred
+        .or_else(|| paths.first().copied())
+        .map(String::from)
 }
 
 /// Classify `calibredb add` output into a user-facing message.
@@ -526,6 +593,24 @@ mod tests {
                     .into()
             )
         );
+    }
+
+    #[test]
+    fn parses_added_ids_and_list_formats() {
+        assert_eq!(parse_added_id("Added book ids: 42\n"), Some(42));
+        assert_eq!(parse_added_id("Added book ids: 7, 8\n"), Some(7));
+        assert_eq!(parse_added_id("The following books were not added"), None);
+
+        let json = br#"[{"formats": ["/lib/Book (42)/Book - A.mobi", "/lib/Book (42)/Book - A.epub"], "id": 42}]"#;
+        assert_eq!(
+            parse_calibre_list_formats(json, Some("epub")),
+            Some("/lib/Book (42)/Book - A.epub".into())
+        );
+        assert_eq!(
+            parse_calibre_list_formats(json, Some("cbz")),
+            Some("/lib/Book (42)/Book - A.mobi".into())
+        );
+        assert_eq!(parse_calibre_list_formats(b"[]", None), None);
     }
 
     #[test]

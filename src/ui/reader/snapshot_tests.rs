@@ -934,3 +934,55 @@ fn status_message_not_covered_by_inline_image() {
         "message hidden by inline image:\n{screen}"
     );
 }
+
+#[test]
+fn warning_toast_persists_until_key_dismisses_it() {
+    let mut reader = test_reader();
+    let start_row = reader.state.borrow().reading_state.row;
+    reader.state.borrow_mut().ui_state.set_message(
+        "calibredb: something went wrong".into(),
+        super::MessageType::Warning,
+    );
+    // Warnings never auto-expire...
+    assert!(!reader.state.borrow().ui_state.message_expired());
+    reader.draw().expect("draw");
+    let screen = format!("{}", reader.terminal.backend());
+    assert!(screen.contains("press any key to dismiss"), "{screen}");
+    // ...and the dismissing key is consumed instead of scrolling the reader.
+    press_char(&mut reader, 'j');
+    assert!(reader.state.borrow().ui_state.message.is_none());
+    assert_eq!(reader.state.borrow().reading_state.row, start_row);
+    // The next key acts normally again.
+    press_char(&mut reader, 'j');
+    assert_eq!(reader.state.borrow().reading_state.row, start_row + 1);
+}
+
+#[test]
+fn move_to_calibre_guards_missing_file() {
+    let mut reader = test_reader();
+    reader
+        .db_state
+        .upsert_library_file(
+            "/nonexistent/gone.epub",
+            1,
+            Some("Vanished Book"),
+            Some("No One"),
+        )
+        .unwrap();
+    press_char(&mut reader, 'r');
+    let index = {
+        let state = reader.state.borrow();
+        state
+            .ui_state
+            .library_items
+            .iter()
+            .position(|item| item.filepath == "/nonexistent/gone.epub")
+            .expect("missing entry should be listed")
+    };
+    reader.state.borrow_mut().ui_state.library_selected_index = index;
+    press_char(&mut reader, 'm');
+    let state = reader.state.borrow();
+    let message = state.ui_state.message.clone().unwrap_or_default();
+    assert!(message.contains("missing"), "unexpected message: {message}");
+    assert!(reader.calibre_import_rx.is_none());
+}

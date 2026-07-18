@@ -67,6 +67,7 @@ const HELP_TEXT: &[&str] = &[
     "   f                 Cycle available formats",
     "   R                 Refresh library directories",
     "   O                 Browse OPDS catalogs (from Library)",
+    "   m                 Move book to Calibre (via calibredb)",
     "   d                 Remove from history",
     "   s                 Cycle sort (recent/title/author/series/progress)",
     " OPDS Catalog:",

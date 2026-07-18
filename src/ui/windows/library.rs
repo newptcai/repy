@@ -90,7 +90,7 @@ impl LibraryWindow {
         };
 
         let hint = Paragraph::new(
-            "HINT: O OPDS  Enter open  c details  f format  d delete  R refresh  s sort",
+            "HINT: O OPDS  Enter open  c details  f format  m → Calibre  d delete  s sort",
         )
         .style(Style::default().fg(theme.warning_fg));
         frame.render_widget(hint, hint_area);

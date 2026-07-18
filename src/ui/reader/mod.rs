@@ -349,6 +349,9 @@ pub struct UiState {
     pub message: Option<String>,
     pub message_type: MessageType,
     pub message_time: Option<Instant>,
+    /// Warnings and errors stay until a key dismisses them; info toasts
+    /// auto-expire.
+    pub message_persistent: bool,
     pub visual_anchor: Option<(usize, usize)>,
     pub visual_cursor: Option<(usize, usize)>,
     pub help_scroll_offset: u16,
@@ -475,6 +478,7 @@ impl UiState {
             message: None,
             message_type: MessageType::Info,
             message_time: None,
+            message_persistent: false,
             visual_anchor: None,
             visual_cursor: None,
             help_scroll_offset: 0,
@@ -494,6 +498,7 @@ impl UiState {
 
     pub fn set_message(&mut self, message: String, message_type: MessageType) {
         self.message = Some(message);
+        self.message_persistent = matches!(message_type, MessageType::Warning | MessageType::Error);
         self.message_type = message_type;
         self.message_time = Some(Instant::now());
     }
@@ -501,12 +506,16 @@ impl UiState {
     pub fn clear_message(&mut self) {
         self.message = None;
         self.message_time = None;
+        self.message_persistent = false;
     }
 
-    /// Returns true if the current message has expired (older than 3 seconds).
+    /// Returns true if the current message has expired (older than 3
+    /// seconds). Persistent messages never expire; a key dismisses them.
     pub fn message_expired(&self) -> bool {
-        self.message_time
-            .is_some_and(|t| t.elapsed() >= Duration::from_secs(3))
+        !self.message_persistent
+            && self
+                .message_time
+                .is_some_and(|t| t.elapsed() >= Duration::from_secs(3))
     }
 
     pub fn clear_list_filter(&mut self) {
@@ -876,6 +885,10 @@ pub struct Reader<B: Backend = CrosstermBackend<io::Stdout>> {
     opds_catalog_index: Option<usize>,
     /// Back stack of (url, [/]-page-number) pairs for the h/Backspace key.
     opds_history: Vec<(String, usize)>,
+    /// Background `calibredb` import started with `m` in the library window:
+    /// (source path, import outcome).
+    calibre_import_rx:
+        Option<std::sync::mpsc::Receiver<(String, Result<crate::library::CalibreImport, String>)>>,
     opds_current_url: Option<String>,
     /// Channel to receive notification when a TTS chunk finishes speaking
     tts_done_rx: Option<std::sync::mpsc::Receiver<()>>,
@@ -1338,6 +1351,7 @@ where
             opds_request_id: 0,
             opds_catalog_index: None,
             opds_history: Vec::new(),
+            calibre_import_rx: None,
             opds_current_url: None,
             tts_done_rx: None,
             tts_child: None,
@@ -2177,6 +2191,7 @@ impl Reader {
             }
 
             self.tts_poll_worker()?;
+            self.poll_calibre_import()?;
             self.poll_kosync();
             self.poll_library_cover();
             self.poll_inline_images();
@@ -2313,6 +2328,11 @@ where
     fn handle_key_event(&mut self, key: KeyEvent) -> eyre::Result<()> {
         {
             let mut state = self.state.borrow_mut();
+            if state.ui_state.message.is_some() && state.ui_state.message_persistent {
+                // A sticky warning/error: this key only dismisses it.
+                state.ui_state.clear_message();
+                return Ok(());
+            }
             if state.ui_state.message.is_some()
                 && state.ui_state.active_window == WindowType::Reader
             {
@@ -3618,6 +3638,9 @@ where
                 KeyCode::Char('R') => {
                     self.spawn_library_scan();
                 }
+                KeyCode::Char('m') => {
+                    self.move_selected_library_book_to_calibre()?;
+                }
                 KeyCode::Char('O') => {
                     let mut state = self.state.borrow_mut();
                     state.ui_state.opds_catalog_selected_index = 0;
@@ -4762,7 +4785,13 @@ where
 
         // Render message if present
         if let Some(ref message) = state.ui_state.message {
-            Self::render_message_static(frame, message, &state.ui_state.message_type, &theme);
+            Self::render_message_static(
+                frame,
+                message,
+                &state.ui_state.message_type,
+                state.ui_state.message_persistent,
+                &theme,
+            );
         }
 
         // Visual-mode `/`-search prompt: a single-line bar at the bottom of the
@@ -5169,6 +5198,7 @@ where
         frame: &mut Frame,
         message: &str,
         message_type: &MessageType,
+        persistent: bool,
         theme: &Theme,
     ) {
         let color = match message_type {
@@ -5196,9 +5226,13 @@ where
         let height = (lines + 2).min(frame_area.height.saturating_sub(4)) as u16;
         let height = height.max(3);
 
+        let mut block = Block::default().borders(Borders::ALL);
+        if persistent {
+            block = block.title_bottom(" press any key to dismiss ");
+        }
         let message_paragraph = Paragraph::new(message)
             .style(Style::default().fg(color))
-            .block(Block::default().borders(Borders::ALL))
+            .block(block)
             .wrap(Wrap { trim: true });
 
         let area = Rect {
@@ -7624,6 +7658,120 @@ where
             .map(|item| item.filepath.clone())
     }
 
+    /// `m` in the library window: import the selected book into Calibre in
+    /// the background. [`Self::poll_calibre_import`] finishes the move.
+    fn move_selected_library_book_to_calibre(&mut self) -> eyre::Result<()> {
+        let Some(path) = self.selected_library_path() else {
+            return Ok(());
+        };
+        let library_directories = self
+            .state
+            .borrow()
+            .config
+            .settings
+            .library_directories
+            .clone();
+        let mut state = self.state.borrow_mut();
+        if self.calibre_import_rx.is_some() {
+            state.ui_state.set_message(
+                "A Calibre import is already running".into(),
+                MessageType::Warning,
+            );
+            return Ok(());
+        }
+        if !std::path::Path::new(&path).is_file() {
+            state.ui_state.set_message(
+                "File is missing — nothing to move to Calibre".into(),
+                MessageType::Warning,
+            );
+            return Ok(());
+        }
+        if let Some(root) = crate::library::find_calibre_library(&library_directories)
+            && std::path::Path::new(&path).starts_with(&root)
+        {
+            state.ui_state.set_message(
+                "This book is already inside the Calibre library".into(),
+                MessageType::Info,
+            );
+            return Ok(());
+        }
+        state
+            .ui_state
+            .set_message("Adding to Calibre…".into(), MessageType::Info);
+        drop(state);
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let result = crate::library::import_to_calibre(
+                std::path::Path::new(&path),
+                &library_directories,
+            );
+            let _ = tx.send((path, result));
+        });
+        self.calibre_import_rx = Some(rx);
+        Ok(())
+    }
+
+    /// Finish a background Calibre import: re-point reading state at the
+    /// copy inside the library, delete the source only when it lives in
+    /// repy's own download directory, and report the outcome.
+    fn poll_calibre_import(&mut self) -> eyre::Result<()> {
+        let Some((old_path, result)) = self
+            .calibre_import_rx
+            .as_ref()
+            .and_then(|rx| rx.try_recv().ok())
+        else {
+            return Ok(());
+        };
+        self.calibre_import_rx = None;
+        let import = match result {
+            Ok(import) => import,
+            Err(e) => {
+                self.state
+                    .borrow_mut()
+                    .ui_state
+                    .set_message(e, MessageType::Warning);
+                return Ok(());
+            }
+        };
+        let mut message = import.message;
+        if let Some(new_path) = import.new_path {
+            self.db_state.reconcile_filepath(&old_path, &new_path)?;
+            let currently_open = self
+                .ebook
+                .as_ref()
+                .is_some_and(|book| book.path() == old_path);
+            let in_download_dir = crate::opds::default_download_directory(
+                self.state
+                    .borrow()
+                    .config
+                    .settings
+                    .opds_download_directory
+                    .as_deref(),
+            )
+            .is_ok_and(|dir| std::path::Path::new(&old_path).starts_with(&dir));
+            if in_download_dir && !currently_open {
+                if std::fs::remove_file(&old_path).is_ok() {
+                    message = format!(
+                        "Moved to Calibre · now at {}",
+                        crate::library::abbreviate_home(std::path::Path::new(&new_path))
+                    );
+                }
+            } else {
+                message = format!(
+                    "{message} · copy at {}",
+                    crate::library::abbreviate_home(std::path::Path::new(&new_path))
+                );
+            }
+            self.spawn_library_scan();
+            self.rebuild_library_entries()?;
+        }
+        self.state
+            .borrow_mut()
+            .ui_state
+            .set_message(message, MessageType::Info);
+        Ok(())
+    }
+
     /// Cover bytes for a book file: a Calibre-style `cover.jpg` sibling when
     /// present (avoids unzipping the EPUB), otherwise the EPUB's declared
     /// cover image.
@@ -9907,6 +10055,7 @@ mod tests {
             opds_request_id: 0,
             opds_catalog_index: None,
             opds_history: Vec::new(),
+            calibre_import_rx: None,
             opds_current_url: None,
             tts_done_rx: None,
             tts_child: None,

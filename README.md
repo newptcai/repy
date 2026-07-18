@@ -529,6 +529,18 @@ its schema is incompatible, `repy` automatically falls back to the per-book
 `metadata.opf` files and directory scan. Calibre's database and library files
 are never written.
 
+Press `m` in the Library window to move the selected book into Calibre. The
+import runs `calibredb add` in the background (so Calibre's own code performs
+the write), reading progress follows the book to its new location inside the
+library, and the original file is deleted only when it lives in repy's own
+OPDS download directory — books elsewhere are copied, never removed.
+Duplicates are refused by calibredb, and the outcome is reported as a status
+message. Like all `calibredb` operations, this requires the Calibre GUI to be
+closed.
+
+Info status messages fade after a few seconds; warnings and errors stay on
+screen until you press a key.
+
 ### Mouse support
 
 Set `"mouse_support": true` (or toggle it in the Settings window, where it
