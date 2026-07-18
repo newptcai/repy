@@ -45,6 +45,10 @@ pub struct AcquisitionLink {
     pub media_type: Option<String>,
     pub relation: String,
     pub availability: Availability,
+    /// Server-provided variant label, e.g. Gutenberg's "EPUB (with images)".
+    pub title: Option<String>,
+    /// File size in bytes from the Atom `length` attribute, when sent.
+    pub length: Option<u64>,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Availability {
@@ -81,6 +85,13 @@ impl Publication {
 impl AcquisitionLink {
     pub fn extension(&self) -> Option<&'static str> {
         supported_extension(self.media_type.as_deref(), &self.href)
+    }
+    /// Human label for this variant: the server's link title when present
+    /// (e.g. "EPUB (with images)"), else the uppercased format extension.
+    pub fn label(&self) -> String {
+        self.title
+            .clone()
+            .unwrap_or_else(|| self.extension().unwrap_or("book").to_uppercase())
     }
 }
 
@@ -224,6 +235,8 @@ fn parse_link(
     let mut rel = String::new();
     let mut href = None;
     let mut typ = None;
+    let mut title = None;
+    let mut length = None;
     for a in e.attributes().with_checks(false) {
         let a = a?;
         let v = a
@@ -233,6 +246,8 @@ fn parse_link(
             b"rel" => rel = v,
             b"href" => href = Some(v),
             b"type" => typ = Some(v),
+            b"title" => title = Some(v).filter(|t| !t.is_empty()),
+            b"length" => length = v.parse().ok(),
             _ => {}
         }
     }
@@ -257,6 +272,8 @@ fn parse_link(
                 } else {
                     Availability::Unsupported
                 },
+                title,
+                length,
             });
         } else if rel == "http://opds-spec.org/image"
             || rel == "http://opds-spec.org/image/thumbnail"
@@ -610,6 +627,18 @@ mod tests {
             Some("https://example.test/catalog/?page=2")
         );
         assert!(f.search.is_some());
+    }
+    #[test]
+    fn parses_acquisition_title_and_length() {
+        let base = Url::parse("https://example.test/").unwrap();
+        let xml = r#"<feed xmlns="http://www.w3.org/2005/Atom"><entry><title>Frankenstein</title><link rel="http://opds-spec.org/acquisition" type="application/epub+zip" title="EPUB (with images)" length="474451" href="84.epub.images"/><link rel="http://opds-spec.org/acquisition" type="application/epub+zip" href="84.epub.noimages"/></entry></feed>"#;
+        let f = parse_opds1(xml, &base).unwrap();
+        let links = &f.publications[0].acquisitions;
+        assert_eq!(links[0].title.as_deref(), Some("EPUB (with images)"));
+        assert_eq!(links[0].length, Some(474451));
+        assert_eq!(links[0].label(), "EPUB (with images)");
+        assert_eq!(links[1].title, None);
+        assert_eq!(links[1].label(), "EPUB");
     }
     #[test]
     fn parses_opensearch_pagination_totals() {

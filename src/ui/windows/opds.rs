@@ -11,6 +11,37 @@ use ratatui::{
     widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap},
 };
 
+fn display_width(s: &str) -> usize {
+    textwrap::core::display_width(s)
+}
+
+/// Truncate `s` to at most `max` display columns, ending in `…` when cut.
+fn truncate_display(s: &str, max: usize) -> String {
+    if display_width(s) <= max {
+        return s.into();
+    }
+    let mut out = String::new();
+    let mut width = 0;
+    for ch in s.chars() {
+        let cw = display_width(ch.encode_utf8(&mut [0u8; 4]));
+        if width + cw > max.saturating_sub(1) {
+            break;
+        }
+        out.push(ch);
+        width += cw;
+    }
+    out.push('…');
+    out
+}
+
+fn human_bytes(bytes: u64) -> String {
+    if bytes >= 1024 * 1024 {
+        format!("{:.1} MiB", bytes as f64 / (1024.0 * 1024.0))
+    } else {
+        format!("{:.0} KiB", bytes as f64 / 1024.0)
+    }
+}
+
 pub struct OpdsWindow;
 impl OpdsWindow {
     fn area(area: Rect) -> Rect {
@@ -179,13 +210,6 @@ impl OpdsWindow {
             } else {
                 "Loading feed"
             };
-            let human = |bytes: u64| {
-                if bytes >= 1024 * 1024 {
-                    format!("{:.1} MiB", bytes as f64 / (1024.0 * 1024.0))
-                } else {
-                    format!("{:.0} KiB", bytes as f64 / 1024.0)
-                }
-            };
             let label = if let Some(total) = total_bytes.filter(|total| *total > 0) {
                 // Real progress: bytes received over the Content-Length.
                 let percent = (downloaded_bytes.saturating_mul(100) / total).min(100);
@@ -194,8 +218,8 @@ impl OpdsWindow {
                     "{verb} [{:<16}] {:>3}% · {} / {}",
                     "█".repeat(filled),
                     percent,
-                    human(downloaded_bytes),
-                    human(total)
+                    human_bytes(downloaded_bytes),
+                    human_bytes(total)
                 )
             } else {
                 // No Content-Length: animate a marquee but still show the
@@ -208,7 +232,7 @@ impl OpdsWindow {
                 let position = tick as usize % 17;
                 let bar = format!("{}████{}", " ".repeat(position), " ".repeat(16 - position));
                 if downloaded_bytes > 0 {
-                    format!("{verb} [{bar}] · {}", human(downloaded_bytes))
+                    format!("{verb} [{bar}] · {}", human_bytes(downloaded_bytes))
                 } else {
                     format!("{verb} [{bar}]")
                 }
@@ -256,30 +280,54 @@ impl OpdsWindow {
                 "unavailable".to_string()
             } else {
                 let link = readable[format_index % readable.len()];
-                let ext = link.extension().unwrap_or("book").to_uppercase();
+                let mut label = link.label();
+                if label.chars().count() > 24 {
+                    label = label.chars().take(23).collect::<String>() + "…";
+                }
                 if readable.len() > 1 {
                     format!(
-                        "{ext} {}/{}",
+                        "{label} {}/{}",
                         format_index % readable.len() + 1,
                         readable.len()
                     )
                 } else {
-                    ext
+                    label
                 }
             };
-            let authors = if p.authors.is_empty() {
+            // Right-align the format tag so it stays visible while the
+            // f key cycles; shrink authors, then the title, to make room.
+            let tag = format!("[{tag}]");
+            let width = inner.width as usize;
+            let avail = width.saturating_sub(display_width(&tag) + 1);
+            let mut title_text = p.title.clone();
+            let mut authors = if p.authors.is_empty() {
                 String::new()
             } else {
                 format!(" — {}", p.authors.join(", "))
             };
+            if display_width(&title_text) + display_width(&authors) > avail {
+                let author_avail = avail.saturating_sub(display_width(&title_text));
+                authors = if author_avail >= 2 {
+                    truncate_display(&authors, author_avail)
+                } else {
+                    String::new()
+                };
+                if display_width(&title_text) > avail {
+                    title_text = truncate_display(&title_text, avail);
+                }
+            }
+            let pad = " ".repeat(width.saturating_sub(
+                display_width(&title_text) + display_width(&authors) + display_width(&tag),
+            ));
             rows.push(if index == selected {
-                Line::from(format!("{}{} [{}]", p.title, authors, tag)).style(selected_style)
+                Line::from(format!("{title_text}{authors}{pad}{tag}")).style(selected_style)
             } else {
                 Line::from(vec![
-                    Span::raw(p.title.clone()),
+                    Span::raw(title_text),
                     Span::styled(authors, theme.base_style().fg(theme.muted_fg)),
+                    Span::raw(pad),
                     Span::styled(
-                        format!(" [{tag}]"),
+                        tag,
                         theme.base_style().fg(if readable.is_empty() {
                             theme.warning_fg
                         } else {
@@ -293,7 +341,7 @@ impl OpdsWindow {
             rows.push(Line::from("No entries").style(theme.base_style().fg(theme.muted_fg)));
         }
         let list_height = if details {
-            inner.height.saturating_mul(2) / 3
+            inner.height / 2
         } else {
             inner.height
         };
@@ -316,16 +364,33 @@ impl OpdsWindow {
                 .iter()
                 .filter(|a| a.availability != Availability::Readable)
                 .count();
+            let readable = p.readable_acquisitions();
+            let mut formats = String::new();
+            if !readable.is_empty() {
+                formats.push_str("\nFormats (f cycles, ▶ downloads):");
+                let active = format_index % readable.len();
+                for (i, link) in readable.iter().enumerate() {
+                    let marker = if i == active { '▶' } else { ' ' };
+                    let size = link
+                        .length
+                        .map(|l| format!(" · {}", human_bytes(l)))
+                        .unwrap_or_default();
+                    formats.push_str(&format!("\n {marker} {}{size}", link.label()));
+                }
+            }
+            // Formats come before the free-form summary so they stay
+            // visible even when a long description overflows the pane.
             let text = format!(
-                "{}\nAuthors: {}\n{}{}",
+                "{}\nAuthors: {}{}{}\n{}",
                 p.title,
                 p.authors.join(", "),
-                p.summary.as_deref().unwrap_or("No description"),
+                formats,
                 if unavailable > 0 {
                     format!("\n{unavailable} unavailable acquisition(s)")
                 } else {
                     String::new()
-                }
+                },
+                p.summary.as_deref().unwrap_or("No description"),
             );
             let details_area = Rect::new(
                 inner.x,

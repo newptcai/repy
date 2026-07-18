@@ -655,6 +655,8 @@ fn sample_opds_feed() -> crate::opds::Feed {
         media_type: None,
         relation: "http://opds-spec.org/acquisition".into(),
         availability,
+        title: None,
+        length: None,
     };
     crate::opds::Feed {
         title: "Sample Shelf".into(),
@@ -670,7 +672,11 @@ fn sample_opds_feed() -> crate::opds::Feed {
                 summary: Some("An expedition drifts far off course.".into()),
                 cover: None,
                 acquisitions: vec![
-                    acquisition("epub", Availability::Readable),
+                    AcquisitionLink {
+                        title: Some("EPUB (with images)".into()),
+                        length: Some(2 * 1024 * 1024),
+                        ..acquisition("epub", Availability::Readable)
+                    },
                     acquisition("mobi", Availability::Readable),
                 ],
             },
@@ -853,4 +859,28 @@ fn opds_download_progress_centered() {
     }
     reader.draw().expect("draw");
     insta::assert_snapshot!(reader.terminal.backend());
+}
+
+#[test]
+fn opds_format_cycle_updates_tag_and_details() {
+    let mut reader = test_reader();
+    {
+        let mut state = reader.state.borrow_mut();
+        state.ui_state.opds_feed = Some(sample_opds_feed());
+        state.ui_state.opds_selected_index = 1;
+        state
+            .ui_state
+            .open_window(crate::models::WindowType::OpdsDetails);
+    }
+    reader.draw().expect("draw");
+    let screen = format!("{}", reader.terminal.backend());
+    assert!(screen.contains("[EPUB (with images) 1/2]"), "{screen}");
+    assert!(
+        screen.contains("▶ EPUB (with images) · 2.0 MiB"),
+        "{screen}"
+    );
+    press_char(&mut reader, 'f');
+    let screen = format!("{}", reader.terminal.backend());
+    assert!(screen.contains("[MOBI 2/2]"), "{screen}");
+    assert!(screen.contains("▶ MOBI"), "{screen}");
 }
