@@ -884,3 +884,28 @@ fn opds_format_cycle_updates_tag_and_details() {
     assert!(screen.contains("[MOBI 2/2]"), "{screen}");
     assert!(screen.contains("▶ MOBI"), "{screen}");
 }
+
+#[test]
+fn opds_long_variant_label_keeps_counter() {
+    let mut reader = test_reader();
+    {
+        let mut state = reader.state.borrow_mut();
+        let mut feed = sample_opds_feed();
+        feed.publications[0].acquisitions[0].title =
+            Some("EPUB3 (E-readers incl. Send-to-Kindle)".into());
+        state.ui_state.opds_feed = Some(feed);
+        state.ui_state.opds_selected_index = 1;
+        state
+            .ui_state
+            .open_window(crate::models::WindowType::OpdsFeed);
+    }
+    reader.draw().expect("draw");
+    let screen = format!("{}", reader.terminal.backend());
+    // On the 58-column popup the long Gutenberg label is shortened, but
+    // never below the row's spare room, and the cycle counter survives.
+    assert!(screen.contains("… 1/2]"), "counter lost:\n{screen}");
+    assert!(
+        screen.contains("[EPUB3 (E-readers incl."),
+        "label over-truncated:\n{screen}"
+    );
+}

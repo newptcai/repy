@@ -144,6 +144,10 @@ pub struct Settings {
     pub opds_catalogs: Vec<OpdsCatalogConfig>,
     /// Download destination. `None` selects Downloads/repy, with an app-data fallback.
     pub opds_download_directory: Option<String>,
+    /// After an OPDS download, also add the book to the user's Calibre
+    /// library via `calibredb add` (never touching Calibre's database
+    /// directly). calibredb skips duplicates by default.
+    pub opds_add_to_calibre: bool,
     /// Whether images render inline in the reading view or stay as one-line
     /// placeholders.
     pub inline_images: InlineImages,
@@ -184,6 +188,7 @@ impl Settings {
             self.opds_catalogs = other.opds_catalogs;
         }
         self.opds_download_directory = other.opds_download_directory;
+        self.opds_add_to_calibre = other.opds_add_to_calibre;
         self.inline_images = other.inline_images;
         self.paragraph_style = other.paragraph_style;
         self.line_spacing = other.line_spacing;
@@ -212,6 +217,7 @@ impl Default for Settings {
             library_directories: Vec::new(),
             opds_catalogs: vec![OpdsCatalogConfig::default()],
             opds_download_directory: None,
+            opds_add_to_calibre: false,
             inline_images: InlineImages::default(),
             paragraph_style: ParagraphStyle::default(),
             line_spacing: LineSpacing::default(),

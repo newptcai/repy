@@ -684,6 +684,7 @@ enum SettingItem {
     KosyncUsername,
     KosyncPassword,
     OpdsDownloadDirectory,
+    OpdsAddToCalibre,
 }
 
 /// Settings grouped into labelled sections. Single source of truth for both
@@ -720,7 +721,13 @@ const SETTINGS_SECTIONS: &[(&str, &[SettingItem])] = &[
             SettingItem::KosyncPullNow,
         ],
     ),
-    ("OPDS", &[SettingItem::OpdsDownloadDirectory]),
+    (
+        "OPDS",
+        &[
+            SettingItem::OpdsDownloadDirectory,
+            SettingItem::OpdsAddToCalibre,
+        ],
+    ),
 ];
 
 impl SettingItem {
@@ -828,6 +835,8 @@ enum OpdsWorkerEvent {
     Download {
         request_id: u64,
         result: Result<std::path::PathBuf, String>,
+        /// Outcome of the optional post-download `calibredb add`.
+        calibre: Option<Result<String, String>>,
     },
     Progress {
         request_id: u64,
@@ -2097,9 +2106,11 @@ impl Reader {
                             Err(e) => state.ui_state.opds_error = Some(e),
                         }
                     }
-                    OpdsWorkerEvent::Download { request_id, result }
-                        if request_id == self.opds_request_id =>
-                    {
+                    OpdsWorkerEvent::Download {
+                        request_id,
+                        result,
+                        calibre,
+                    } if request_id == self.opds_request_id => {
                         // A newly downloaded book has no per-book theme yet.
                         // Preserve the theme the user was looking at while
                         // browsing OPDS, but never replace a theme already
@@ -2122,6 +2133,19 @@ impl Reader {
                                     .borrow_mut()
                                     .ui_state
                                     .open_window(WindowType::Reader);
+                                match calibre {
+                                    Some(Ok(note)) => self
+                                        .state
+                                        .borrow_mut()
+                                        .ui_state
+                                        .set_message(note, MessageType::Info),
+                                    Some(Err(e)) => self
+                                        .state
+                                        .borrow_mut()
+                                        .ui_state
+                                        .set_message(e, MessageType::Warning),
+                                    None => {}
+                                }
                             }
                             Err(e) => self.state.borrow_mut().ui_state.opds_error = Some(e),
                         }
@@ -3882,6 +3906,14 @@ where
                 .opds_download_directory
                 .as_deref(),
         )?;
+        let add_to_calibre = self.state.borrow().config.settings.opds_add_to_calibre;
+        let library_directories = self
+            .state
+            .borrow()
+            .config
+            .settings
+            .library_directories
+            .clone();
         self.opds_request_id = self.opds_request_id.wrapping_add(1);
         let id = self.opds_request_id;
         let (tx, rx) = std::sync::mpsc::channel();
@@ -3915,9 +3947,16 @@ where
                 )
                 .map_err(|e| e.to_string())
             })();
+            let calibre = match (&result, add_to_calibre) {
+                (Ok(path), true) => {
+                    Some(crate::library::add_to_calibre(path, &library_directories))
+                }
+                _ => None,
+            };
             let _ = tx.send(OpdsWorkerEvent::Download {
                 request_id: id,
                 result,
+                calibre,
             });
         });
         self.opds_rx = Some(rx);
@@ -4922,6 +4961,9 @@ where
                         .as_deref()
                         .unwrap_or("Downloads/repy (default)")
                 ),
+                SettingItem::OpdsAddToCalibre => {
+                    format!("Add downloads to Calibre: {}", settings.opds_add_to_calibre)
+                }
             })
             .collect()
     }
@@ -8001,6 +8043,10 @@ where
             | SettingItem::KosyncUsername
             | SettingItem::KosyncPassword
             | SettingItem::OpdsDownloadDirectory => return Ok(()),
+            SettingItem::OpdsAddToCalibre => {
+                state.config.settings.opds_add_to_calibre =
+                    !state.config.settings.opds_add_to_calibre;
+            }
             SettingItem::KosyncPullNow => {
                 drop(state);
                 self.start_kosync_pull(true);

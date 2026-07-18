@@ -32,6 +32,55 @@ pub fn expand_tilde(dir: &str) -> PathBuf {
     }
 }
 
+/// The first configured library directory that is a Calibre library root
+/// (contains `metadata.db`).
+pub fn find_calibre_library(dirs: &[String]) -> Option<PathBuf> {
+    dirs.iter()
+        .map(|d| expand_tilde(d))
+        .find(|d| d.join("metadata.db").is_file())
+}
+
+/// Add a downloaded book to the user's Calibre library through `calibredb
+/// add` — Calibre's own CLI — so repy never writes Calibre's database
+/// itself. calibredb refuses title/author duplicates by default, which is
+/// exactly the behaviour we want. Returns a short human-readable outcome.
+pub fn add_to_calibre(file: &Path, library_directories: &[String]) -> Result<String, String> {
+    let mut cmd = std::process::Command::new("calibredb");
+    cmd.arg("add").arg(file);
+    if let Some(library) = find_calibre_library(library_directories) {
+        cmd.arg("--with-library").arg(library);
+    }
+    match cmd.output() {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            Err("calibredb not found — install Calibre's CLI tools".into())
+        }
+        Err(e) => Err(format!("calibredb failed to start: {e}")),
+        Ok(output) => interpret_calibredb_output(
+            output.status.success(),
+            &String::from_utf8_lossy(&output.stdout),
+            &String::from_utf8_lossy(&output.stderr),
+        ),
+    }
+}
+
+/// Classify `calibredb add` output into a user-facing message.
+fn interpret_calibredb_output(success: bool, stdout: &str, stderr: &str) -> Result<String, String> {
+    let combined = format!("{stdout}\n{stderr}");
+    if combined.contains("already exist") {
+        Ok("Already in Calibre library — duplicate not added".into())
+    } else if success {
+        Ok("Added to Calibre library".into())
+    } else {
+        let reason = stderr
+            .lines()
+            .rev()
+            .map(str::trim)
+            .find(|l| !l.is_empty())
+            .unwrap_or("unknown error");
+        Err(format!("calibredb: {reason}"))
+    }
+}
+
 /// Scan the given directories (without following directory symlinks) and return every ebook
 /// found, refreshing the metadata cache and pruning entries for files that
 /// disappeared. Metadata comes from the cache when the file is unchanged,
@@ -427,6 +476,51 @@ fn unescape_xml(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn calibredb_output_classification() {
+        assert_eq!(
+            interpret_calibredb_output(true, "Added book ids: 123\n", ""),
+            Ok("Added to Calibre library".into())
+        );
+        // Duplicates are detected regardless of the exit status.
+        let dup = "The following books were not added as they already exist \
+                   in the database (see --duplicates option):\n  Frankenstein\n";
+        assert_eq!(
+            interpret_calibredb_output(true, dup, ""),
+            Ok("Already in Calibre library — duplicate not added".into())
+        );
+        assert_eq!(
+            interpret_calibredb_output(
+                false,
+                "",
+                "Another calibre program such as the main calibre program is running.\n"
+            ),
+            Err(
+                "calibredb: Another calibre program such as the main calibre program is running."
+                    .into()
+            )
+        );
+    }
+
+    #[test]
+    fn finds_calibre_library_root() {
+        let dir = tempfile::tempdir().unwrap();
+        let library = dir.path().join("Calibre");
+        std::fs::create_dir(&library).unwrap();
+        std::fs::write(library.join("metadata.db"), b"").unwrap();
+        let plain = dir.path().join("books");
+        std::fs::create_dir(&plain).unwrap();
+        let dirs = vec![
+            plain.to_string_lossy().into_owned(),
+            library.to_string_lossy().into_owned(),
+        ];
+        assert_eq!(find_calibre_library(&dirs), Some(library));
+        assert_eq!(
+            find_calibre_library(&[plain.to_string_lossy().into_owned()]),
+            None
+        );
+    }
 
     const SAMPLE_OPF: &str = r#"<?xml version='1.0' encoding='utf-8'?>
 <package xmlns="http://www.idpf.org/2007/opf" unique-identifier="uuid_id" version="2.0">

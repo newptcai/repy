@@ -280,19 +280,25 @@ impl OpdsWindow {
                 "unavailable".to_string()
             } else {
                 let link = readable[format_index % readable.len()];
-                let mut label = link.label();
-                if label.chars().count() > 24 {
-                    label = label.chars().take(23).collect::<String>() + "…";
-                }
-                if readable.len() > 1 {
-                    format!(
-                        "{label} {}/{}",
-                        format_index % readable.len() + 1,
-                        readable.len()
-                    )
+                let counter = if readable.len() > 1 {
+                    format!(" {}/{}", format_index % readable.len() + 1, readable.len())
                 } else {
-                    label
-                }
+                    String::new()
+                };
+                // The variant label may use any room the row can spare
+                // (the title keeps a minimum); the i/n counter survives
+                // truncation so the f key always gives visible feedback.
+                let left_width = display_width(&p.title)
+                    + if p.authors.is_empty() {
+                        0
+                    } else {
+                        display_width(&format!(" — {}", p.authors.join(", ")))
+                    };
+                let overhead = 2 + display_width(&counter);
+                let max_label = (inner.width as usize)
+                    .saturating_sub(1 + left_width.min(24) + overhead)
+                    .max(4);
+                format!("{}{counter}", truncate_display(&link.label(), max_label))
             };
             // Right-align the format tag so it stays visible while the
             // f key cycles; shrink authors, then the title, to make room.

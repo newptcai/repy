@@ -458,6 +458,16 @@ configuration-file based. The shared catalog model is version-neutral, so OPDS
 2.0 support can be added as a JSON parser without changing the browser or
 download pipeline.
 
+With `"opds_add_to_calibre": true` (also toggleable in the Settings window),
+each downloaded book is additionally imported into your Calibre library via
+`calibredb add` — Calibre's own CLI, so repy never writes Calibre's database
+directly. The library root is auto-detected as the first entry in
+`library_directories` containing a `metadata.db`. calibredb skips books whose
+title and author already exist, so re-downloading never creates duplicates;
+the outcome ("Added" / "Already in Calibre library") is shown as a status
+message. Note that `calibredb` fails while the Calibre GUI is running — close
+Calibre (or its tray icon) for imports to work.
+
 You can modify any setting or keybinding by editing this file. Changes take effect
 on next restart.
 
