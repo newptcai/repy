@@ -63,6 +63,31 @@ Example
 - Preserve epy behavior while improving performance.
 - Always update `Cargo.lock` with `cargo update` before tagging a release to avoid CI failures.
 
+## Codex Improvement Tasks
+
+Small, insulated improvement tasks live in `improvements/improvement-XX.md`.
+When asked to implement one of these tasks (typically as Codex running in
+full-auto mode), follow these rules:
+
+- Implement exactly one task per run. Read the whole task file first; stay
+  inside its stated scope and "Out of scope" limits.
+- You own the full slice: implementation, tests, docs. Do not leave TODOs or
+  half-wired code paths.
+- Before committing, all of these must pass:
+  - `cargo fmt --all` (then check nothing is left dirty by formatting)
+  - `cargo clippy --all-targets` with no new warnings
+  - `cargo test`
+- Snapshot tests: never run `cargo insta review` (interactive). For
+  intentional snapshot changes or new snapshots, run tests then
+  `cargo insta accept`, and eyeball the accepted `.snap` diffs yourself.
+- Keybinding or UI changes must update the in-app help window and README.md in
+  the same commit (project rule above).
+- When the task is complete and green, change the task file's `Status:` line
+  from `todo` to `done` and commit everything per the commit message
+  guidelines in this file (one focused commit is fine; two if code + docs
+  separation is clearly cleaner).
+- Do not bump the version or tag releases as part of an improvement task.
+
 ## Release Process
 1. Bump version in `Cargo.toml` (minor bump: 0.8.x → 0.9.0; patch bump: 0.8.x → 0.8.(x+1)).
 2. Run `cargo update` to refresh `Cargo.lock`.
