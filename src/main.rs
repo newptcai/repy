@@ -9,11 +9,16 @@ use repy::{
     ui::reader::Reader,
 };
 
-use clap::Parser;
+use clap::{CommandFactory, Parser};
 use eyre::Result;
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
+    if let Some(shell) = cli.completions {
+        clap_complete::generate(shell, &mut Cli::command(), "repy", &mut std::io::stdout());
+        return Ok(());
+    }
+
     let log_level = if cli.debug || cli.verbose > 1 {
         LogLevel::Debug
     } else if cli.verbose > 0 {

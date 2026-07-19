@@ -33,6 +33,51 @@ fn test_ebook_arg() {
 }
 
 #[test]
+fn test_bash_completions() {
+    let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("repy"));
+    cmd.arg("--completions").arg("bash");
+    cmd.assert()
+        .success()
+        .stdout(predicates::str::contains("repy"));
+}
+
+#[test]
+fn test_zsh_completions() {
+    let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("repy"));
+    cmd.arg("--completions").arg("zsh");
+    cmd.assert()
+        .success()
+        .stdout(predicates::str::contains("repy"));
+}
+
+#[test]
+fn test_fish_completions() {
+    let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("repy"));
+    cmd.arg("--completions").arg("fish");
+    cmd.assert()
+        .success()
+        .stdout(predicates::str::contains("repy"));
+}
+
+#[test]
+fn test_powershell_completions() {
+    let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("repy"));
+    cmd.arg("--completions").arg("powershell");
+    cmd.assert()
+        .success()
+        .stdout(predicates::str::contains("repy"));
+}
+
+#[test]
+fn test_invalid_completion_shell_fails() {
+    let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("repy"));
+    cmd.arg("--completions").arg("invalid");
+    cmd.assert()
+        .failure()
+        .stderr(predicates::str::contains("invalid value"));
+}
+
+#[test]
 fn test_history_empty() {
     let dir = tempfile::tempdir().unwrap();
     let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("repy"));

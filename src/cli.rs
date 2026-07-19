@@ -43,6 +43,10 @@ pub struct Cli {
     #[clap(long)]
     pub debug: bool,
 
+    /// Generate shell completions and exit
+    #[clap(long, value_enum, value_name = "SHELL")]
+    pub completions: Option<clap_complete::Shell>,
+
     /// Ebook path, history number, pattern, or URL
     #[clap(name = "EBOOK")]
     pub ebook: Vec<String>,

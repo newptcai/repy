@@ -198,6 +198,20 @@ stdout. The default format is JSON (including the book identity); pass
 repy --export-highlights book.epub --format md > notes.md
 ```
 
+Generate and install a static completion script for your shell:
+
+```sh
+# bash (save it where bash-completion can load it)
+mkdir -p ~/.local/share/bash-completion/completions
+repy --completions bash > ~/.local/share/bash-completion/completions/repy
+
+# zsh
+repy --completions zsh > "${fpath[1]}/_repy"
+
+# fish
+repy --completions fish > ~/.config/fish/completions/repy.fish
+```
+
 ### Search
 
 Search functionality supports regular expressions.
