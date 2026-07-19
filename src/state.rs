@@ -933,6 +933,23 @@ impl State {
         Ok(())
     }
 
+    pub fn update_bookmark_label(
+        &self,
+        ebook: &dyn crate::formats::Ebook,
+        old_name: &str,
+        new_name: &str,
+    ) -> Result<()> {
+        let new_name = new_name.trim();
+        if new_name.is_empty() {
+            return Ok(());
+        }
+        self.conn.execute(
+            "UPDATE bookmarks SET name=? WHERE filepath=? AND name=?",
+            params![new_name, ebook.path(), old_name],
+        )?;
+        Ok(())
+    }
+
     pub fn get_bookmarks(
         &self,
         ebook: &dyn crate::formats::Ebook,
@@ -2264,10 +2281,26 @@ mod tests {
         state.insert_bookmark(&ebook, "Chapter 1", &state1).unwrap();
         state.insert_bookmark(&ebook, "Chapter 2", &state2).unwrap();
 
+        state
+            .update_bookmark_label(&ebook, "Chapter 1", "Renamed chapter")
+            .unwrap();
+        let bookmarks = state.get_bookmarks(&ebook).unwrap();
+        let renamed = bookmarks
+            .iter()
+            .find(|(name, _)| name == "Renamed chapter")
+            .unwrap();
+        assert_eq!(renamed.1, state1);
+
+        state
+            .update_bookmark_label(&ebook, "Renamed chapter", "  ")
+            .unwrap();
+        let bookmarks = state.get_bookmarks(&ebook).unwrap();
+        assert!(bookmarks.iter().any(|(name, _)| name == "Renamed chapter"));
+
         let bookmarks = state.get_bookmarks(&ebook).unwrap();
         assert_eq!(bookmarks.len(), 2);
 
-        let chapter1_bookmark = bookmarks.iter().find(|(name, _)| name == "Chapter 1");
+        let chapter1_bookmark = bookmarks.iter().find(|(name, _)| name == "Renamed chapter");
         let chapter2_bookmark = bookmarks.iter().find(|(name, _)| name == "Chapter 2");
 
         assert!(chapter1_bookmark.is_some());
@@ -2286,7 +2319,7 @@ mod tests {
         assert_eq!(state2_retrieved.row, 42);
         assert_eq!(state2_retrieved.rel_pctg, Some(0.5));
 
-        state.delete_bookmark(&ebook, "Chapter 1").unwrap();
+        state.delete_bookmark(&ebook, "Renamed chapter").unwrap();
         let bookmarks = state.get_bookmarks(&ebook).unwrap();
         assert_eq!(bookmarks.len(), 1);
         assert_eq!(bookmarks[0].0, "Chapter 2");

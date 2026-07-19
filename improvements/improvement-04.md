@@ -1,6 +1,6 @@
 # Improvement 04 — Edit bookmark labels
 
-Status: todo
+Status: done
 
 Follow the "Codex Improvement Tasks" section of AGENTS.md for process rules
 (tests, checks, commit, status update).

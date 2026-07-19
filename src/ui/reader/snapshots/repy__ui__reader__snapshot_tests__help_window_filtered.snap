@@ -1,5 +1,6 @@
 ---
 source: src/ui/reader/snapshot_tests.rs
+assertion_line: 113
 expression: reader.terminal.backend()
 ---
 "                         Accessible EPUB 3                           ~1m left 0%"
@@ -11,11 +12,11 @@ expression: reader.terminal.backend()
 "                                                                                "
 "                                                                                "
 "                                                                                "
-"                                                                                "
-"                       ┌Help (?)────────────────────────┐                       "
-"                       │ Windows & Tools:               │                       "
-"                       │   B                 Bookmarks  │                       "
-"                       └ /bookmark█ ────────────────────┘                       "
+"                  ┌Help (?)──────────────────────────────────┐                  "
+"                  │ Windows & Tools:                         │                  "
+"                  │   B                 Bookmarks            │                  "
+"                  │   e                 Edit Bookmark Label  │                  "
+"                  └ /bookmark█ ──────────────────────────────┘                  "
 "                                                                                "
 "                                                                                "
 "                                                                                "

@@ -278,7 +278,8 @@ headers remain visible. `Enter` keeps the filter applied, and `Esc` clears it.
 - `t` --- Table of Contents
 - `m<char>` --- Set a persistent mark (a-z, A-Z, 0-9)
 - `` `<char> `` --- Jump to a persistent mark
-- `B` --- Bookmarks (`a` to add, `d` to delete, `Enter` to jump)
+- `B` --- Bookmarks (`a` to add, `e` to edit the label, `d` to delete,
+  `Enter` to jump)
 - `u` --- Links on Page (`Enter` previews internal links; `Enter` again jumps)
 - `o` --- Images on Page
   - `Enter` shows the selected image in the terminal (kitty, iTerm2, or sixel

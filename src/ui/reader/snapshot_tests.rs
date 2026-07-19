@@ -121,6 +121,20 @@ fn toc_window() {
 }
 
 #[test]
+fn rename_bookmark() {
+    let mut reader = test_reader();
+    press_char(&mut reader, 'B');
+    press_char(&mut reader, 'a');
+    press_char(&mut reader, 'e');
+    for _ in 0.."Bookmark 1".len() {
+        press(&mut reader, KeyCode::Backspace);
+    }
+    type_str(&mut reader, "Preface note");
+    press(&mut reader, KeyCode::Enter);
+    insta::assert_snapshot!(reader.terminal.backend());
+}
+
+#[test]
 fn search_flow() {
     let mut reader = test_reader();
     press_char(&mut reader, '/');

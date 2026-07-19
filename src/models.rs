@@ -27,6 +27,7 @@ pub enum WindowType {
     Dictionary,
     Toc,
     Bookmarks,
+    BookmarkLabelEditor,
     Library,
     OpdsCatalogs,
     OpdsFeed,

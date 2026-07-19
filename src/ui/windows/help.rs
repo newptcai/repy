@@ -56,6 +56,7 @@ const HELP_TEXT: &[&str] = &[
     " Windows & Tools:",
     "   t                 Table Of Contents",
     "   B                 Bookmarks",
+    "   e                 Edit Bookmark Label",
     "   u                 Links on Page (Enter previews internal links)",
     "   o                 Images on Page (Enter shows in-terminal, o external)",
     "   i                 Metadata",

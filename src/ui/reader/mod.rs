@@ -314,6 +314,9 @@ pub struct UiState {
     pub list_filter_indices: Option<Vec<usize>>,
     pub bookmarks: Vec<(String, ReadingState)>,
     pub bookmarks_selected_index: usize,
+    pub bookmark_label_buffer: String,
+    pub bookmark_label_cursor: usize,
+    pub bookmark_label_old_name: Option<String>,
     pub book_identity: Option<BookIdentity>,
     pub highlights: Vec<Highlight>,
     pub highlights_selected_index: usize,
@@ -449,6 +452,9 @@ impl UiState {
             list_filter_indices: None,
             bookmarks: Vec::new(),
             bookmarks_selected_index: 0,
+            bookmark_label_buffer: String::new(),
+            bookmark_label_cursor: 0,
+            bookmark_label_old_name: None,
             book_identity: None,
             highlights: Vec::new(),
             highlights_selected_index: 0,
@@ -599,6 +605,7 @@ impl UiState {
             }
             WindowType::Toc => self.show_toc = true,
             WindowType::Bookmarks => self.show_bookmarks = true,
+            WindowType::BookmarkLabelEditor => self.show_bookmarks = false,
             WindowType::Library => self.show_library = true,
             WindowType::OpdsCatalogs
             | WindowType::OpdsFeed
@@ -2434,6 +2441,7 @@ where
             WindowType::Visual => self.handle_visual_mode_keys(key, repeat_count)?,
             WindowType::Toc => self.handle_toc_mode_keys(key, repeat_count)?,
             WindowType::Bookmarks => self.handle_bookmarks_mode_keys(key, repeat_count)?,
+            WindowType::BookmarkLabelEditor => self.handle_bookmark_label_editor_keys(key)?,
             WindowType::Highlights => self.handle_highlights_mode_keys(key, repeat_count)?,
             WindowType::HighlightCommentEditor => self.handle_highlight_comment_editor_keys(key)?,
             WindowType::ConfirmDeleteHighlight => self.handle_confirm_delete_highlight_keys(key)?,
@@ -3561,6 +3569,7 @@ where
                     self.delete_selected_bookmark()?;
                     self.reset_list_filter_after_change();
                 }
+                KeyCode::Char('e') => self.edit_selected_bookmark_label(),
                 KeyCode::Enter => {
                     self.jump_to_selected_bookmark()?;
                 }
@@ -4444,6 +4453,115 @@ where
         Ok(())
     }
 
+    fn handle_bookmark_label_editor_keys(&mut self, key: KeyEvent) -> eyre::Result<()> {
+        match key.code {
+            KeyCode::Enter => self.save_bookmark_label()?,
+            KeyCode::Esc => self.close_bookmark_label_editor(),
+            KeyCode::Backspace => {
+                let mut state = self.state.borrow_mut();
+                let cursor = state.ui_state.bookmark_label_cursor;
+                if cursor > 0 {
+                    let previous =
+                        previous_grapheme_boundary(&state.ui_state.bookmark_label_buffer, cursor);
+                    state
+                        .ui_state
+                        .bookmark_label_buffer
+                        .replace_range(previous..cursor, "");
+                    state.ui_state.bookmark_label_cursor = previous;
+                }
+            }
+            KeyCode::Delete => {
+                let mut state = self.state.borrow_mut();
+                let cursor = state.ui_state.bookmark_label_cursor;
+                if cursor < state.ui_state.bookmark_label_buffer.len() {
+                    let next =
+                        next_grapheme_boundary(&state.ui_state.bookmark_label_buffer, cursor);
+                    state
+                        .ui_state
+                        .bookmark_label_buffer
+                        .replace_range(cursor..next, "");
+                }
+            }
+            KeyCode::Left => {
+                let mut state = self.state.borrow_mut();
+                state.ui_state.bookmark_label_cursor = previous_grapheme_boundary(
+                    &state.ui_state.bookmark_label_buffer,
+                    state.ui_state.bookmark_label_cursor,
+                );
+            }
+            KeyCode::Right => {
+                let mut state = self.state.borrow_mut();
+                state.ui_state.bookmark_label_cursor = next_grapheme_boundary(
+                    &state.ui_state.bookmark_label_buffer,
+                    state.ui_state.bookmark_label_cursor,
+                );
+            }
+            KeyCode::Home => self.state.borrow_mut().ui_state.bookmark_label_cursor = 0,
+            KeyCode::End => {
+                let mut state = self.state.borrow_mut();
+                state.ui_state.bookmark_label_cursor = state.ui_state.bookmark_label_buffer.len();
+            }
+            KeyCode::Char(c)
+                if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT =>
+            {
+                let mut state = self.state.borrow_mut();
+                let cursor = state.ui_state.bookmark_label_cursor;
+                state.ui_state.bookmark_label_buffer.insert(cursor, c);
+                state.ui_state.bookmark_label_cursor = cursor + c.len_utf8();
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn close_bookmark_label_editor(&mut self) {
+        let mut state = self.state.borrow_mut();
+        state.ui_state.bookmark_label_buffer.clear();
+        state.ui_state.bookmark_label_cursor = 0;
+        state.ui_state.bookmark_label_old_name = None;
+        state.ui_state.open_window(WindowType::Bookmarks);
+    }
+
+    fn edit_selected_bookmark_label(&mut self) {
+        let mut state = self.state.borrow_mut();
+        let name = state
+            .ui_state
+            .selected_list_index(state.ui_state.bookmarks_selected_index)
+            .and_then(|i| state.ui_state.bookmarks.get(i))
+            .map(|(name, _)| name.clone());
+        if let Some(name) = name {
+            state.ui_state.bookmark_label_buffer = name.clone();
+            state.ui_state.bookmark_label_cursor = name.len();
+            state.ui_state.bookmark_label_old_name = Some(name);
+            state.ui_state.open_window(WindowType::BookmarkLabelEditor);
+        }
+    }
+
+    fn save_bookmark_label(&mut self) -> eyre::Result<()> {
+        let Some(epub) = self.ebook.as_ref() else {
+            return Ok(());
+        };
+        let (old_name, new_name) = {
+            let state = self.state.borrow();
+            (
+                state.ui_state.bookmark_label_old_name.clone(),
+                state.ui_state.bookmark_label_buffer.trim().to_string(),
+            )
+        };
+        let Some(old_name) = old_name else {
+            return Ok(());
+        };
+        if new_name.is_empty() {
+            self.close_bookmark_label_editor();
+            return Ok(());
+        }
+        self.db_state
+            .update_bookmark_label(epub.as_ref(), &old_name, &new_name)?;
+        self.refresh_bookmarks()?;
+        self.close_bookmark_label_editor();
+        Ok(())
+    }
+
     fn handle_highlight_comment_editor_keys(&mut self, key: KeyEvent) -> eyre::Result<()> {
         match key.code {
             KeyCode::Esc => {
@@ -4854,6 +4972,8 @@ where
             Self::render_dictionary_command_input_static(frame, state, &theme);
         } else if state.ui_state.active_window == WindowType::SettingsTextInput {
             Self::render_settings_text_input_static(frame, state, &theme);
+        } else if state.ui_state.active_window == WindowType::BookmarkLabelEditor {
+            Self::render_bookmark_label_input_static(frame, state, &theme);
         } else if state.ui_state.active_window == WindowType::HighlightCommentEditor {
             Self::render_highlight_comment_editor_static(frame, state, &theme);
         } else if state.ui_state.active_window == WindowType::ConfirmDeleteHighlight {
@@ -5431,6 +5551,36 @@ where
                     .count()
                     .min(area.width.saturating_sub(2) as usize) as u16
                 + 1,
+            area.y + 1,
+        ));
+    }
+
+    fn render_bookmark_label_input_static(
+        frame: &mut Frame,
+        state: &ApplicationState,
+        theme: &Theme,
+    ) {
+        let area = Rect::new(
+            frame.area().x + frame.area().width / 6,
+            frame.area().y + frame.area().height / 2 - 2,
+            frame.area().width * 2 / 3,
+            3,
+        );
+        let input = Paragraph::new(Line::from(state.ui_state.bookmark_label_buffer.as_str()))
+            .block(
+                Block::default()
+                    .title("Bookmark label — Enter saves, Esc cancels")
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(theme.info_fg)),
+            );
+        frame.render_widget(Clear, area);
+        frame.render_widget(input, area);
+        let cursor_chars = state.ui_state.bookmark_label_buffer
+            [..state.ui_state.bookmark_label_cursor]
+            .chars()
+            .count();
+        frame.set_cursor_position((
+            area.x + cursor_chars.min(area.width.saturating_sub(2) as usize) as u16 + 1,
             area.y + 1,
         ));
     }
