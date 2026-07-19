@@ -1,12 +1,14 @@
 use ratatui::{
     Frame,
     layout::Rect,
-    style::Modifier,
-    text::Line,
+    style::{Modifier, Style},
+    text::{Line, Span},
     widgets::{Block, Borders, Clear, Paragraph},
 };
 
 use crate::theme::Theme;
+
+use super::fuzzy_filter_indices;
 
 /// A help line is a section header (vs an indented item) when it has exactly
 /// one leading space, e.g. `" Navigation:"`. Items start with three spaces.
@@ -60,7 +62,8 @@ const HELP_TEXT: &[&str] = &[
     "   r                 Library (history + scanned directories)",
     "   R                 Reading Statistics",
     "   s                 Settings",
-    "   /                 Fuzzy-filter list windows (Esc clears, Enter picks)",
+    "   /                 Fuzzy-filter list and Help windows",
+    "                     (Esc clears; Enter applies)",
     " Library Window:",
     "   Enter             Open book",
     "   c                 Toggle selected book details and cover",
@@ -113,8 +116,57 @@ impl HelpWindow {
         HELP_TEXT.len()
     }
 
-    pub fn max_scroll_offset(area: Rect) -> u16 {
-        let content_len = HELP_TEXT.len();
+    pub fn filterable_lines() -> Vec<String> {
+        HELP_TEXT
+            .iter()
+            .filter(|line| !is_section_header(line))
+            .map(|line| (*line).to_string())
+            .collect()
+    }
+
+    fn filtered_text(query: Option<&str>) -> Vec<&'static str> {
+        let Some(query) = query else {
+            return HELP_TEXT.to_vec();
+        };
+        let items: Vec<&str> = HELP_TEXT
+            .iter()
+            .copied()
+            .filter(|line| !is_section_header(line))
+            .collect();
+        let matches = fuzzy_filter_indices(query, &items);
+        let mut matched = vec![false; items.len()];
+        for index in matches {
+            matched[index] = true;
+        }
+
+        let mut result = Vec::new();
+        let mut item_index = 0;
+        let mut section_start = 0;
+        while section_start < HELP_TEXT.len() {
+            let section_end = HELP_TEXT[section_start + 1..]
+                .iter()
+                .position(|line| is_section_header(line))
+                .map_or(HELP_TEXT.len(), |offset| section_start + 1 + offset);
+            let section_item_count = section_end - section_start - 1;
+            if matched[item_index..item_index + section_item_count]
+                .iter()
+                .any(|matched| *matched)
+            {
+                result.push(HELP_TEXT[section_start]);
+                for (offset, line) in HELP_TEXT[section_start + 1..section_end].iter().enumerate() {
+                    if matched[item_index + offset] {
+                        result.push(line);
+                    }
+                }
+            }
+            item_index += section_item_count;
+            section_start = section_end;
+        }
+        result
+    }
+
+    pub fn max_scroll_offset(area: Rect, filter: Option<&str>) -> u16 {
+        let content_len = Self::filtered_text(filter).len();
         let height = (content_len as u16 + 2).min(area.height);
         let inner_height = height.saturating_sub(2) as usize;
         content_len
@@ -122,12 +174,19 @@ impl HelpWindow {
             .min(u16::MAX as usize) as u16
     }
 
-    pub fn render(frame: &mut Frame, area: Rect, scroll_offset: u16, theme: &Theme) {
+    pub fn render(
+        frame: &mut Frame,
+        area: Rect,
+        scroll_offset: u16,
+        filter_query: Option<&str>,
+        filter_status: Option<&str>,
+        theme: &Theme,
+    ) {
         let header_style = theme
             .base_style()
             .fg(theme.info_fg)
             .add_modifier(Modifier::BOLD);
-        let help_content: Vec<Line> = HELP_TEXT
+        let help_content: Vec<Line> = Self::filtered_text(filter_query)
             .iter()
             .map(|&s| {
                 let line = Line::from(s);
@@ -149,14 +208,19 @@ impl HelpWindow {
 
         frame.render_widget(Clear, popup_area);
 
+        let mut block = Block::default()
+            .title("Help (?)")
+            .borders(Borders::ALL)
+            .style(theme.base_style());
+        if let Some(filter) = filter_status {
+            block = block.title_bottom(Span::styled(
+                filter.to_string(),
+                Style::default().fg(theme.warning_fg),
+            ));
+        }
         let help_paragraph = Paragraph::new(help_content)
             .style(theme.base_style())
-            .block(
-                Block::default()
-                    .title("Help (?)")
-                    .borders(Borders::ALL)
-                    .style(theme.base_style()),
-            )
+            .block(block)
             .scroll((scroll_offset, 0));
 
         frame.render_widget(help_paragraph, popup_area);
@@ -170,13 +234,13 @@ mod tests {
     #[test]
     fn max_scroll_offset_zero_when_help_fits() {
         let area = Rect::new(0, 0, 120, 100);
-        assert_eq!(HelpWindow::max_scroll_offset(area), 0);
+        assert_eq!(HelpWindow::max_scroll_offset(area, None), 0);
     }
 
     #[test]
     fn max_scroll_offset_positive_when_help_overflows() {
         let area = Rect::new(0, 0, 120, 10);
-        assert!(HelpWindow::max_scroll_offset(area) > 0);
+        assert!(HelpWindow::max_scroll_offset(area, None) > 0);
     }
 
     #[test]
@@ -190,5 +254,32 @@ mod tests {
             HELP_TEXT.iter().any(|line| is_section_header(line)),
             "help text should contain section headers"
         );
+    }
+
+    #[test]
+    fn filtering_keeps_matching_lines_and_their_headers() {
+        let lines = HelpWindow::filtered_text(Some("bookmark"));
+        assert!(lines.contains(&" Windows & Tools:"));
+        assert!(lines.contains(&"   B                 Bookmarks"));
+        assert!(!lines.contains(&" Navigation:"));
+        assert!(!lines.contains(&"   k / Up            Line Up"));
+    }
+
+    #[test]
+    fn filtering_drops_empty_sections() {
+        let lines = HelpWindow::filtered_text(Some("wikipedia"));
+        assert!(lines.contains(&" Selection Mode:"));
+        assert!(lines.contains(&"   p                 Wikipedia Summary"));
+        assert_eq!(
+            lines.iter().filter(|line| is_section_header(line)).count(),
+            1
+        );
+    }
+
+    #[test]
+    fn filtered_scroll_bounds_use_visible_content() {
+        let area = Rect::new(0, 0, 80, 10);
+        assert!(HelpWindow::max_scroll_offset(area, None) > 0);
+        assert_eq!(HelpWindow::max_scroll_offset(area, Some("bookmark")), 0);
     }
 }

@@ -105,6 +105,15 @@ fn help_window() {
 }
 
 #[test]
+fn help_window_filtered() {
+    let mut reader = test_reader();
+    press_char(&mut reader, '?');
+    press_char(&mut reader, '/');
+    type_str(&mut reader, "bookmark");
+    insta::assert_snapshot!(reader.terminal.backend());
+}
+
+#[test]
 fn toc_window() {
     let mut reader = test_reader();
     press_char(&mut reader, 't');

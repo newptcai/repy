@@ -236,6 +236,8 @@ Search functionality supports regular expressions.
 ## Keybindings
 
 Press `?` in the TUI to see the help window at any time (`Help (?)`).
+Inside Help, press `/` to fuzzy-filter keybinding lines; matching section
+headers remain visible. `Enter` keeps the filter applied, and `Esc` clears it.
 
 ### Navigation
 - `k` / `Up` --- Line Up
@@ -315,8 +317,9 @@ Press `?` in the TUI to see the help window at any time (`Help (?)`).
   - Dictionary command templates use `%q` as the query placeholder
 - `q` --- Quit / Close Window
 
-In the Table of Contents, Bookmarks, Highlights, and Library windows, press
+In the Help, Table of Contents, Bookmarks, Highlights, and Library windows, press
 `/` to fuzzy-filter the list. Matches narrow as you type, best match first.
+In Help, `Enter` applies the filter without acting on a line. In list windows,
 `Enter` acts on the selected entry directly, or confirms the filter so
 `j`/`k` can navigate the narrowed list; `Esc` clears the filter (a second
 `Esc` closes the window).

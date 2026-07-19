@@ -4223,9 +4223,61 @@ where
 
     fn handle_help_mode_keys(&mut self, key: KeyEvent, repeat_count: u32) -> eyre::Result<()> {
         let (term_width, term_height) = crossterm::terminal::size().unwrap_or((80, 24));
-        let max_offset = HelpWindow::max_scroll_offset(Rect::new(0, 0, term_width, term_height));
+        let active = self.state.borrow().ui_state.list_filter_active;
+        if active {
+            let items = HelpWindow::filterable_lines();
+            let mut state = self.state.borrow_mut();
+            let ui = &mut state.ui_state;
+            match key.code {
+                KeyCode::Esc => ui.clear_list_filter(),
+                KeyCode::Enter => ui.list_filter_active = false,
+                KeyCode::Backspace => {
+                    ui.list_filter_query.pop();
+                    ui.list_filter_indices =
+                        Some(fuzzy_filter_indices(&ui.list_filter_query, &items));
+                }
+                KeyCode::Char(c)
+                    if !key.modifiers.contains(KeyModifiers::CONTROL)
+                        && !key.modifiers.contains(KeyModifiers::ALT) =>
+                {
+                    ui.list_filter_query.push(c);
+                    ui.list_filter_indices =
+                        Some(fuzzy_filter_indices(&ui.list_filter_query, &items));
+                }
+                _ => {}
+            }
+            ui.help_scroll_offset = 0;
+            return Ok(());
+        }
+
+        let filter_query = {
+            let state = self.state.borrow();
+            state
+                .ui_state
+                .list_filter_indices
+                .as_ref()
+                .map(|_| state.ui_state.list_filter_query.as_str())
+                .map(str::to_owned)
+        };
+        let max_offset = HelpWindow::max_scroll_offset(
+            Rect::new(0, 0, term_width, term_height),
+            filter_query.as_deref(),
+        );
 
         match key.code {
+            KeyCode::Char('/') => {
+                let mut state = self.state.borrow_mut();
+                state.ui_state.list_filter_active = true;
+                state.ui_state.list_filter_query.clear();
+                state.ui_state.list_filter_indices =
+                    Some((0..HelpWindow::filterable_lines().len()).collect());
+                state.ui_state.help_scroll_offset = 0;
+            }
+            KeyCode::Esc if filter_query.is_some() => {
+                let mut state = self.state.borrow_mut();
+                state.ui_state.clear_list_filter();
+                state.ui_state.help_scroll_offset = 0;
+            }
             KeyCode::Esc | KeyCode::Char('q') | KeyCode::Enter => {
                 let mut state = self.state.borrow_mut();
                 state.ui_state.open_window(WindowType::Reader);
@@ -4603,10 +4655,18 @@ where
 
         // Render overlays/modals if active
         if state.ui_state.show_help {
+            let filter_query = state
+                .ui_state
+                .list_filter_indices
+                .as_ref()
+                .map(|_| state.ui_state.list_filter_query.as_str());
+            let filter_status = state.ui_state.list_filter_status();
             HelpWindow::render(
                 frame,
                 frame.area(),
                 state.ui_state.help_scroll_offset,
+                filter_query,
+                filter_status.as_deref(),
                 &theme,
             );
         } else if state.ui_state.show_toc {
