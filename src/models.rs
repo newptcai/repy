@@ -50,7 +50,7 @@ pub enum WindowType {
     LinkPreview,
 }
 
-#[derive(Debug, Clone, PartialEq, Default)]
+#[derive(Debug, Clone, PartialEq, Default, Serialize)]
 pub struct ReadingStatsTotals {
     pub seconds: i64,
     pub rows: i64,
@@ -78,6 +78,32 @@ pub struct ReadingStatistics {
     pub longest_streak_days: usize,
     pub estimated_book_minutes_left: Option<i64>,
     pub estimated_chapter_minutes_left: Option<i64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct BookReadingStatistics {
+    pub book_id: String,
+    pub title: Option<String>,
+    pub author: Option<String>,
+    #[serde(flatten)]
+    pub total: ReadingStatsTotals,
+    pub wpm: Option<f64>,
+    pub first_read: String,
+    pub last_read: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct ReadingStatisticsExport {
+    pub global: GlobalReadingStatistics,
+    pub books: Vec<BookReadingStatistics>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct GlobalReadingStatistics {
+    #[serde(flatten)]
+    pub total: ReadingStatsTotals,
+    pub wpm: Option<f64>,
+    pub current_streak_days: usize,
 }
 
 #[derive(Debug, Clone, PartialEq)]

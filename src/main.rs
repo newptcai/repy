@@ -6,6 +6,7 @@ use repy::{
     logging::{self, LogLevel},
     renderer,
     state::State,
+    statistics,
     ui::reader::Reader,
 };
 
@@ -36,12 +37,18 @@ fn main() -> Result<()> {
         println!("history: {}", cli.history);
         println!("dump: {}", cli.dump);
         println!("export_highlights: {:?}", cli.export_highlights);
+        println!("export_stats: {:?}", cli.export_stats);
         println!("ebook: {:?}", cli.ebook);
         return Ok(());
     }
 
     if let Some(book) = cli.export_highlights.as_ref() {
         export_highlights(book, cli.format)?;
+        return Ok(());
+    }
+
+    if let Some(path) = cli.export_stats.as_ref() {
+        export_statistics(path, cli.format)?;
         return Ok(());
     }
 
@@ -225,6 +232,19 @@ fn export_highlights(filepath: &std::path::Path, format: ExportFormat) -> Result
             print!("{}", highlights_to_markdown(book.as_ref(), &highlights));
         }
     }
+    Ok(())
+}
+
+fn export_statistics(filepath: &std::path::Path, format: ExportFormat) -> Result<()> {
+    let stats = State::new()?.get_reading_statistics_export()?;
+    if stats.global.total.sessions == 0 {
+        eyre::bail!("no reading sessions found; the statistics database is missing or empty");
+    }
+    let output = match format {
+        ExportFormat::Json => statistics::to_json(&stats)?,
+        ExportFormat::Md => statistics::to_markdown(&stats),
+    };
+    std::fs::write(filepath, output)?;
     Ok(())
 }
 

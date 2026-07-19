@@ -2,6 +2,17 @@ use assert_cmd::prelude::*;
 use predicates::prelude::*;
 use std::process::Command;
 
+fn sample_identity(book_id: &str) -> repy::models::BookIdentity {
+    repy::models::BookIdentity {
+        book_id: book_id.into(),
+        identifier: None,
+        title: Some("CLI Test Book".into()),
+        creator: Some("Test Author".into()),
+        spine_hrefs_hash: "spines".into(),
+        content_fingerprints_hash: "content".into(),
+    }
+}
+
 #[test]
 fn test_history_flag() {
     let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("repy"));
@@ -176,6 +187,60 @@ fn test_export_highlights_markdown() {
     cmd.assert()
         .success()
         .stdout(predicates::str::contains("# Highlights: Accessible EPUB 3"));
+}
+
+#[test]
+fn test_export_stats_json() {
+    let dir = tempfile::tempdir().unwrap();
+    let data_dir = dir.path().join("repy");
+    let state = repy::state::State::new_at(data_dir.join("states.db")).unwrap();
+    let identity = sample_identity("cli-stats");
+    state.upsert_book_record(&identity).unwrap();
+    let ended = chrono::Utc::now();
+    state
+        .insert_reading_session(
+            &identity.book_id,
+            ended - chrono::Duration::minutes(20),
+            ended,
+            12,
+            400,
+        )
+        .unwrap();
+    state
+        .insert_reading_session(
+            &identity.book_id,
+            ended - chrono::Duration::minutes(10),
+            ended,
+            8,
+            200,
+        )
+        .unwrap();
+    drop(state);
+
+    let output = dir.path().join("stats.json");
+    let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("repy"));
+    cmd.env("XDG_CONFIG_HOME", dir.path())
+        .arg("--export-stats")
+        .arg(&output);
+    cmd.assert().success();
+    let value: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(output).unwrap()).unwrap();
+    assert_eq!(value["global"]["sessions"], 2);
+    assert_eq!(value["books"][0]["title"], "CLI Test Book");
+}
+
+#[test]
+fn test_export_stats_errors_when_empty() {
+    let dir = tempfile::tempdir().unwrap();
+    let output = dir.path().join("stats.json");
+    let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("repy"));
+    cmd.env("XDG_CONFIG_HOME", dir.path())
+        .arg("--export-stats")
+        .arg(&output);
+    cmd.assert().failure().stderr(predicates::str::contains(
+        "statistics database is missing or empty",
+    ));
+    assert!(!output.exists());
 }
 
 #[test]

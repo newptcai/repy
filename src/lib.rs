@@ -11,6 +11,7 @@ pub mod parser;
 pub mod renderer;
 pub mod settings;
 pub mod state;
+pub mod statistics;
 pub mod sync;
 pub mod theme;
 pub mod ui;

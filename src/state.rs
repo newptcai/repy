@@ -1,6 +1,7 @@
 use crate::models::{
-    BookIdentity, Highlight, LibraryCacheEntry, LibraryItem, ReadingState, ReadingStatistics,
-    ReadingStatsTotals, ScannedBook,
+    BookIdentity, BookReadingStatistics, GlobalReadingStatistics, Highlight, LibraryCacheEntry,
+    LibraryItem, ReadingState, ReadingStatistics, ReadingStatisticsExport, ReadingStatsTotals,
+    ScannedBook,
 };
 use crate::theme::ColorTheme;
 use chrono::{DateTime, Local, NaiveDate, Utc};
@@ -135,12 +136,19 @@ impl State {
         let prefix = get_app_data_prefix()?;
         let filepath = prefix.join("states.db");
 
+        Self::new_at(filepath)
+    }
+
+    /// Open a state database at an explicit path.
+    pub fn new_at(filepath: impl AsRef<std::path::Path>) -> Result<Self> {
+        let filepath = filepath.as_ref();
+
         // Ensure the parent directory exists
         if let Some(parent) = filepath.parent() {
             std::fs::create_dir_all(parent)?;
         }
 
-        let conn = Connection::open(&filepath)?;
+        let conn = Connection::open(filepath)?;
         conn.pragma_update(None, "journal_mode", "WAL")?;
 
         // Always ensure the schema exists. Tables are created only if missing,
@@ -1152,6 +1160,45 @@ impl State {
             longest_streak_days,
             estimated_book_minutes_left: None,
             estimated_chapter_minutes_left: None,
+        })
+    }
+
+    pub fn get_reading_statistics_export(&self) -> Result<ReadingStatisticsExport> {
+        let summary = self.get_reading_statistics(None)?;
+        let mut stmt = self.conn.prepare(
+            "SELECT s.book_id, b.title, b.creator,
+                    SUM(s.duration_seconds), SUM(s.rows), SUM(s.words), COUNT(*),
+                    MIN(s.started_at), MAX(s.ended_at)
+             FROM reading_sessions s
+             LEFT JOIN books b ON b.book_id = s.book_id
+             GROUP BY s.book_id
+             ORDER BY SUM(s.duration_seconds) DESC, s.book_id",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            let total = ReadingStatsTotals {
+                seconds: row.get(3)?,
+                rows: row.get(4)?,
+                words: row.get(5)?,
+                sessions: row.get(6)?,
+            };
+            Ok(BookReadingStatistics {
+                book_id: row.get(0)?,
+                title: row.get(1)?,
+                author: row.get(2)?,
+                wpm: total.words_per_minute(),
+                total,
+                first_read: row.get(7)?,
+                last_read: row.get(8)?,
+            })
+        })?;
+        let global_wpm = summary.global.words_per_minute();
+        Ok(ReadingStatisticsExport {
+            global: GlobalReadingStatistics {
+                total: summary.global,
+                wpm: global_wpm,
+                current_streak_days: summary.current_streak_days,
+            },
+            books: rows.collect::<rusqlite::Result<Vec<_>>>()?,
         })
     }
 

@@ -27,7 +27,11 @@ pub struct Cli {
     #[clap(long, value_name = "BOOK")]
     pub export_highlights: Option<PathBuf>,
 
-    /// Output format for --export-highlights
+    /// Export reading statistics to a file
+    #[clap(long, value_name = "PATH")]
+    pub export_stats: Option<PathBuf>,
+
+    /// Output format for --export-highlights or --export-stats
     #[clap(long, value_enum, default_value_t = ExportFormat::Json)]
     pub format: ExportFormat,
 

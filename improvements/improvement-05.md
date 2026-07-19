@@ -1,6 +1,6 @@
 # Improvement 05 — Export reading statistics (--export-stats)
 
-Status: todo
+Status: done
 
 Follow the "Codex Improvement Tasks" section of AGENTS.md for process rules
 (tests, checks, commit, status update).

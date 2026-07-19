@@ -188,6 +188,7 @@ repy -c FILE     # Use a specific configuration file
 repy -v          # Increase verbosity (for debugging)
 repy --debug     # Enable debug output
 repy --export-highlights /path/to/book.epub
+repy --export-stats reading-stats.json
 ```
 
 `--export-highlights` writes all persisted highlights/comments for that EPUB to
@@ -196,6 +197,30 @@ stdout. The default format is JSON (including the book identity); pass
 
 ```sh
 repy --export-highlights book.epub --format md > notes.md
+```
+
+`--export-stats PATH` writes accumulated reading statistics as JSON by default,
+or as a Markdown report with `--format md`:
+
+```sh
+repy --export-stats reading-stats.md --format md
+```
+
+The Markdown report begins with a global summary followed by books ordered by
+reading time:
+
+```markdown
+# Reading Statistics
+
+## Global Summary
+
+- Time: 12h 35m
+- Words: 145230
+...
+
+| Title | Time | Words | WPM | Last read |
+| --- | ---: | ---: | ---: | --- |
+| The Example Book | 4h 20m | 50210 | 193 | 2026-07-19 |
 ```
 
 Generate and install a static completion script for your shell:

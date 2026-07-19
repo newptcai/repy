@@ -7,6 +7,7 @@ use ratatui::{
 };
 
 use crate::models::{ReadingStatistics, ReadingStatsTotals};
+use crate::statistics::format_duration;
 use crate::theme::Theme;
 use crate::ui::windows::centered_popup_area;
 
@@ -78,10 +79,7 @@ impl StatisticsWindow {
                 label.to_string(),
                 theme.base_style().add_modifier(Modifier::BOLD),
             )]),
-            Line::from(format!(
-                "  Time:     {}",
-                Self::format_seconds(totals.seconds)
-            )),
+            Line::from(format!("  Time:     {}", format_duration(totals.seconds))),
             Line::from(format!("  Words:    {}", totals.words)),
             Line::from(format!("  Rows:     {}", totals.rows)),
             Line::from(format!("  Sessions: {}", totals.sessions)),
@@ -93,17 +91,6 @@ impl StatisticsWindow {
                     .unwrap_or_else(|| "N/A".to_string())
             )),
         ]
-    }
-
-    fn format_seconds(seconds: i64) -> String {
-        let seconds = seconds.max(0);
-        let hours = seconds / 3600;
-        let minutes = (seconds % 3600) / 60;
-        if hours > 0 {
-            format!("{hours}h {minutes}m")
-        } else {
-            format!("{minutes}m")
-        }
     }
 
     fn format_minutes(minutes: i64) -> String {
