@@ -366,6 +366,11 @@ Press `!` to toggle reading aloud from the current paragraph.
 ## Configuration
 
 The configuration file is automatically created on first run with sensible defaults.
+If an existing file cannot be read or parsed, `repy` still starts with default
+settings and shows the load error as a persistent warning. That fallback
+session never writes `configuration.json`; changes made in Settings apply only
+for the session and show a warning that they were not saved. Reading positions,
+bookmarks, highlights, and other SQLite state continue to be saved normally.
 
 ### Color Themes
 

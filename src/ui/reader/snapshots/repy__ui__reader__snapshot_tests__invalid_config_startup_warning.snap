@@ -1,0 +1,29 @@
+---
+source: src/ui/reader/snapshot_tests.rs
+assertion_line: 74
+expression: reader.terminal.backend()
+---
+"                         Accessible EPUB 3                           ~1m left 0%"
+"                                                                                "
+"                                                                                "
+"                            [[Image: First Edition]]                            "
+"                                                                                "
+"                                       ***                                      "
+"                                                                                "
+"                                                                                "
+"                                                                                "
+"                                                                                "
+"  ┌──────────────────────────────────────────────────────────────────────────┐  "
+"  │Config invalid, using defaults: /tmp/repy-invalid-configuration.json: key │  "
+"  │must be a string at line 1 column 3                                       │  "
+"  └ press any key to dismiss ────────────────────────────────────────────────┘  "
+"                                                                                "
+"                                                                                "
+"                                                                                "
+"                                                                                "
+"                                                                                "
+"                                                                                "
+"                                                                                "
+"                                                                                "
+"                                                                                "
+"                                                                                "

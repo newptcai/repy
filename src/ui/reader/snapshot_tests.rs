@@ -8,6 +8,7 @@ use crate::settings::{CfgDefaultKeymaps, Settings};
 use crate::state::State;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::backend::TestBackend;
+use std::path::PathBuf;
 
 fn test_reader() -> Reader<TestBackend> {
     test_reader_with_settings(Settings::default())
@@ -52,6 +53,37 @@ fn type_str(reader: &mut Reader<TestBackend>, s: &str) {
 fn initial_screen() {
     let reader = test_reader();
     insta::assert_snapshot!(reader.terminal.backend());
+}
+
+#[test]
+fn invalid_config_starts_with_warning_and_blocks_settings_save() {
+    let path = PathBuf::from("/tmp/repy-invalid-configuration.json");
+    let error = format!(
+        "{}: key must be a string at line 1 column 3",
+        path.display()
+    );
+    let config = Config::fallback(path, error);
+    let mut reader = Reader::with_backend(config, TestBackend::new(80, 24), State::new_for_test())
+        .expect("failed to construct fallback reader");
+    let fixture_path = format!("{}/tests/fixtures/small.epub", env!("CARGO_MANIFEST_DIR"));
+    reader
+        .load_ebook(&fixture_path)
+        .expect("failed to load fixture epub");
+
+    reader.draw().expect("failed to draw startup warning");
+    insta::assert_snapshot!("invalid_config_startup_warning", reader.terminal.backend());
+
+    press_char(&mut reader, 'x'); // Dismiss the sticky startup warning.
+    press_char(&mut reader, 's'); // Open Settings.
+    press(&mut reader, KeyCode::Enter); // Toggle and attempt to persist the first row.
+    let state = reader.state.borrow();
+    let message = state.ui_state.message.as_deref().unwrap_or_default();
+    assert!(
+        message
+            .contains("Config not saved because /tmp/repy-invalid-configuration.json is invalid"),
+        "unexpected message: {message}"
+    );
+    assert!(state.ui_state.message_persistent);
 }
 
 #[test]

@@ -1,5 +1,5 @@
 use crate::settings::{CfgDefaultKeymaps, Keymap, Settings};
-use eyre::Result;
+use eyre::{Result, eyre};
 use serde::Deserialize;
 use serde_json;
 use std::{fs, path::PathBuf};
@@ -14,15 +14,17 @@ struct RawConfig {
 }
 
 /// Parse settings and keymaps from a config file path.
-/// Returns defaults for any missing or invalid fields.
+/// Returns defaults when the file does not exist; malformed files are errors.
 fn parse_config_file(filepath: &PathBuf) -> Result<(Settings, CfgDefaultKeymaps)> {
-    if filepath.exists() {
-        let config_str = fs::read_to_string(filepath)?;
-        if let Ok(raw) = serde_json::from_str::<RawConfig>(&config_str) {
-            return Ok((raw.setting, raw.keymap_user));
-        }
+    if !filepath.exists() {
+        return Ok((Settings::default(), CfgDefaultKeymaps::default()));
     }
-    Ok((Settings::default(), CfgDefaultKeymaps::default()))
+
+    let config_str =
+        fs::read_to_string(filepath).map_err(|error| eyre!("{}: {}", filepath.display(), error))?;
+    let raw = serde_json::from_str::<RawConfig>(&config_str)
+        .map_err(|error| eyre!("{}: {}", filepath.display(), error))?;
+    Ok((raw.setting, raw.keymap_user))
 }
 
 #[derive(Debug, Clone)]
@@ -31,12 +33,20 @@ pub struct Config {
     pub keymap: Keymap,
     keymap_user_dict: CfgDefaultKeymaps, // Used for building help menu text, will be private
     filepath: PathBuf,
+    fallback_error: Option<String>,
 }
 
 impl Config {
+    pub fn default_filepath() -> Result<PathBuf> {
+        Ok(get_app_data_prefix()?.join("configuration.json"))
+    }
+
     pub fn new() -> Result<Self> {
-        let prefix = get_app_data_prefix()?;
-        let filepath = prefix.join("configuration.json");
+        let filepath = Self::default_filepath()?;
+        let prefix = filepath
+            .parent()
+            .expect("default config path has a parent")
+            .to_path_buf();
 
         let (settings, keymap_user_dict) = if filepath.exists() {
             let parsed = parse_config_file(&filepath)?;
@@ -62,6 +72,7 @@ impl Config {
             keymap,
             keymap_user_dict,
             filepath,
+            fallback_error: None,
         })
     }
 
@@ -86,11 +97,43 @@ impl Config {
             keymap,
             keymap_user_dict,
             filepath,
+            fallback_error: None,
+        })
+    }
+
+    /// Build a pure-default, read-only config after loading `filepath` failed.
+    /// This constructor never reads or writes the invalid file.
+    pub fn fallback(filepath: PathBuf, load_error: impl Into<String>) -> Self {
+        Self {
+            settings: Settings::default(),
+            keymap: Keymap::default(),
+            keymap_user_dict: CfgDefaultKeymaps::default(),
+            filepath,
+            fallback_error: Some(load_error.into()),
+        }
+    }
+
+    pub fn startup_warning(&self) -> Option<String> {
+        self.fallback_error
+            .as_ref()
+            .map(|error| format!("Config invalid, using defaults: {error}"))
+    }
+
+    pub fn save_blocked_warning(&self) -> Option<String> {
+        self.fallback_error.as_ref().map(|_| {
+            format!(
+                "Config not saved because {} is invalid",
+                self.filepath.display()
+            )
         })
     }
 
     /// Save current configuration to file
     pub fn save(&self) -> Result<()> {
+        if let Some(message) = self.save_blocked_warning() {
+            return Err(eyre!(message));
+        }
+
         let config_json = serde_json::json!({
             "Setting": self.settings,
             "Keymap": self.keymap_user_dict,
@@ -118,6 +161,7 @@ impl Config {
             keymap,
             keymap_user_dict,
             filepath,
+            fallback_error: None,
         })
     }
 }
@@ -459,10 +503,23 @@ mod tests {
         // Write invalid JSON
         std::fs::write(&config_path, "{ invalid json }")?;
 
-        // Loading should fallback to defaults
-        let config = Config::load_from(config_path.clone())?;
-        let default_settings = Settings::default();
-        assert_eq!(config.settings, default_settings);
+        let error = Config::load_from(config_path.clone())
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains(&config_path.display().to_string()),
+            "{error}"
+        );
+        assert!(error.contains("line 1 column"), "{error}");
+
+        let original = std::fs::read_to_string(&config_path)?;
+        let mut config = Config::fallback(config_path.clone(), error);
+        assert_eq!(config.settings, Settings::default());
+        assert_eq!(config.keymap_user_dict(), &CfgDefaultKeymaps::default());
+        config.settings.mouse_support = true;
+        let save_error = config.save().unwrap_err().to_string();
+        assert!(save_error.contains("not saved"), "{save_error}");
+        assert_eq!(std::fs::read_to_string(&config_path)?, original);
 
         // Clean up
         std::fs::remove_file(&config_path)?;
@@ -542,9 +599,11 @@ mod tests {
         std::fs::create_dir_all(empty_config_path.parent().unwrap())?;
         std::fs::write(&empty_config_path, "")?;
 
-        let config = Config::load_from(empty_config_path.clone())?;
-        let default_settings = Settings::default();
-        assert_eq!(config.settings, default_settings);
+        let error = Config::load_from(empty_config_path.clone())
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains(&empty_config_path.display().to_string()));
+        assert!(error.contains("EOF while parsing"));
 
         // Test config with only Setting section
         let settings_only_path = dir.path().join("repy").join("settings_only.json");

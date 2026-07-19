@@ -44,6 +44,11 @@ fn main() -> Result<()> {
         return print_history();
     }
 
+    let config_filepath = match cli.config.as_ref() {
+        Some(filepath) => filepath.clone(),
+        None => Config::default_filepath()?,
+    };
+
     // Load configuration
     let config = match cli.config.as_ref() {
         Some(filepath) => {
@@ -55,14 +60,14 @@ fn main() -> Result<()> {
     let config = match config {
         Ok(config) => config,
         Err(err) => {
-            logging::warn(format!("Could not load configuration: {}", err));
-            eprintln!("Starting with default settings");
-            // We can't create a Config manually due to private fields,
-            // so we'll use a placeholder approach for now
-            return run_tui_with_default_config();
+            return run_tui_with_default_config(&cli, config_filepath, err);
         }
     };
 
+    run_with_config(&cli, config)
+}
+
+fn run_with_config(cli: &Cli, config: Config) -> Result<()> {
     // Handle different CLI modes
     if cli.dump {
         let Some(arg) = cli.ebook.first() else {
@@ -258,8 +263,14 @@ fn highlights_to_markdown(book: &dyn Ebook, highlights: &[repy::models::Highligh
     out
 }
 
-fn run_tui_with_default_config() -> Result<()> {
-    // TODO: Implement a fallback TUI with default config
-    println!("TUI with default configuration not yet implemented");
-    Ok(())
+fn run_tui_with_default_config(
+    cli: &Cli,
+    filepath: std::path::PathBuf,
+    error: eyre::Report,
+) -> Result<()> {
+    let config = Config::fallback(filepath, error.to_string());
+    if let Some(warning) = config.startup_warning() {
+        logging::warn(&warning);
+    }
+    run_with_config(cli, config)
 }

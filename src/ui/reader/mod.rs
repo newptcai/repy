@@ -174,11 +174,16 @@ pub struct ApplicationState {
 
 impl ApplicationState {
     pub fn new(config: Config) -> Self {
+        let startup_warning = config.startup_warning();
+        let mut ui_state = UiState::new();
+        if let Some(warning) = startup_warning {
+            ui_state.set_message(warning, MessageType::Warning);
+        }
         Self {
             reading_state: ReadingState::default(),
             config,
             search_data: None,
-            ui_state: UiState::new(),
+            ui_state,
             should_quit: false,
             count_prefix: String::new(),
             jump_history: Vec::new(),
@@ -186,6 +191,18 @@ impl ApplicationState {
             marks: HashMap::new(),
             book_color_theme: None,
         }
+    }
+
+    /// Persist JSON settings unless this session is protecting an invalid
+    /// config file. Returns whether the settings reached disk.
+    fn save_config(&mut self) -> eyre::Result<bool> {
+        if let Some(warning) = self.config.save_blocked_warning() {
+            logging::warn(&warning);
+            self.ui_state.set_message(warning, MessageType::Warning);
+            return Ok(false);
+        }
+        self.config.save()?;
+        Ok(true)
     }
 
     pub fn theme(&self) -> Theme {
@@ -2810,24 +2827,26 @@ where
             let state = self.state.borrow();
             state.effective_color_theme().next()
         };
-        self.set_effective_color_theme(Some(next))?;
-        self.state
-            .borrow_mut()
-            .ui_state
-            .set_message(format!("Theme: {}", next.name()), MessageType::Info);
+        let saved = self.set_effective_color_theme(Some(next))?;
+        if saved {
+            self.state
+                .borrow_mut()
+                .ui_state
+                .set_message(format!("Theme: {}", next.name()), MessageType::Info);
+        }
         Ok(())
     }
 
-    fn set_effective_color_theme(&mut self, theme: Option<ColorTheme>) -> eyre::Result<()> {
+    fn set_effective_color_theme(&mut self, theme: Option<ColorTheme>) -> eyre::Result<bool> {
         if let Some(epub) = self.ebook.as_ref() {
             self.db_state.set_book_theme(epub.as_ref(), theme)?;
             self.state.borrow_mut().book_color_theme = theme;
+            Ok(true)
         } else {
             let mut state = self.state.borrow_mut();
             state.config.settings.color_theme = theme.unwrap_or(ColorTheme::Default);
-            let _ = state.config.save();
+            state.save_config()
         }
-        Ok(())
     }
 
     fn set_clipboard_text(&mut self, text: String) -> eyre::Result<bool> {
@@ -4311,7 +4330,7 @@ where
                 {
                     let mut state = self.state.borrow_mut();
                     state.config.settings.dictionary_client = query;
-                    let _ = state.config.save();
+                    let _ = state.save_config();
                     state.ui_state.open_window(WindowType::Settings);
                 }
             }
@@ -4347,7 +4366,7 @@ where
                     }
                     _ => {}
                 }
-                state.config.save()?;
+                state.save_config()?;
                 state.ui_state.settings_input_field = None;
                 state.ui_state.settings_input_buffer.clear();
                 state.ui_state.open_window(WindowType::Settings);
@@ -8264,7 +8283,7 @@ where
                 return Ok(());
             }
         }
-        let _ = state.config.save();
+        let _ = state.save_config();
         if rebuild_chapter_breaks {
             // Use current textwidth
             let textwidth = state.reading_state.textwidth;
@@ -8320,11 +8339,12 @@ where
             Some(SettingItem::DictionaryClient) => {
                 let mut state = self.state.borrow_mut();
                 state.config.settings.dictionary_client = "auto".to_string();
-                let _ = state.config.save();
-                state.ui_state.set_message(
-                    "Dictionary client reset to auto".to_string(),
-                    MessageType::Info,
-                );
+                if state.save_config()? {
+                    state.ui_state.set_message(
+                        "Dictionary client reset to auto".to_string(),
+                        MessageType::Info,
+                    );
+                }
             }
             Some(SettingItem::Width) => {
                 let textwidth = self
@@ -8343,67 +8363,75 @@ where
             }
             Some(SettingItem::ParagraphStyle) => {
                 self.state.borrow_mut().config.settings.paragraph_style = ParagraphStyle::Spaced;
-                self.state.borrow().config.save()?;
+                let saved = self.state.borrow_mut().save_config()?;
                 self.stop_tts();
                 let width = self.state.borrow().reading_state.textwidth;
                 self.rebuild_text_structure_with_textwidth(width)?;
-                self.state.borrow_mut().ui_state.set_message(
-                    format!(
-                        "Paragraph style reset to {}",
-                        ParagraphStyle::Spaced.label()
-                    ),
-                    MessageType::Info,
-                );
+                if saved {
+                    self.state.borrow_mut().ui_state.set_message(
+                        format!(
+                            "Paragraph style reset to {}",
+                            ParagraphStyle::Spaced.label()
+                        ),
+                        MessageType::Info,
+                    );
+                }
             }
             Some(SettingItem::LineSpacing) => {
                 self.state.borrow_mut().config.settings.line_spacing = LineSpacing::Single;
-                self.state.borrow().config.save()?;
+                let saved = self.state.borrow_mut().save_config()?;
                 self.stop_tts();
                 let width = self.state.borrow().reading_state.textwidth;
                 self.rebuild_text_structure_with_textwidth(width)?;
-                self.state.borrow_mut().ui_state.set_message(
-                    format!("Line spacing reset to {}", LineSpacing::Single.label()),
-                    MessageType::Info,
-                );
+                if saved {
+                    self.state.borrow_mut().ui_state.set_message(
+                        format!("Line spacing reset to {}", LineSpacing::Single.label()),
+                        MessageType::Info,
+                    );
+                }
             }
             Some(SettingItem::JustifyText) => {
                 self.state.borrow_mut().config.settings.justify_text = false;
-                self.state.borrow().config.save()?;
+                let saved = self.state.borrow_mut().save_config()?;
                 self.stop_tts();
                 let width = self.state.borrow().reading_state.textwidth;
                 self.rebuild_text_structure_with_textwidth(width)?;
-                self.state
-                    .borrow_mut()
-                    .ui_state
-                    .set_message("Justify text reset to false".to_string(), MessageType::Info);
+                if saved {
+                    self.state
+                        .borrow_mut()
+                        .ui_state
+                        .set_message("Justify text reset to false".to_string(), MessageType::Info);
+                }
             }
             Some(SettingItem::ColorTheme) => {
-                self.set_effective_color_theme(None)?;
+                let saved = self.set_effective_color_theme(None)?;
                 let theme_name = self.state.borrow().effective_color_theme().name();
-                self.state
-                    .borrow_mut()
-                    .ui_state
-                    .set_message(format!("Theme reset to {theme_name}"), MessageType::Info);
+                if saved {
+                    self.state
+                        .borrow_mut()
+                        .ui_state
+                        .set_message(format!("Theme reset to {theme_name}"), MessageType::Info);
+                }
             }
             Some(SettingItem::KosyncServer) => {
                 let mut state = self.state.borrow_mut();
                 state.config.settings.kosync_server = Some(DEFAULT_KOSYNC_SERVER.to_string());
-                state.config.save()?;
+                state.save_config()?;
             }
             Some(SettingItem::KosyncUsername) => {
                 let mut state = self.state.borrow_mut();
                 state.config.settings.kosync_username = None;
-                state.config.save()?;
+                state.save_config()?;
             }
             Some(SettingItem::KosyncPassword) => {
                 let mut state = self.state.borrow_mut();
                 state.config.settings.kosync_password = None;
-                state.config.save()?;
+                state.save_config()?;
             }
             Some(SettingItem::OpdsDownloadDirectory) => {
                 let mut state = self.state.borrow_mut();
                 state.config.settings.opds_download_directory = None;
-                state.config.save()?;
+                state.save_config()?;
             }
             _ => {}
         }
