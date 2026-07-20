@@ -1,6 +1,8 @@
 use crate::annotations::{NORMALIZATION_VERSION, normalize_text};
 use crate::css::StyledClasses;
-use crate::models::{InlineStyle, LinkEntry, SourceMap, TextStructure};
+use crate::models::{
+    InlineStyle, LinkEntry, SourceMap, SourceOffsetBias, SourceStyleRange, TextStructure,
+};
 use crate::settings::{LineSpacing, ParagraphStyle};
 use eyre::Result;
 use html2text::config;
@@ -31,6 +33,8 @@ static RE_SVG_BLOCK: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(?is)<svg[\s>].*?</svg>").unwrap());
 static RE_SVG_IMAGE_HREF: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r#"(?is)<image[^>]*?href=["']([^"']+)["']"#).unwrap());
+static RE_EMPHASIS_TAG: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?i)<(/?)(strong|b|em|i)(\s|/?>)").unwrap());
 
 // Pagebreak sentinel regexes
 static RE_PAGEBREAK_SELF: LazyLock<Regex> = LazyLock::new(|| {
@@ -139,9 +143,11 @@ pub fn parse_html_with_styles_and_typography(
     // Parse HTML once
     let fragment = Html::parse_fragment(&html_src);
 
-    // Convert HTML to plain text first with infinite width to preserve paragraphs
-    // then wrap with hyphenation
-    let mut raw_lines = html_to_plain_text(&html_src, usize::MAX)?;
+    // html2text represents emphasis with Markdown-style delimiters. Render a
+    // semantically neutral copy so those synthetic markers never enter the
+    // visible or canonical text; retain `fragment` for semantic inspection.
+    let neutral_html = RE_EMPHASIS_TAG.replace_all(&html_src, "<${1}span${3}");
+    let mut raw_lines = html_to_plain_text(&neutral_html, usize::MAX)?;
 
     // Normalize list markers to match epy style ('- ') instead of html2text style ('* ')
     for line in raw_lines.iter_mut() {
@@ -151,11 +157,6 @@ pub fn parse_html_with_styles_and_typography(
     }
 
     replace_superscript_link_markers(&mut raw_lines);
-    // Strip inline markers before wrapping so invisible chars don't affect line breaks.
-    let mut marker_formatting =
-        extract_formatting(&fragment, starting_line, &raw_lines, styled_classes)?;
-    strip_inline_markers(&mut raw_lines, &mut marker_formatting, starting_line);
-
     // Tighten stanza-style runs of italic-class paragraphs (collapse blank
     // separators between consecutive single-line paragraphs sharing an italic
     // class) BEFORE wrapping, so the operation works on logical paragraphs.
@@ -245,8 +246,9 @@ pub fn parse_html_with_styles_and_typography(
         starting_line,
         &source_map,
     )?;
-    let mut formatting = extract_formatting(&fragment, starting_line, &plain_text, styled_classes)?;
-    convert_formatting_bytes_to_chars(&mut formatting, &plain_text, starting_line);
+    let source_formatting = extract_source_formatting(&fragment, &source_map, styled_classes);
+    let formatting =
+        project_source_formatting(&source_formatting, &source_map, &plain_text, starting_line);
     let links = extract_links(&fragment, starting_line, &source_map)?;
 
     Ok(TextStructure {
@@ -255,6 +257,7 @@ pub fn parse_html_with_styles_and_typography(
         section_rows,
         section_offsets,
         formatting,
+        source_formatting,
         links,
         pagebreak_map,
         image_block_rows,
@@ -1128,357 +1131,135 @@ fn extract_sections(
     Ok((section_offsets, section_rows))
 }
 
-/// Extract basic formatting information (headers, bold, italic)
-#[allow(clippy::type_complexity)]
-fn extract_formatting(
+fn style_attrs(element: &scraper::ElementRef<'_>, styled_classes: &StyledClasses) -> Vec<u32> {
+    let mut attrs = match element.value().name() {
+        "strong" | "b" | "h1" | "h2" | "h3" | "h4" | "h5" | "h6" => vec![1],
+        "em" | "i" => vec![2],
+        _ => Vec::new(),
+    };
+    if let Some(classes) = element.value().attr("class") {
+        for class in classes.split_whitespace() {
+            if styled_classes.bold.contains(class) && !attrs.contains(&1) {
+                attrs.push(1);
+            }
+            if styled_classes.italic.contains(class) && !attrs.contains(&2) {
+                attrs.push(2);
+            }
+        }
+    }
+    attrs
+}
+
+/// Locate semantic formatting in normalized, chapter-local source coordinates.
+fn extract_source_formatting(
     fragment: &Html,
-    starting_line: usize,
-    text_lines: &[String],
+    source_map: &SourceMap,
     styled_classes: &StyledClasses,
-) -> Result<Vec<InlineStyle>> {
-    let mut formatting = Vec::new();
+) -> Vec<SourceStyleRange> {
+    let mut element_ranges = HashMap::new();
+    let mut cursor = 0usize;
+    let mut byte_cursor = 0usize;
 
-    // Helper to normalize whitespace (collapse multiple spaces/newlines to single space)
-    let normalize_text =
-        |text: String| -> String { text.split_whitespace().collect::<Vec<_>>().join(" ") };
-
-    // Build a selector that picks the structural emphasis tags plus, when the
-    // book has any class-driven italic/bold rules, every element carrying a
-    // class. We filter by class membership inside the loop.
-    let selector_str = if styled_classes.is_empty() {
-        "h1, h2, h3, h4, h5, h6, strong, b, em, i".to_string()
-    } else {
-        "h1, h2, h3, h4, h5, h6, strong, b, em, i, [class]".to_string()
-    };
-    let selector = Selector::parse(&selector_str).unwrap();
-
-    // Track cursor for siblings: (line_idx, char_idx)
-    // Relative to text_lines (0-based)
-    let mut high_water_mark: (usize, usize) = (0, 0);
-
-    // Stack: (Element NodeId, match_start: (line, col), match_end: (line, col))
-    let mut stack: Vec<(_, (usize, usize), (usize, usize))> = Vec::new();
-
-    for element in fragment.select(&selector) {
-        // Join text nodes with whitespace so tokens at child boundaries don't
-        // fuse into a single token (e.g. trailing footnote markers stuck to
-        // the previous sentence).
-        let text = normalize_text(element.text().collect::<Vec<_>>().join(" "));
-        if text.is_empty() {
+    for node in fragment.tree.root().descendants() {
+        let Some(text) = node.value().as_text() else {
             continue;
-        }
-
-        let tag_name = element.value().name();
-        let mut attrs: Vec<u32> = match tag_name {
-            "strong" | "b" | "h1" | "h2" | "h3" | "h4" | "h5" | "h6" => vec![1],
-            "em" | "i" => vec![2],
-            _ => Vec::new(),
         };
-        // CSS-class-driven emphasis (italic/bold via stylesheet).
-        if !styled_classes.is_empty() {
-            if let Some(class_attr) = element.value().attr("class") {
-                let mut italic = false;
-                let mut bold = false;
-                for class in class_attr.split_whitespace() {
-                    if !italic && styled_classes.italic.contains(class) {
-                        italic = true;
-                    }
-                    if !bold && styled_classes.bold.contains(class) {
-                        bold = true;
-                    }
-                }
-                if bold && !attrs.contains(&1) {
-                    attrs.push(1);
-                }
-                if italic && !attrs.contains(&2) {
-                    attrs.push(2);
-                }
-            }
-        }
-        if attrs.is_empty() {
+        if node.ancestors().any(|ancestor| {
+            ancestor.value().as_element().is_some_and(|element| {
+                matches!(element.name(), "head" | "title" | "style" | "script")
+            })
+        }) {
             continue;
         }
-
-        // Pop stack until we find a parent or stack empty
-        // We walk up the current element's ancestors
-        let mut ancestors = HashSet::new();
-        let mut curr = element.parent();
-        while let Some(node) = curr {
-            ancestors.insert(node.id());
-            curr = node.parent();
-        }
-
-        let mut parent_in_stack_idx = None;
-        while let Some((stack_id, _, stack_end)) = stack.last() {
-            if ancestors.contains(stack_id) {
-                parent_in_stack_idx = Some(stack.len() - 1);
-                break;
-            } else {
-                let stack_end = *stack_end;
-                // Update high_water_mark to the end of this finished block
-                if stack_end.0 > high_water_mark.0
-                    || (stack_end.0 == high_water_mark.0 && stack_end.1 > high_water_mark.1)
-                {
-                    high_water_mark = stack_end;
-                }
-                stack.pop();
-            }
-        }
-
-        // Determine search start
-        let (start_line, start_col) = if let Some(idx) = parent_in_stack_idx {
-            // Start from parent's start
-            stack[idx].1
-        } else {
-            // Start from high_water_mark
-            high_water_mark
-        };
-
-        // Search for text
-        if let Some(segments) = find_text_across_lines(&text, text_lines, start_line, start_col) {
-            let mut first_start = None;
-            let mut last_end = None;
-
-            for (line_idx, start, end) in segments {
-                for &attr in &attrs {
-                    formatting.push(InlineStyle {
-                        row: (starting_line + line_idx) as u16,
-                        col: start as u16,
-                        n_letters: (end - start) as u16,
-                        attr,
-                    });
-                }
-
-                if first_start.is_none() {
-                    first_start = Some((line_idx, start));
-                }
-                last_end = Some((line_idx, end));
-            }
-
-            if let (Some(s), Some(e)) = (first_start, last_end) {
-                stack.push((element.id(), s, e));
-            }
-        }
-    }
-
-    Ok(formatting)
-}
-
-/// Word boundary exists if the char just before `pos` is not alphanumeric, or
-/// if the candidate text itself starts with a non-alphanumeric char (so the
-/// boundary is intrinsic). Used to keep `find_text_across_lines` from matching
-/// a styled token inside an unrelated longer word.
-fn has_word_boundary_before(line: &str, pos: usize) -> bool {
-    let after = match line[pos..].chars().next() {
-        Some(c) => c,
-        None => return true,
-    };
-    if !after.is_alphanumeric() {
-        return true;
-    }
-    match line[..pos].chars().next_back() {
-        Some(prev) => !prev.is_alphanumeric(),
-        None => true,
-    }
-}
-
-fn has_word_boundary_after(line: &str, pos: usize) -> bool {
-    let before = match line[..pos].chars().next_back() {
-        Some(c) => c,
-        None => return true,
-    };
-    if !before.is_alphanumeric() {
-        return true;
-    }
-    match line[pos..].chars().next() {
-        Some(next) => !next.is_alphanumeric(),
-        None => true,
-    }
-}
-
-fn find_text_across_lines(
-    text_normalized: &str,
-    text_lines: &[String],
-    start_line: usize,
-    start_col: usize,
-) -> Option<Vec<(usize, usize, usize)>> {
-    let tokens: Vec<&str> = text_normalized.split_whitespace().collect();
-    if tokens.is_empty() {
-        return None;
-    }
-
-    // Try to find the sequence of tokens starting from different positions of the first token
-    for line_idx in start_line..text_lines.len() {
-        let line = &text_lines[line_idx];
-        let search_start = if line_idx == start_line { start_col } else { 0 };
-
-        if search_start >= line.len() {
+        let needle = normalize_text(text);
+        if needle.is_empty() {
             continue;
         }
-
-        let first_token = tokens[0];
-        let mut start_search_pos = search_start;
-
-        while let Some(pos) = line[start_search_pos..].find(first_token) {
-            let abs_pos = start_search_pos + pos;
-
-            let advance = line[abs_pos..]
-                .chars()
-                .next()
-                .map(|c| abs_pos + c.len_utf8());
-
-            if has_word_boundary_before(line, abs_pos)
-                && let Some(segments) = match_sequence(&tokens, text_lines, line_idx, abs_pos)
-                && let Some((seg_line, _, seg_end)) = segments.last().copied()
-                && has_word_boundary_after(&text_lines[seg_line], seg_end)
-            {
-                return Some(segments);
-            }
-
-            if let Some(next) = advance {
-                start_search_pos = next;
-            } else {
-                break;
-            }
-        }
-    }
-
-    None
-}
-
-fn match_sequence(
-    tokens: &[&str],
-    text_lines: &[String],
-    start_line: usize,
-    start_col: usize,
-) -> Option<Vec<(usize, usize, usize)>> {
-    let mut segments = Vec::new();
-    let mut current_line_idx = start_line;
-    let mut current_pos = start_col + tokens[0].len();
-
-    let mut current_segment_start = start_col;
-
-    for token in tokens.iter().skip(1) {
-        let line = &text_lines[current_line_idx];
-
-        let lookahead_limit = 20;
-        let search_start = skip_leading_whitespace(line, current_pos);
-        let search_slice = safe_slice(line, search_start, lookahead_limit);
-
-        if let Some(rel_pos) = search_slice.find(token) {
-            // Found on same line
-            // Validate the complete gap, including whitespace skipped before
-            // placing the lookahead window.
-            let token_pos = search_start + rel_pos;
-            let gap = &line[current_pos..token_pos];
-            if is_valid_gap(gap) {
-                current_pos = token_pos + token.len();
-                continue;
-            }
-        }
-
-        // Not found on same line (or gap invalid).
-        // Handle hyphenation: line tail looks like " <prefix>-" where the
-        // token starts with `<prefix>`, and the next line begins with the
-        // remaining suffix.
-        let remaining = &line[current_pos..];
-        let trimmed = remaining.trim_start();
-        let leading_ws_len = remaining.len() - trimmed.len();
-        if let Some(stripped) = trimmed.strip_suffix('-') {
-            if !stripped.is_empty() && token.starts_with(stripped) {
-                let suffix = &token[stripped.len()..];
-                if !suffix.is_empty() && current_line_idx + 1 < text_lines.len() {
-                    let next_line = &text_lines[current_line_idx + 1];
-                    if next_line.starts_with(suffix) {
-                        let line_end = current_pos + leading_ws_len + stripped.len() + 1;
-                        segments.push((current_line_idx, current_segment_start, line_end));
-                        current_line_idx += 1;
-                        current_segment_start = 0;
-                        current_pos = suffix.len();
-                        continue;
-                    }
-                }
-            }
-        }
-
-        // Check next line
-        if is_valid_gap(remaining) {
-            // Close current segment
-            // Trim trailing markers/whitespace from segment end?
-            // current_pos includes up to the end of the last matched token.
-            // But we checked remaining is valid gap.
-            segments.push((current_line_idx, current_segment_start, current_pos));
-
-            // Move to next line
-            current_line_idx += 1;
-            while current_line_idx < text_lines.len()
-                && text_lines[current_line_idx].trim().is_empty()
-            {
-                current_line_idx += 1;
-            }
-            if current_line_idx >= text_lines.len() {
-                return None; // Ran out of lines but tokens remain
-            }
-
-            // Start new segment
-            // Find `token` in new line.
-            // It should be at the beginning, possibly after markers/whitespace.
-            let line = &text_lines[current_line_idx];
-            let lookahead_limit = 20;
-            let search_start = skip_leading_whitespace(line, 0);
-            let search_slice = safe_slice(line, search_start, lookahead_limit);
-
-            if let Some(rel_pos) = search_slice.find(token) {
-                let pos = search_start + rel_pos;
-                let prefix = &line[..pos];
-                if is_valid_gap(prefix) {
-                    current_segment_start = pos;
-                    current_pos = pos + token.len();
+        if let Some(relative_byte) = source_map.source_text[byte_cursor..].find(&needle) {
+            let start = cursor
+                + source_map.source_text[byte_cursor..byte_cursor + relative_byte]
+                    .chars()
+                    .count();
+            let end = start.saturating_add(needle.chars().count());
+            for ancestor in node.ancestors() {
+                let Some(element) = scraper::ElementRef::wrap(ancestor) else {
+                    continue;
+                };
+                let attrs = style_attrs(&element, styled_classes);
+                if attrs.is_empty() {
                     continue;
                 }
+                element_ranges
+                    .entry(element.id())
+                    .and_modify(|(_, range_end, _): &mut (usize, usize, Vec<u32>)| {
+                        *range_end = (*range_end).max(end);
+                    })
+                    .or_insert((start, end, attrs));
             }
-
-            return None;
+            cursor = end;
+            byte_cursor += relative_byte + needle.len();
         } else {
-            return None;
+            crate::logging::debug(format!(
+                "style source synchronization skipped DOM text at offset {cursor}: {needle:?}"
+            ));
         }
     }
 
-    segments.push((current_line_idx, current_segment_start, current_pos));
-    Some(segments)
-}
-
-fn skip_leading_whitespace(s: &str, start: usize) -> usize {
-    let mut cursor = start;
-    // `char::is_whitespace` intentionally treats Unicode whitespace such as
-    // NBSP as skippable. Advancing by each char's UTF-8 width keeps `cursor`
-    // on a valid boundary for the subsequent slice.
-    for c in s[start..].chars() {
-        if !c.is_whitespace() {
-            break;
+    let mut ranges = Vec::new();
+    for (_, (start, end, attrs)) in element_ranges {
+        for attr in attrs {
+            ranges.push(SourceStyleRange {
+                start_offset: source_offset_u32(start),
+                end_offset: source_offset_u32(end),
+                attr,
+            });
         }
-        cursor += c.len_utf8();
     }
-    cursor
+    ranges.sort_unstable_by_key(|range| (range.start_offset, range.end_offset, range.attr));
+    ranges.dedup();
+    ranges
 }
 
-fn safe_slice(s: &str, start: usize, len: usize) -> &str {
-    if start >= s.len() {
-        return "";
+fn project_source_formatting(
+    ranges: &[SourceStyleRange],
+    source_map: &SourceMap,
+    text_lines: &[String],
+    starting_line: usize,
+) -> Vec<InlineStyle> {
+    let mut formatting = Vec::new();
+    for range in ranges {
+        let range_start = range.start_offset as usize;
+        let range_end = range.end_offset as usize;
+        if range_start >= range_end {
+            continue;
+        }
+        let first_row = source_map.row_for_offset(range_start);
+        let last_row = source_map.row_for_offset(range_end - 1);
+        for (row, line) in text_lines
+            .iter()
+            .enumerate()
+            .take(last_row.min(text_lines.len().saturating_sub(1)) + 1)
+            .skip(first_row)
+        {
+            let (row_start, row_end) = source_map.row_spans[row];
+            let start = range_start.max(row_start as usize);
+            let end = range_end.min(row_end as usize);
+            if start >= end || row_start == row_end {
+                continue;
+            }
+            let col = source_map.col_at(row, line, start, SourceOffsetBias::Start);
+            let col_end = source_map.col_at(row, line, end - 1, SourceOffsetBias::End);
+            if col_end > col {
+                formatting.push(InlineStyle {
+                    row: u16::try_from(starting_line + row).unwrap_or(u16::MAX),
+                    col: u16::try_from(col).unwrap_or(u16::MAX),
+                    n_letters: u16::try_from(col_end - col).unwrap_or(u16::MAX),
+                    attr: range.attr,
+                });
+            }
+        }
     }
-    let mut end = (start + len).min(s.len());
-    while !s.is_char_boundary(end) {
-        end += 1;
-    }
-    &s[start..end]
-}
-
-fn is_valid_gap(gap: &str) -> bool {
-    // Gap can contain whitespace, *, [, ], (, ), punctuation?
-    // Usually just spaces.
-    // And for line transitions: **, *
-    gap.chars()
-        .all(|c| c.is_whitespace() || c == '*' || c == '[' || c == ']')
+    formatting
 }
 
 /// Extract link metadata without injecting markers into the rendered text.
@@ -1599,161 +1380,6 @@ fn extract_links(
     }
 
     Ok(links)
-}
-
-/// Convert `col` and `n_letters` of every entry from byte offsets (as produced
-/// by `extract_formatting`, which works in byte positions internally) to char
-/// offsets, since the renderer indexes lines by char position.
-fn convert_formatting_bytes_to_chars(
-    formatting: &mut [InlineStyle],
-    text_lines: &[String],
-    starting_line: usize,
-) {
-    use std::collections::HashMap;
-    let mut cache: HashMap<usize, Vec<usize>> = HashMap::new();
-    for style in formatting.iter_mut() {
-        let row = style.row as usize;
-        if row < starting_line {
-            continue;
-        }
-        let line_idx = row - starting_line;
-        if line_idx >= text_lines.len() {
-            continue;
-        }
-        let map = cache.entry(line_idx).or_insert_with(|| {
-            let line = &text_lines[line_idx];
-            let mut byte_to_char = vec![0usize; line.len() + 1];
-            let mut char_idx = 0usize;
-            for (byte_i, c) in line.char_indices() {
-                for slot in &mut byte_to_char[byte_i..byte_i + c.len_utf8()] {
-                    *slot = char_idx;
-                }
-                char_idx += 1;
-            }
-            byte_to_char[line.len()] = char_idx;
-            byte_to_char
-        });
-        let start_byte = (style.col as usize).min(map.len() - 1);
-        let end_byte = ((style.col as usize) + (style.n_letters as usize)).min(map.len() - 1);
-        let start_char = map[start_byte];
-        let end_char = map[end_byte];
-        style.col = start_char as u16;
-        style.n_letters = end_char.saturating_sub(start_char) as u16;
-    }
-}
-
-fn strip_inline_markers(
-    text_lines: &mut [String],
-    formatting: &mut [InlineStyle],
-    starting_line: usize,
-) {
-    for (idx, line) in text_lines.iter_mut().enumerate() {
-        let row = starting_line + idx;
-        let mut line_formatting = Vec::new();
-        for (style_idx, style) in formatting.iter().enumerate() {
-            if style.row as usize == row {
-                line_formatting.push(style_idx);
-            }
-        }
-        if line_formatting.is_empty() {
-            continue;
-        }
-
-        let remove_positions = collect_marker_positions(line, formatting, &line_formatting);
-        if remove_positions.is_empty() {
-            continue;
-        }
-
-        for style_idx in &line_formatting {
-            let entry = &mut formatting[*style_idx];
-            let old_col = entry.col as usize;
-            let shift = remove_positions.partition_point(|&pos| pos < old_col);
-            entry.col = (old_col.saturating_sub(shift)) as u16;
-        }
-
-        let mut remove_flags = vec![false; line.len()];
-        for pos in &remove_positions {
-            if *pos < remove_flags.len() {
-                remove_flags[*pos] = true;
-            }
-        }
-
-        let bytes = line.as_bytes();
-        let mut new_bytes = Vec::with_capacity(bytes.len().saturating_sub(remove_positions.len()));
-        for (i, b) in bytes.iter().enumerate() {
-            if !remove_flags[i] {
-                new_bytes.push(*b);
-            }
-        }
-
-        if let Ok(new_line) = String::from_utf8(new_bytes) {
-            *line = new_line;
-        }
-    }
-}
-
-fn collect_marker_positions(
-    line: &str,
-    formatting: &[InlineStyle],
-    line_formatting: &[usize],
-) -> Vec<usize> {
-    let bytes = line.as_bytes();
-    let len = bytes.len();
-    let mut positions = Vec::new();
-
-    let is_boundary = |pos: usize| -> bool {
-        if pos >= len {
-            return true;
-        }
-        let b = bytes[pos];
-        // Boundary if it's whitespace or punctuation
-        b.is_ascii_whitespace() || b.is_ascii_punctuation()
-    };
-
-    for style_idx in line_formatting {
-        let style = &formatting[*style_idx];
-        let start = style.col as usize;
-        let end = start.saturating_add(style.n_letters as usize);
-        match style.attr {
-            1 => {
-                // Bold **
-                if start >= 2 && &bytes[start - 2..start] == b"**" {
-                    // Check if it's a boundary marker (preceded by boundary)
-                    if start == 2 || is_boundary(start - 3) {
-                        positions.push(start - 2);
-                        positions.push(start - 1);
-                    }
-                }
-                if end + 2 <= len && &bytes[end..end + 2] == b"**" {
-                    // Check if it's a boundary marker (followed by boundary)
-                    if end + 2 == len || is_boundary(end + 2) {
-                        positions.push(end);
-                        positions.push(end + 1);
-                    }
-                }
-            }
-            2 => {
-                // Italic *
-                if start >= 1 && bytes[start - 1] == b'*' {
-                    // Check if it's a boundary marker
-                    if start == 1 || is_boundary(start - 2) {
-                        positions.push(start - 1);
-                    }
-                }
-                if end < len && bytes[end] == b'*' {
-                    // Check if it's a boundary marker
-                    if end + 1 == len || is_boundary(end + 1) {
-                        positions.push(end);
-                    }
-                }
-            }
-            _ => {}
-        }
-    }
-
-    positions.sort_unstable();
-    positions.dedup();
-    positions
 }
 
 #[cfg(test)]
@@ -2766,109 +2392,50 @@ mod tests {
     }
 
     #[test]
-    fn test_extract_formatting() {
-        let html = "<p>This is <strong>bold</strong> and <em>italic</em>.</p>";
-        let fragment = Html::parse_fragment(html);
-        let text_lines = vec!["This is **bold** and *italic*.".to_string()];
-        let formatting =
-            extract_formatting(&fragment, 0, &text_lines, &StyledClasses::default()).unwrap();
-        assert_eq!(formatting.len(), 2);
-        assert!(formatting.iter().any(|s| s.n_letters == 4 && s.attr == 1)); // bold
-        assert!(formatting.iter().any(|s| s.n_letters == 6 && s.attr == 2)); // italic
+    fn source_formatting_is_semantic_and_occurrence_exact() {
+        let html = "<p>same <strong>same</strong> <em>same</em> <strong><em>both</em></strong></p>";
+        let parsed = parse_html(html, Some(80), None, 7).unwrap();
+        let same_offsets: Vec<_> = parsed
+            .source_formatting
+            .iter()
+            .filter(|range| range.end_offset - range.start_offset == 4)
+            .copied()
+            .collect();
+
+        assert!(!parsed.text_lines.join("\n").contains("**"));
+        assert_eq!(same_offsets.len(), 4);
+        assert!(same_offsets.iter().all(|range| range.start_offset >= 5));
+        assert!(parsed.source_formatting.iter().any(|range| range.attr == 1));
+        assert!(parsed.source_formatting.iter().any(|range| range.attr == 2));
+        assert!(parsed.formatting.iter().all(|style| style.row >= 7));
     }
 
     #[test]
-    fn formatting_match_skips_wide_justified_whitespace() {
-        let html = "<p><strong>alpha beta</strong></p>";
-        let fragment = Html::parse_fragment(html);
-        let text_lines = vec![format!("alpha{}beta", " ".repeat(40))];
+    fn source_formatting_is_layout_independent_and_projects_every_row() {
+        let html = "<p><strong>extraordinary alpha beta gamma delta epsilon zeta eta</strong></p>";
+        let wide = parse_html(html, Some(80), None, 0).unwrap();
+        let narrow = parse_html_with_styles_and_typography(
+            html,
+            Some(12),
+            None,
+            0,
+            &StyledClasses::default(),
+            None,
+            TypographyOptions {
+                paragraph_style: ParagraphStyle::Indented,
+                line_spacing: LineSpacing::Double,
+                justify: true,
+            },
+        )
+        .unwrap();
 
-        let formatting =
-            extract_formatting(&fragment, 0, &text_lines, &StyledClasses::default()).unwrap();
-
-        assert_eq!(formatting.len(), 1);
-        assert_eq!(formatting[0].row, 0);
-        assert_eq!(formatting[0].col, 0);
-        assert_eq!(formatting[0].n_letters, 49);
-        assert_eq!(formatting[0].attr, 1);
-    }
-
-    #[test]
-    fn formatting_match_skips_wide_indent_on_next_line() {
-        let text_lines = vec!["alpha".to_string(), format!("{}beta", " ".repeat(24))];
-
-        let segments = match_sequence(&["alpha", "beta"], &text_lines, 0, 0);
-
-        assert_eq!(segments, Some(vec![(0, 0, 5), (1, 24, 28)]));
-    }
-
-    #[test]
-    fn formatting_match_does_not_skip_non_whitespace_beyond_window() {
-        let text_lines = vec![format!("alpha{}beta", "x".repeat(21))];
-
-        let segments = match_sequence(&["alpha", "beta"], &text_lines, 0, 0);
-
-        assert_eq!(segments, None);
-    }
-
-    #[test]
-    fn formatting_match_skips_multibyte_unicode_whitespace() {
-        let gap = "\u{a0}".repeat(24);
-        let text_lines = vec![format!("alpha{gap}beta")];
-
-        let segments = match_sequence(&["alpha", "beta"], &text_lines, 0, 0);
-
-        assert_eq!(segments, Some(vec![(0, 0, 57)]));
-    }
-
-    #[test]
-    fn test_extract_formatting_headers() {
-        let html = r#"
-        <h1>Header 1</h1>
-        <p>Paragraph content.</p>
-        <h2>Header 2</h2>
-        "#;
-        let fragment = Html::parse_fragment(html);
-        let text_lines = vec![
-            "# Header 1".to_string(),
-            "Paragraph content.".to_string(),
-            "## Header 2".to_string(),
-        ];
-        let formatting =
-            extract_formatting(&fragment, 0, &text_lines, &StyledClasses::default()).unwrap();
-        assert_eq!(formatting.len(), 2);
-
-        // Check header 1 - html2text might format differently than expected
-        let header1 = formatting.iter().find(|s| s.row == 0).unwrap();
-        assert_eq!(header1.col, 2);
-        assert_eq!(header1.n_letters, "Header 1".len() as u16); // Use actual length
-        assert_eq!(header1.attr, 1); // Bold
-
-        // Check header 2 - html2text might format differently than expected
-        let header2 = formatting.iter().find(|s| s.row == 2).unwrap();
-        assert_eq!(header2.col, 3);
-        assert_eq!(header2.n_letters, "Header 2".len() as u16); // Use actual length
-        assert_eq!(header2.attr, 1); // Bold
-    }
-
-    #[test]
-    fn test_extract_formatting_no_matching_text() {
-        let html = "<p>This has <strong>bold</strong> text.</p>";
-        let fragment = Html::parse_fragment(html);
-        let text_lines = vec!["Completely different text content.".to_string()];
-        let formatting =
-            extract_formatting(&fragment, 0, &text_lines, &StyledClasses::default()).unwrap();
-        assert_eq!(formatting.len(), 0);
-    }
-
-    #[test]
-    fn test_extract_formatting_no_html() {
-        let html = "";
-        let fragment = Html::parse_fragment(html);
-        let text_lines = vec!["Plain text content.".to_string()];
-        let formatting =
-            extract_formatting(&fragment, 0, &text_lines, &StyledClasses::default()).unwrap();
-        assert_eq!(formatting.len(), 0);
+        assert_eq!(wide.source_formatting, narrow.source_formatting);
+        assert!(narrow.formatting.len() >= 3);
+        assert!(narrow.formatting.iter().all(|style| {
+            !narrow
+                .typography_spacing_rows
+                .contains(&(style.row as usize))
+        }));
     }
 
     #[test]
@@ -3130,7 +2697,6 @@ mod tests {
         // marker. Without a separator the joined text would fuse "become.22"
         // into one token and the search would fail.
         let html = r#"<p class="quote">The quote ends here.<span class="num">22</span></p>"#;
-        let fragment = Html::parse_fragment(html);
         let mut italic = std::collections::HashSet::new();
         italic.insert("quote".to_string());
         let styled = StyledClasses {
@@ -3138,10 +2704,9 @@ mod tests {
             bold: std::collections::HashSet::new(),
             centered: std::collections::HashSet::new(),
         };
-        let text_lines = vec!["The quote ends here.".to_string(), "[22]".to_string()];
-        let formatting = extract_formatting(&fragment, 0, &text_lines, &styled).unwrap();
+        let parsed = parse_html_with_styles(html, Some(80), None, 0, &styled, None).unwrap();
         assert!(
-            formatting.iter().any(|s| s.row == 0 && s.attr == 2),
+            parsed.formatting.iter().any(|s| s.row == 0 && s.attr == 2),
             "italic styling should land on row 0"
         );
     }
@@ -3149,10 +2714,8 @@ mod tests {
     #[test]
     fn test_extract_formatting_spans_hyphenated_word() {
         let html = "<p><em>alpha beta entangled gamma</em></p>";
-        let fragment = Html::parse_fragment(html);
-        let text_lines = vec!["alpha beta entan-".to_string(), "gled gamma".to_string()];
-        let formatting =
-            extract_formatting(&fragment, 0, &text_lines, &StyledClasses::default()).unwrap();
+        let parsed = parse_html(html, Some(16), None, 0).unwrap();
+        let formatting = parsed.formatting;
         assert!(
             !formatting.is_empty(),
             "italic span across hyphen should be detected"
@@ -3164,15 +2727,15 @@ mod tests {
     #[test]
     fn test_nested_formatting() {
         let html = "<p>This has <strong>nested <em>bold italic</em> text</strong>.</p>";
-        let fragment = Html::parse_fragment(html);
-        let text_lines = vec!["This has **nested *bold italic* text**.".to_string()];
-        let formatting =
-            extract_formatting(&fragment, 0, &text_lines, &StyledClasses::default()).unwrap();
-
-        // Should extract at least one formatting element (the parser might not handle nested well)
-        assert!(!formatting.is_empty());
-        // Our current parser implementation may not extract nested formatting perfectly
-        // So we just check that some formatting is detected
+        let parsed = parse_html(html, Some(80), None, 0).unwrap();
+        let bold_italic = normalize_text("bold italic");
+        let start = parsed.source_map.source_text.find(&bold_italic).unwrap() as u32;
+        assert!(parsed.source_formatting.iter().any(|range| range.attr == 1
+            && range.start_offset <= start
+            && range.end_offset >= start + 11));
+        assert!(parsed.source_formatting.iter().any(|range| range.attr == 2
+            && range.start_offset == start
+            && range.end_offset == start + 11));
     }
 
     #[test]
@@ -3202,7 +2765,7 @@ mod tests {
     }
 
     #[test]
-    fn test_italic_marker_stripping() {
+    fn semantic_italic_has_marker_free_visible_text() {
         let html = "<p>This is <em>italic</em> text.</p>";
         let result = parse_html(html, Some(80), None, 0).unwrap();
 
@@ -3219,7 +2782,7 @@ mod tests {
     }
 
     #[test]
-    fn test_italic_marker_stripping_whitespace_mismatch() {
+    fn semantic_italic_ignores_source_whitespace_layout() {
         let html = "<p>This is <em>italic  text</em> with extra space.</p>";
         let result = parse_html(html, Some(80), None, 0).unwrap();
 
@@ -3280,18 +2843,8 @@ mod tests {
 
     #[test]
     fn test_internal_asterisk_not_stripped() {
-        let mut text_lines = vec!["O*REILLY".to_string()];
-        // Manually add formatting as if "REILLY" was italic (O*REILLY)
-        let mut formatting = vec![InlineStyle {
-            row: 0,
-            col: 2, // 'R' is at index 2
-            n_letters: 6,
-            attr: 2, // Italic
-        }];
-
-        strip_inline_markers(&mut text_lines, &mut formatting, 0);
-        // It should NOT strip the '*' because it's preceded by 'O' (not boundary)
-        assert_eq!(text_lines[0], "O*REILLY");
+        let parsed = parse_html("<p>O*REILLY and `code`</p>", Some(80), None, 0).unwrap();
+        assert_eq!(parsed.text_lines[0], "O*REILLY and `code`");
     }
 
     #[test]
@@ -3523,10 +3076,9 @@ mod tests {
 
     #[test]
     fn test_class_italic_multibyte_char_positions() {
-        // Regression: the renderer indexes lines by char position, so
-        // `extract_formatting`'s byte offsets must be converted to char
-        // offsets before being returned. With multi-byte chars like `ā`,
-        // a byte-based span would land off by one (or more) chars.
+        // Regression: source and renderer coordinates are character based.
+        // With multi-byte chars like `ā`, a byte-based span would land off
+        // by one (or more) chars.
         // Mirrors the `What is this?` paragraph: `vipassanā` is plain text;
         // only `passanā` and `passati` are wrapped in italic-class spans.
         // The italic span text must not match a substring inside `vipassanā`.

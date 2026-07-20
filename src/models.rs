@@ -114,6 +114,14 @@ pub struct InlineStyle {
     pub attr: u32, // This will likely be replaced by ratatui::style::Style later
 }
 
+/// A semantic style in chapter-local normalized source character coordinates.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct SourceStyleRange {
+    pub start_offset: u32,
+    pub end_offset: u32,
+    pub attr: u32,
+}
+
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct BookMetadata {
     pub title: Option<String>,
@@ -672,6 +680,8 @@ pub struct TextStructure {
     /// Chapter-local source offsets for section and anchor ids.
     pub section_offsets: HashMap<String, usize>,
     pub formatting: Vec<InlineStyle>,
+    /// Canonical semantic styles, independent of wrapping and typography.
+    pub source_formatting: Vec<SourceStyleRange>,
     pub links: Vec<LinkEntry>,
     pub pagebreak_map: HashMap<usize, String>,
     /// Rows reserved for rendering an image inline, keyed by the image's
@@ -1013,6 +1023,7 @@ mod tests {
             section_rows,
             section_offsets: std::collections::HashMap::new(),
             formatting,
+            source_formatting: Vec::new(),
             links: vec![LinkEntry {
                 row: 1,
                 source_offset: Some(12),
