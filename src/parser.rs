@@ -1362,14 +1362,17 @@ fn match_sequence(
         let line = &text_lines[current_line_idx];
 
         let lookahead_limit = 20;
-        let search_slice = safe_slice(line, current_pos, lookahead_limit);
+        let search_start = skip_leading_whitespace(line, current_pos);
+        let search_slice = safe_slice(line, search_start, lookahead_limit);
 
         if let Some(rel_pos) = search_slice.find(token) {
             // Found on same line
-            // Check gap
-            let gap = &line[current_pos..current_pos + rel_pos];
+            // Validate the complete gap, including whitespace skipped before
+            // placing the lookahead window.
+            let token_pos = search_start + rel_pos;
+            let gap = &line[current_pos..token_pos];
             if is_valid_gap(gap) {
-                current_pos += rel_pos + token.len();
+                current_pos = token_pos + token.len();
                 continue;
             }
         }
@@ -1422,9 +1425,11 @@ fn match_sequence(
             // It should be at the beginning, possibly after markers/whitespace.
             let line = &text_lines[current_line_idx];
             let lookahead_limit = 20;
-            let search_slice = safe_slice(line, 0, lookahead_limit);
+            let search_start = skip_leading_whitespace(line, 0);
+            let search_slice = safe_slice(line, search_start, lookahead_limit);
 
-            if let Some(pos) = search_slice.find(token) {
+            if let Some(rel_pos) = search_slice.find(token) {
+                let pos = search_start + rel_pos;
                 let prefix = &line[..pos];
                 if is_valid_gap(prefix) {
                     current_segment_start = pos;
@@ -1441,6 +1446,20 @@ fn match_sequence(
 
     segments.push((current_line_idx, current_segment_start, current_pos));
     Some(segments)
+}
+
+fn skip_leading_whitespace(s: &str, start: usize) -> usize {
+    let mut cursor = start;
+    // `char::is_whitespace` intentionally treats Unicode whitespace such as
+    // NBSP as skippable. Advancing by each char's UTF-8 width keeps `cursor`
+    // on a valid boundary for the subsequent slice.
+    for c in s[start..].chars() {
+        if !c.is_whitespace() {
+            break;
+        }
+        cursor += c.len_utf8();
+    }
+    cursor
 }
 
 fn safe_slice(s: &str, start: usize, len: usize) -> &str {
@@ -2756,6 +2775,50 @@ mod tests {
         assert_eq!(formatting.len(), 2);
         assert!(formatting.iter().any(|s| s.n_letters == 4 && s.attr == 1)); // bold
         assert!(formatting.iter().any(|s| s.n_letters == 6 && s.attr == 2)); // italic
+    }
+
+    #[test]
+    fn formatting_match_skips_wide_justified_whitespace() {
+        let html = "<p><strong>alpha beta</strong></p>";
+        let fragment = Html::parse_fragment(html);
+        let text_lines = vec![format!("alpha{}beta", " ".repeat(40))];
+
+        let formatting =
+            extract_formatting(&fragment, 0, &text_lines, &StyledClasses::default()).unwrap();
+
+        assert_eq!(formatting.len(), 1);
+        assert_eq!(formatting[0].row, 0);
+        assert_eq!(formatting[0].col, 0);
+        assert_eq!(formatting[0].n_letters, 49);
+        assert_eq!(formatting[0].attr, 1);
+    }
+
+    #[test]
+    fn formatting_match_skips_wide_indent_on_next_line() {
+        let text_lines = vec!["alpha".to_string(), format!("{}beta", " ".repeat(24))];
+
+        let segments = match_sequence(&["alpha", "beta"], &text_lines, 0, 0);
+
+        assert_eq!(segments, Some(vec![(0, 0, 5), (1, 24, 28)]));
+    }
+
+    #[test]
+    fn formatting_match_does_not_skip_non_whitespace_beyond_window() {
+        let text_lines = vec![format!("alpha{}beta", "x".repeat(21))];
+
+        let segments = match_sequence(&["alpha", "beta"], &text_lines, 0, 0);
+
+        assert_eq!(segments, None);
+    }
+
+    #[test]
+    fn formatting_match_skips_multibyte_unicode_whitespace() {
+        let gap = "\u{a0}".repeat(24);
+        let text_lines = vec![format!("alpha{gap}beta")];
+
+        let segments = match_sequence(&["alpha", "beta"], &text_lines, 0, 0);
+
+        assert_eq!(segments, Some(vec![(0, 0, 57)]));
     }
 
     #[test]

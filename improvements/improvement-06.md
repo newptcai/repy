@@ -1,6 +1,6 @@
 # Improvement 06 — Styling lookahead must survive justified whitespace runs
 
-Status: todo
+Status: done
 
 Follow the "Codex Improvement Tasks" section of AGENTS.md for process rules
 (tests, checks, commit, status update).
