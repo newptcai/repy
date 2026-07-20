@@ -6,7 +6,6 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::io;
 use std::rc::Rc;
-use std::sync::LazyLock;
 use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Local, NaiveDate, Utc};
@@ -52,10 +51,6 @@ use crate::ui::windows::{
 };
 use ratatui_image::protocol::StatefulProtocol;
 
-/// Regex to strip textwrap syllable-split hyphenation artifacts from TTS text.
-/// Matches letter + hyphen + whitespace + lowercase letter (e.g. "ex- ample").
-static RE_TTS_HYPHEN: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"([A-Za-z])-\s+([a-z])").unwrap());
 const READING_IDLE_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 /// Floor for the jump-detection threshold in reading statistics, used when
 /// the terminal size is unknown or smaller than a typical screen.
@@ -9509,26 +9504,40 @@ where
         // and compute per-line underline character ranges.
         let mut chunks = Vec::new();
         for (para_start, para_end) in raw_paragraphs {
-            let para_lines: Vec<&str> = (para_start..para_end)
-                .filter_map(|i| lines.get(i).map(String::as_str))
+            let Some(content_index) = self.content_index_for_row(para_start) else {
+                continue;
+            };
+            if self.content_index_for_row(para_end.saturating_sub(1)) != Some(content_index) {
+                debug_assert!(false, "TTS paragraph spans chapters");
+                continue;
+            }
+            let Some(chapter_start) = self.content_start_rows.get(content_index).copied() else {
+                continue;
+            };
+            let Some(chapter) = self.chapter_text_structures.get(content_index) else {
+                continue;
+            };
+            let source_map = &chapter.source_map;
+            let local_para_start = para_start - chapter_start;
+            let local_para_end = (para_end - chapter_start).min(source_map.row_spans.len());
+            if local_para_start >= local_para_end {
+                continue;
+            }
+            let source_start = source_map.offset_for_row(local_para_start);
+            let source_end = source_map.row_spans[local_para_start..local_para_end]
+                .iter()
+                .map(|&(_, end)| end as usize)
+                .max()
+                .unwrap_or(source_start);
+            let full_text: String = source_map
+                .source_text
+                .chars()
+                .skip(source_start)
+                .take(source_end.saturating_sub(source_start))
                 .collect();
-            let full_text = para_lines.join(" ");
             if full_text.trim().is_empty() {
                 continue;
             }
-
-            // Build cumulative byte offsets for each line boundary in the
-            // joined string.  offsets[i] = byte position where line i starts.
-            let mut offsets = Vec::with_capacity(para_lines.len() + 1);
-            let mut pos = 0usize;
-            for (i, line) in para_lines.iter().enumerate() {
-                offsets.push(pos);
-                pos += line.len();
-                if i + 1 < para_lines.len() {
-                    pos += 1; // the " " separator
-                }
-            }
-            offsets.push(pos); // end sentinel
 
             let (min_chunk, max_chunk) = (50, 100);
             let sentence_chunks =
@@ -9544,43 +9553,54 @@ where
                 let chunk_byte_end = chunk_byte_start + chunk_text.len();
                 byte_cursor = chunk_byte_end;
 
-                // Compute per-line underline ranges
+                let chunk_start = source_start + full_text[..chunk_byte_start].chars().count();
+                let chunk_end = source_start + full_text[..chunk_byte_end].chars().count();
+                if chunk_start == chunk_end {
+                    continue;
+                }
+
                 let mut underline = HashMap::new();
-                let mut first_line = para_start;
-                let mut found_first = false;
+                let first_local_row = source_map
+                    .row_for_offset(chunk_start)
+                    .clamp(local_para_start, local_para_end.saturating_sub(1));
+                let last_local_row = source_map
+                    .row_for_offset(chunk_end - 1)
+                    .clamp(first_local_row, local_para_end.saturating_sub(1));
 
-                for (li, line_text) in para_lines.iter().enumerate() {
-                    let line_byte_start = offsets[li];
-                    let line_byte_end = line_byte_start + line_text.len();
-
-                    // Check if this line overlaps with the chunk
-                    if line_byte_end <= chunk_byte_start || line_byte_start >= chunk_byte_end {
+                for local_row in first_local_row..=last_local_row {
+                    let Some(&(row_start, row_end)) = source_map.row_spans.get(local_row) else {
+                        continue;
+                    };
+                    let overlap_start = chunk_start.max(row_start as usize);
+                    let overlap_end = chunk_end.min(row_end as usize);
+                    if overlap_start >= overlap_end {
                         continue;
                     }
-
-                    if !found_first {
-                        first_line = para_start + li;
-                        found_first = true;
-                    }
-
-                    // Compute column range within this line (in characters)
-                    let overlap_byte_start =
-                        chunk_byte_start.max(line_byte_start) - line_byte_start;
-                    let overlap_byte_end = chunk_byte_end.min(line_byte_end) - line_byte_start;
-
-                    // Convert byte offsets to character offsets
-                    let col_start = line_text[..overlap_byte_start].chars().count();
-                    let col_end = line_text[..overlap_byte_end].chars().count();
+                    let global_row = chapter_start + local_row;
+                    let Some(rendered_row) = lines.get(global_row) else {
+                        continue;
+                    };
+                    let col_start = source_map.col_at(
+                        local_row,
+                        rendered_row,
+                        overlap_start,
+                        SourceOffsetBias::Start,
+                    );
+                    let col_end = source_map.col_at(
+                        local_row,
+                        rendered_row,
+                        overlap_end - 1,
+                        SourceOffsetBias::End,
+                    );
 
                     if col_start < col_end {
-                        underline.insert(para_start + li, (col_start, col_end));
+                        underline.insert(global_row, (col_start, col_end));
                     }
                 }
 
-                let tts_text = RE_TTS_HYPHEN.replace_all(&chunk_text, "$1$2").into_owned();
                 chunks.push(TtsChunk {
-                    text: tts_text,
-                    first_line,
+                    text: chunk_text,
+                    first_line: chapter_start + first_local_row,
                     underline,
                 });
             }
@@ -10487,6 +10507,19 @@ mod tests {
         reader
     }
 
+    fn tts_fixture(html: &str, width: usize, typography: TypographyOptions) -> TextStructure {
+        parse_html_with_styles_and_typography(
+            html,
+            Some(width),
+            None,
+            0,
+            &StyledClasses::default(),
+            None,
+            typography,
+        )
+        .unwrap()
+    }
+
     fn rendered_word_position(
         chapter: &TextStructure,
         needle: &str,
@@ -11042,14 +11075,6 @@ mod tests {
     }
 
     #[test]
-    fn test_dehyphenate_tts_text() {
-        use super::RE_TTS_HYPHEN;
-        let input = "This is an ex- ample of hyphen- ation artifacts.";
-        let result = RE_TTS_HYPHEN.replace_all(input, "$1$2").into_owned();
-        assert_eq!(result, "This is an example of hyphenation artifacts.");
-    }
-
-    #[test]
     fn tts_chunk_matching_handles_unicode_boundaries() {
         let text = "“Well said, friend,” the delighted bhikkhus spoke, and asked, “Is there yet another teaching on how a disciple practices Right View?\u{a0}.\u{a0}.\u{a0}.”";
         let chunks = TestReader::split_into_sentence_chunks(text, 50, 100);
@@ -11071,6 +11096,74 @@ mod tests {
 
             byte_cursor = chunk_byte_end;
         }
+    }
+
+    #[test]
+    fn tts_chunks_use_clean_source_with_justified_indented_text() {
+        let chapter = tts_fixture(
+            "<p>Alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu nu xi omicron pi rho sigma tau.</p>",
+            28,
+            TypographyOptions {
+                paragraph_style: ParagraphStyle::Indented,
+                justify: true,
+                ..Default::default()
+            },
+        );
+        let chunks = reader_with_source_chapters(vec![chapter]).build_tts_chunks();
+        assert_eq!(chunks.len(), 1);
+        assert_eq!(
+            chunks[0].text,
+            "Alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu nu xi omicron pi rho sigma tau."
+        );
+        assert!(!chunks[0].text.starts_with(' '));
+        assert!(!chunks[0].text.contains("  "));
+        assert_eq!(chunks[0].first_line, 0);
+        assert_eq!(
+            chunks[0].underline,
+            HashMap::from([(0, (2, 28)), (1, (0, 28)), (2, (0, 28)), (3, (0, 25))])
+        );
+    }
+
+    #[test]
+    fn tts_chunk_projects_an_unbroken_word_across_a_wrap_hyphen() {
+        let hyphen = tts_fixture(
+            "<p>An extraordinarily complicated demonstration crosses the wrapping boundary.</p>",
+            18,
+            TypographyOptions::default(),
+        );
+        assert_eq!(hyphen.text_lines[1], "complicated demon-");
+        assert_eq!(hyphen.text_lines[2], "stration crosses");
+        let chunks = reader_with_source_chapters(vec![hyphen]).build_tts_chunks();
+        assert_eq!(chunks.len(), 1);
+        assert!(chunks[0].text.contains("complicated demonstration"));
+        assert!(!chunks[0].text.contains("demon- stration"));
+        assert_eq!(chunks[0].underline.get(&1), Some(&(0, 17)));
+        assert_eq!(chunks[0].underline.get(&2), Some(&(0, 16)));
+    }
+
+    #[test]
+    fn tts_source_chunking_matches_collapsed_legacy_text_without_layout_padding() {
+        let chapter = tts_fixture(
+            "<p>The first sentence has enough ordinary words to cross a wrapping boundary cleanly. The second sentence also has enough words to form another useful spoken chunk.</p>",
+            32,
+            TypographyOptions::default(),
+        );
+        let legacy_text = chapter.text_lines.join(" ");
+        let legacy_chunks = TestReader::split_into_sentence_chunks(&legacy_text, 50, 100);
+        let source_chunks = reader_with_source_chapters(vec![chapter]).build_tts_chunks();
+        let collapse = |text: &str| text.split_whitespace().collect::<Vec<_>>().join(" ");
+
+        assert_eq!(source_chunks.len(), legacy_chunks.len());
+        assert_eq!(
+            source_chunks
+                .iter()
+                .map(|chunk| collapse(&chunk.text))
+                .collect::<Vec<_>>(),
+            legacy_chunks
+                .iter()
+                .map(|chunk| collapse(chunk))
+                .collect::<Vec<_>>()
+        );
     }
 
     #[test]

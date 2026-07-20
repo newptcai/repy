@@ -586,6 +586,82 @@ impl SourceMap {
             SourceOffsetBias::End => previous_source.unwrap_or_else(|| span_end.saturating_sub(1)),
         }
     }
+
+    /// Project a chapter-local source character offset into a rendered
+    /// character column. `Start` returns the first column occupied by the
+    /// source character; `End` returns the exclusive column after it.
+    pub fn col_at(
+        &self,
+        row: usize,
+        rendered_row: &str,
+        offset: usize,
+        bias: SourceOffsetBias,
+    ) -> usize {
+        let Some(&(span_start, span_end)) = self.row_spans.get(row) else {
+            return rendered_row.chars().count();
+        };
+        let span_start = span_start as usize;
+        let span_end = (span_end as usize).min(self.source_len as usize);
+        let target = offset.clamp(span_start, span_end);
+        if span_start >= span_end || target == span_end {
+            return rendered_row.chars().count();
+        }
+
+        let rendered: Vec<char> = rendered_row.chars().collect();
+        let source: Vec<char> = self
+            .source_text
+            .chars()
+            .skip(span_start)
+            .take(span_end - span_start)
+            .collect();
+        let mut rendered_index = 0usize;
+        let mut source_index = 0usize;
+
+        while rendered_index < rendered.len() && source_index < source.len() {
+            let source_offset = span_start + source_index;
+            let rendered_char = rendered[rendered_index];
+            let source_char = source[source_index];
+
+            if rendered_char.is_whitespace() && source_char.is_whitespace() {
+                let run_start = rendered_index;
+                while rendered
+                    .get(rendered_index)
+                    .is_some_and(|ch| ch.is_whitespace())
+                {
+                    rendered_index += 1;
+                }
+                if source_offset == target {
+                    return match bias {
+                        SourceOffsetBias::Start => run_start,
+                        SourceOffsetBias::End => rendered_index,
+                    };
+                }
+                source_index += 1;
+                continue;
+            }
+
+            if rendered_char == source_char {
+                if source_offset == target {
+                    return rendered_index + usize::from(matches!(bias, SourceOffsetBias::End));
+                }
+                rendered_index += 1;
+                source_index += 1;
+                continue;
+            }
+
+            if rendered_char.is_whitespace() || rendered_char == '-' {
+                rendered_index += 1;
+                continue;
+            }
+
+            crate::logging::debug(format!(
+                "source-map inverse drift at row {row}, rendered col {rendered_index}: {rendered_char:?} != source offset {source_offset}: {source_char:?}"
+            ));
+            return rendered_index;
+        }
+
+        rendered.len()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -989,6 +1065,15 @@ mod tests {
         assert_eq!(map.offset_at(0, rendered, 19, SourceOffsetBias::End), 13);
         assert_eq!(map.offset_at(1, "ture", 0, SourceOffsetBias::Start), 14);
         assert_eq!(map.offset_at(1, "ture", 3, SourceOffsetBias::End), 17);
+
+        assert_eq!(map.col_at(0, rendered, 0, SourceOffsetBias::Start), 2);
+        assert_eq!(map.col_at(0, rendered, 4, SourceOffsetBias::End), 7);
+        assert_eq!(map.col_at(0, rendered, 5, SourceOffsetBias::Start), 7);
+        assert_eq!(map.col_at(0, rendered, 5, SourceOffsetBias::End), 11);
+        assert_eq!(map.col_at(0, rendered, 6, SourceOffsetBias::Start), 11);
+        assert_eq!(map.col_at(0, rendered, 13, SourceOffsetBias::End), 19);
+        assert_eq!(map.col_at(1, "ture", 14, SourceOffsetBias::Start), 0);
+        assert_eq!(map.col_at(1, "ture", 17, SourceOffsetBias::End), 4);
     }
 
     #[test]

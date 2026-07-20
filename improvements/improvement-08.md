@@ -1,6 +1,6 @@
 # Improvement 08 — TTS reads normalized source text
 
-Status: todo
+Status: done
 
 Follow the "Codex Improvement Tasks" section of AGENTS.md for process rules
 (tests, checks, commit, status update).
