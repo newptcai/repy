@@ -56,6 +56,7 @@ Example
 
 ## Development Guidelines
 - AGENTS.md, GEMINI.md, and CLAUDE.md are the same file; changing one updates the other two automatically.
+- `ROADMAP.md` is the single progress document: feature status, remaining work, and deferred hard problems live there. Small, insulated tasks are recorded as `improvements/improvement-XX.md` files (see "Codex Improvement Tasks" below). Do not create additional to-do/status files.
 - When changing shortcuts or keybindings, always update the in-app help window and README.md in the same change.
 - Commit frequently with small, focused changes.
 - Test-driven development for complex components.
@@ -110,23 +111,32 @@ src/
 ├── main.rs              # Entry point, terminal setup
 ├── cli.rs               # Command-line argument parsing
 ├── config.rs            # Configuration loading/saving (XDG support)
-├── state.rs             # SQLite database for reading state, library, bookmarks
+├── state.rs             # SQLite database for reading state, library, bookmarks, highlights
+├── annotations.rs       # Highlight anchoring (exact/prefix/suffix, normalized text)
+├── statistics.rs        # Reading-session statistics aggregation
+├── sync.rs              # KOReader sync (kosync) client, pull-only
+├── xpointer.rs          # CREngine XPointer parsing for kosync positions
+├── opds.rs              # OPDS 1.2 catalog client (browse, search, download)
+├── css.rs               # CSS parsing for styled classes
 ├── formats/
 │   ├── mod.rs           # Ebook trait, ChapterContent enum, open() factory
 │   ├── epub.rs          # EPUB format backend (epub crate)
+│   ├── fb2.rs           # FictionBook backend (.fb2 / .fb2.zip, quick-xml)
+│   ├── mobi.rs          # MOBI6 backend (mobi crate; AZW/AZW3 best-effort)
 │   ├── text.rs          # Plain-text/Markdown backend (single-chapter files)
 │   └── cbz.rs           # Comic-book archive backend (zip of image pages)
 ├── renderer.rs          # ChapterContent → TextStructure (parse orchestration)
 ├── library.rs           # Library scanning (Calibre metadata.db/OPF + walkdir fallback)
-├── parser.rs            # HTML-to-text conversion, wrapping, hyphenation
+├── parser.rs            # HTML-to-text conversion, wrapping, hyphenation, SourceMap
 ├── models.rs            # Data models (ReadingState, SearchData, WindowType, etc.)
 ├── settings.rs          # User settings structure
 ├── logging.rs           # Debug logging utilities
-├── theme.rs             # Color theme definitions for the TUI
+├── theme.rs             # Built-in color themes for the TUI
 ├── ui/
 │   ├── mod.rs           # UI module root
 │   ├── reader/
-│   │   └── mod.rs       # Main reader state, event handling, and TTS pipeline
+│   │   ├── mod.rs       # Main reader state, event handling, and TTS pipeline
+│   │   └── snapshot_tests.rs  # TUI snapshot tests (snapshots/ committed)
 │   ├── board.rs         # Rendering logic for the reading view
 │   ├── graphics.rs      # Terminal graphics detection (ratatui-image Picker)
 │   └── windows/
@@ -138,8 +148,10 @@ src/
 │       ├── library.rs
 │       ├── links.rs
 │       ├── metadata.rs
+│       ├── opds.rs
 │       ├── search.rs
 │       ├── settings.rs
+│       ├── statistics.rs
 │       └── toc.rs
 └── lib.rs               # Library crate root
 ```
@@ -161,6 +173,8 @@ src/
 - `ChapterContent` enum: `Html | PlainText | Markdown | ImagePage` raw payloads
 - `open(path)` factory picks the backend by extension with a zip-magic fallback
 - `epub.rs`: EPUB backend using the `epub` crate (spine filtering, NCX/nav TOC, CSS-derived styled classes)
+- `fb2.rs`: FictionBook backend — `quick-xml` walk emits top-level sections as HTML chapters; legacy XML encodings, `.fb2.zip`, base64 inline images and covers
+- `mobi.rs`: MOBI6 backend via the `mobi` crate — metadata and HTML through the shared renderer, `recindex` image mapping, cover extraction; AZW/AZW3 best-effort (KF8-only content unsupported)
 - `text.rs`: plain-text/Markdown backend — one chapter per file, title from the first `# heading` (md) or file stem, relative image links resolved against the file's directory
 - `cbz.rs`: comic-book archive backend — natural-sorted image entries become one `ImagePage` chapter each; title/author from `ComicInfo.xml` when present; first page is the cover; readable with `inline_images: shown` on a graphics terminal
 
@@ -199,7 +213,7 @@ src/
 - Modular window implementations (each ~50-400 lines)
 - Consistent interface: render() and event handling
 - Shared `centered_popup_area` helper in `mod.rs`
-- Windows: Help, ToC, Bookmarks, Library, Search, Links, Images, Metadata, Settings, Dictionary
+- Windows: Help, ToC, Bookmarks, Library, Search, Links, Images, Metadata, Settings, Dictionary, OPDS, Statistics
 
 ### Testing Strategy
 - Integration tests in `tests/` directory
@@ -210,7 +224,7 @@ src/
 #### Testing HTML Parsing Issues
 When debugging or fixing HTML parsing bugs (links, footnotes, sections, formatting):
 1. **Create a minimal HTML fixture** in `tests/fixtures/` that reproduces the issue — trim the source HTML to only the essential structure (a few paragraphs + the problematic elements).
-2. **Write unit tests** in `src/parser.rs` `mod tests` that call the internal functions directly (`extract_links`, `extract_sections`, `extract_formatting`, `find_line_by_words`, etc.) with `Html::parse_document(&html)` or `Html::parse_fragment(&html)`.
+2. **Write unit tests** in `src/parser.rs` `mod tests` that call the internal functions directly (`extract_links`, `extract_sections`, `extract_formatting`, etc.) with `Html::parse_document(&html)` or `Html::parse_fragment(&html)`.
 3. **Provide explicit `text_lines`** that match what the parser would produce — this avoids coupling to the full `parse_html` pipeline and keeps tests fast and focused.
 4. See `tests/fixtures/footnotes-class-based.html` and the `test_extract_links_filters_class_based_backlinks` / `test_extract_sections_class_based_footnotes` tests for a reference pattern.
 
@@ -335,8 +349,9 @@ When debugging or fixing HTML parsing bugs (links, footnotes, sections, formatti
 - Custom engine: set `preferred_tts_engine` to a command template with `{}` for text, or with both `{}` and `{output}` for file-based playback
 
 ### Known Limitations
-- Supported formats: EPUB, plain text (.txt), Markdown (.md), comic archives (.cbz); MOBI, AZW, FB2 not implemented yet
+See ROADMAP.md (Phase 7 and "Explicitly skipped") for the authoritative list of remaining work. Summary:
+- Supported formats: EPUB, FictionBook (.fb2/.fb2.zip), MOBI6 (.mobi; AZW/AZW3 best-effort, KF8-only content unsupported), plain text (.txt), Markdown (.md), comic archives (.cbz); PDF is explicitly out of scope
 - Dictionary uses external commands (e.g., `dict`, `sdcv`) and Wikipedia lookup
-- No export functionality
-- Search does not support: history, fuzzy matching, incremental search
-- No custom themes yet (colors hardcoded)
+- Search matches rendered lines, so justification spacing and wrap boundaries can hide multi-word phrases (ROADMAP Phase 7 item 1)
+- Themes are built-in only (cycled at runtime); no user-definable theme files by decision
+- KOReader sync is pull-only; push would require generating crengine-compatible XPointers (ROADMAP Phase 7 item 4)

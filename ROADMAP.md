@@ -1,5 +1,10 @@
 # repy Feature Roadmap — Toward GUI-Reader Parity
 
+> **This is the canonical progress document.** Feature status, remaining work,
+> and deferred hard problems all live here (the old `to-do.md` was merged in
+> and removed). Small, insulated tasks are tracked separately as
+> `improvements/improvement-XX.md` files per the workflow in CLAUDE.md.
+
 ## Context
 
 repy is already strong on the "reading mechanics" side: vim navigation, regex search, visual/cursor mode with motions, context-anchored highlights with comments (`src/annotations.rs`), bookmarks, TTS, jump history, per-book width. To match major GUI readers (Calibre viewer, Thorium, Apple Books, KOReader), the gaps are: in-terminal images, user theming, reading statistics, richer search, real library management, multi-format support, sync, and typography. Several advertised features are also half-wired (CLI `-r`/`-d`, mouse, line numbers, double-spread).
@@ -80,7 +85,7 @@ Phase 6 exposed the structural limit of the current pipeline: semantics (search 
 2. **Whitespace-robust styling recovery** (M) — `match_sequence` in `src/parser.rs` scans a fixed 20-byte `lookahead_limit` for the next token, so a sparsely justified line (two words, wide gap) silently drops its bold/italic coordinates. Short-term: make the lookahead skip whitespace runs before counting. Real fix: migrate the styling matcher onto the item-0 source spans, retiring the matcher family. (The link half of the original item is covered by item 0 step (d).)
 3. **Normalized selection output** (S) — yanked text, dictionary lookups, and TTS input currently include layout artifacts (justification spaces, first-line indents). With item 0, read the clean text directly from `source_map.source_text` via the selected rows' spans instead of collapsing whitespace heuristically.
 4. **KOReader-compatible push sync** (L) — deferred from Phase 5. Requires generating a crengine-compatible XPointer for an arbitrary reading position, i.e. reproducing crengine's DOM normalization closely enough that KOReader resolves it; getting it wrong corrupts the user's KOReader bookmark, so it must ship behind an opt-in setting and be verified against a real KOReader install on the same files.
-5. **Smaller deferred follow-ups** (S-M, independent) — OPDS 2.0 JSON catalogs (Phase 5 note), `inline_images: off`/`always` policy variants (Phase 3 note), more built-in themes (Solarized, Nord, Catppuccin; Phase 1 note), KF8-only AZW3 support if a viable crate appears (Phase 4 note).
+5. **Smaller deferred follow-ups** (S-M, independent) — OPDS 2.0 JSON catalogs (Phase 5 note), `inline_images: off`/`always` policy variants (Phase 3 note), more built-in themes (Solarized, Nord, Catppuccin; Phase 1 note), KF8-only AZW3 support if a viable crate appears (Phase 4 note), platform packages via `cargo-deb`/`cargo-wix` on top of the existing release workflow (from the old to-do.md; CI already builds Linux/Windows/macOS binaries in `.github/workflows/release.yml`).
 
 ## Explicitly skipped (poor TUI fits)
 

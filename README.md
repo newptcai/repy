@@ -111,7 +111,7 @@ Reading state and preferences are persisted per-book.
 such as kitty to see the pages). AZW/AZW3 files are accepted on a best-effort
 basis; KF8-only content may not be readable by the MOBI6 parser.
 
-See [to-do.md](to-do.md) for detailed feature status and roadmap.
+See [ROADMAP.md](ROADMAP.md) for detailed feature status and roadmap.
 
 ## Installation
 
