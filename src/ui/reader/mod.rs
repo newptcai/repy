@@ -417,6 +417,24 @@ impl Default for UiState {
 }
 
 impl UiState {
+    fn replace_search_results(&mut self, results: Vec<SearchResult>) {
+        self.search_matches.clear();
+        for result in &results {
+            for &(row, start, end) in &result.per_row {
+                self.search_matches
+                    .entry(row)
+                    .or_default()
+                    .push((start, end));
+            }
+        }
+        self.search_results = results;
+        self.selected_search_result = 0;
+    }
+
+    fn clear_search_results(&mut self) {
+        self.replace_search_results(Vec::new());
+        self.selected_search_result = 0;
+    }
     pub fn new() -> Self {
         Self {
             active_window: WindowType::Reader,
@@ -653,12 +671,22 @@ pub enum MessageType {
 
 #[derive(Debug, Clone)]
 pub struct SearchResult {
-    pub line: usize,
-    pub ranges: Vec<(usize, usize)>,
     pub preview: String,
     pub content_index: usize,
     pub source_start: usize,
     pub source_end: usize,
+    /// Character-column ranges on every rendered row touched by this hit.
+    pub per_row: Vec<(usize, usize, usize)>,
+}
+
+impl SearchResult {
+    fn first_row(&self) -> usize {
+        self.per_row.first().map(|&(row, _, _)| row).unwrap_or(0)
+    }
+
+    fn last_row(&self) -> usize {
+        self.per_row.last().map(|&(row, _, _)| row).unwrap_or(0)
+    }
 }
 
 pub struct DictionaryResult {
@@ -2591,8 +2619,7 @@ where
                 let mut state = self.state.borrow_mut();
                 state.search_data = Some(SearchData::default());
                 state.ui_state.search_query.clear();
-                state.ui_state.search_results.clear();
-                state.ui_state.search_matches.clear();
+                state.ui_state.clear_search_results();
                 state.ui_state.search_committed = false;
                 state.ui_state.search_origin_row = state.reading_state.row;
                 state.ui_state.search_history = history;
@@ -2886,8 +2913,7 @@ where
                 state.search_data = None;
                 if !state.ui_state.search_committed {
                     state.reading_state.row = state.ui_state.search_origin_row;
-                    state.ui_state.search_results.clear();
-                    state.ui_state.search_matches.clear();
+                    state.ui_state.clear_search_results();
                 }
                 state.ui_state.open_window(WindowType::Reader);
             }
@@ -2912,7 +2938,11 @@ where
                     let next = (state.ui_state.selected_search_result + 1)
                         .min(state.ui_state.search_results.len() - 1);
                     state.ui_state.selected_search_result = next;
-                    let line = state.ui_state.search_results.get(next).map(|r| r.line);
+                    let line = state
+                        .ui_state
+                        .search_results
+                        .get(next)
+                        .map(SearchResult::first_row);
                     if let Some(line) = line {
                         state.reading_state.row = line;
                     }
@@ -2924,7 +2954,11 @@ where
                     let current = state.ui_state.selected_search_result;
                     state.ui_state.selected_search_result = current.saturating_sub(1);
                     let idx = state.ui_state.selected_search_result;
-                    let line = state.ui_state.search_results.get(idx).map(|r| r.line);
+                    let line = state
+                        .ui_state
+                        .search_results
+                        .get(idx)
+                        .map(SearchResult::first_row);
                     if let Some(line) = line {
                         state.reading_state.row = line;
                     }
@@ -2938,7 +2972,11 @@ where
                     let next = (state.ui_state.selected_search_result + 1)
                         .min(state.ui_state.search_results.len() - 1);
                     state.ui_state.selected_search_result = next;
-                    let line = state.ui_state.search_results.get(next).map(|r| r.line);
+                    let line = state
+                        .ui_state
+                        .search_results
+                        .get(next)
+                        .map(SearchResult::first_row);
                     if let Some(line) = line {
                         state.reading_state.row = line;
                     }
@@ -2950,7 +2988,11 @@ where
                     let current = state.ui_state.selected_search_result;
                     state.ui_state.selected_search_result = current.saturating_sub(1);
                     let idx = state.ui_state.selected_search_result;
-                    let line = state.ui_state.search_results.get(idx).map(|r| r.line);
+                    let line = state
+                        .ui_state
+                        .search_results
+                        .get(idx)
+                        .map(SearchResult::first_row);
                     if let Some(line) = line {
                         state.reading_state.row = line;
                     }
@@ -4916,7 +4958,7 @@ where
                 .ui_state
                 .search_results
                 .iter()
-                .map(|result| format!("{}: {}", result.line + 1, result.preview))
+                .map(|result| format!("{}: {}", result.first_row() + 1, result.preview))
                 .collect();
             SearchWindow::render(
                 frame,
@@ -7490,22 +7532,25 @@ where
             }
         };
 
-        let (results, matches_map) = self.scan_search_matches(&regex);
+        let results = self.scan_search_matches(&regex);
 
         let mut state = self.state.borrow_mut();
-        state.ui_state.search_results = results;
-        state.ui_state.search_matches = matches_map;
+        state.ui_state.replace_search_results(results);
         // Start from the first match at or after the pre-search position.
         let origin = state.ui_state.search_origin_row;
         let selected = state
             .ui_state
             .search_results
             .iter()
-            .position(|result| result.line >= origin)
+            .position(|result| result.last_row() >= origin)
             .unwrap_or(0);
         state.ui_state.selected_search_result = selected;
 
-        let line = state.ui_state.search_results.get(selected).map(|r| r.line);
+        let line = state
+            .ui_state
+            .search_results
+            .get(selected)
+            .map(SearchResult::first_row);
         if let Some(line) = line {
             state.reading_state.row = line;
             let total = state.ui_state.search_results.len();
@@ -7522,12 +7567,8 @@ where
 
     /// Scan canonical chapter source for `regex`, returning one result per
     /// source hit and character-column highlight ranges for every touched row.
-    fn scan_search_matches(
-        &self,
-        regex: &Regex,
-    ) -> (Vec<SearchResult>, HashMap<usize, Vec<(usize, usize)>>) {
+    fn scan_search_matches(&self, regex: &Regex) -> Vec<SearchResult> {
         let mut results = Vec::new();
-        let mut matches_map: HashMap<usize, Vec<(usize, usize)>> = HashMap::new();
         for (content_index, chapter) in self.chapter_text_structures.iter().enumerate() {
             let Some(&chapter_start) = self.content_start_rows.get(content_index) else {
                 continue;
@@ -7553,7 +7594,7 @@ where
                 }
                 let first_row = source_map.row_for_offset(source_start);
                 let last_row = source_map.row_for_offset(source_end - 1);
-                let mut first_ranges = Vec::new();
+                let mut per_row = Vec::new();
 
                 for local_row in first_row..=last_row {
                     let Some(&(row_start, row_end)) = source_map.row_spans.get(local_row) else {
@@ -7583,26 +7624,22 @@ where
                         continue;
                     }
                     let range = (start_col, end_col);
-                    if local_row == first_row {
-                        first_ranges.push(range);
-                    }
-                    matches_map
-                        .entry(chapter_start + local_row)
-                        .or_default()
-                        .push(range);
+                    per_row.push((chapter_start + local_row, range.0, range.1));
                 }
 
+                if per_row.is_empty() {
+                    continue;
+                }
                 results.push(SearchResult {
-                    line: chapter_start + first_row,
-                    ranges: first_ranges,
                     preview: Self::search_preview(source_map, source_start, source_end),
                     content_index,
                     source_start,
                     source_end,
+                    per_row,
                 });
             }
         }
-        (results, matches_map)
+        results
     }
 
     fn search_preview(source_map: &SourceMap, start: usize, end: usize) -> String {
@@ -7642,34 +7679,31 @@ where
 
         if query.is_empty() {
             let mut state = self.state.borrow_mut();
-            state.ui_state.search_results.clear();
-            state.ui_state.search_matches.clear();
+            state.ui_state.clear_search_results();
             state.reading_state.row = state.ui_state.search_origin_row;
             return;
         }
 
         let Ok(regex) = Regex::new(&query) else {
             let mut state = self.state.borrow_mut();
-            state.ui_state.search_results.clear();
-            state.ui_state.search_matches.clear();
+            state.ui_state.clear_search_results();
             return;
         };
 
-        let (results, matches_map) = self.scan_search_matches(&regex);
+        let results = self.scan_search_matches(&regex);
         let mut state = self.state.borrow_mut();
-        state.ui_state.search_results = results;
-        state.ui_state.search_matches = matches_map;
+        state.ui_state.replace_search_results(results);
         let origin = state.ui_state.search_origin_row;
         let selected = state
             .ui_state
             .search_results
             .iter()
-            .position(|result| result.line >= origin)
+            .position(|result| result.last_row() >= origin)
             .unwrap_or(0);
         state.ui_state.selected_search_result = selected;
         // Preview the first match; Esc restores the original position.
         if let Some(result) = state.ui_state.search_results.get(selected) {
-            state.reading_state.row = result.line;
+            state.reading_state.row = result.first_row();
         } else {
             state.reading_state.row = origin;
         }
@@ -7711,14 +7745,32 @@ where
                 .set_message("No search results".to_string(), MessageType::Info);
             return;
         }
-        let next =
-            (state.ui_state.selected_search_result + 1) % state.ui_state.search_results.len();
+        let row = state.reading_state.row;
+        let selected = state.ui_state.selected_search_result;
+        let still_on_selected = state.ui_state.search_results[selected]
+            .per_row
+            .iter()
+            .any(|&(hit_row, _, _)| hit_row == row);
+        let next = if still_on_selected {
+            (selected + 1) % state.ui_state.search_results.len()
+        } else {
+            state
+                .ui_state
+                .search_results
+                .iter()
+                .position(|hit| hit.last_row() >= row)
+                .unwrap_or(0)
+        };
         state.ui_state.selected_search_result = next;
         let total = state.ui_state.search_results.len();
         state
             .ui_state
             .set_message(format!("Match {}/{}", next + 1, total), MessageType::Info);
-        let line = state.ui_state.search_results.get(next).map(|r| r.line);
+        let line = state
+            .ui_state
+            .search_results
+            .get(next)
+            .map(SearchResult::first_row);
         if let Some(line) = line {
             state.reading_state.row = line;
         }
@@ -7733,16 +7785,33 @@ where
             return;
         }
         let len = state.ui_state.search_results.len();
-        let prev = if state.ui_state.selected_search_result == 0 {
+        let row = state.reading_state.row;
+        let selected = state.ui_state.selected_search_result;
+        let still_on_selected = state.ui_state.search_results[selected]
+            .per_row
+            .iter()
+            .any(|&(hit_row, _, _)| hit_row == row);
+        let prev = if still_on_selected && selected == 0 {
             len - 1
+        } else if still_on_selected {
+            selected - 1
         } else {
-            state.ui_state.selected_search_result - 1
+            state
+                .ui_state
+                .search_results
+                .iter()
+                .rposition(|hit| hit.first_row() <= row)
+                .unwrap_or(len - 1)
         };
         state.ui_state.selected_search_result = prev;
         state
             .ui_state
             .set_message(format!("Match {}/{}", prev + 1, len), MessageType::Info);
-        let line = state.ui_state.search_results.get(prev).map(|r| r.line);
+        let line = state
+            .ui_state
+            .search_results
+            .get(prev)
+            .map(SearchResult::first_row);
         if let Some(line) = line {
             state.reading_state.row = line;
         }
@@ -7941,7 +8010,7 @@ where
                 .ui_state
                 .search_results
                 .get(state.ui_state.selected_search_result)
-                .map(|result| result.line)
+                .map(SearchResult::first_row)
         };
         if let Some(row) = row {
             self.record_jump_position();
@@ -10477,7 +10546,8 @@ where
 #[cfg(test)]
 mod tests {
     use super::{
-        Reader, TtsChunk, TypographyOptions, WikipediaSearchResponse, WikipediaSummaryResponse,
+        Reader, SearchResult, TtsChunk, TypographyOptions, WikipediaSearchResponse,
+        WikipediaSummaryResponse,
     };
     use crate::config::Config;
     use crate::css::StyledClasses;
@@ -10801,15 +10871,19 @@ mod tests {
     fn source_search_projects_justified_phrase_to_rendered_columns() {
         let chapter = source_selection_fixture();
         let reader = reader_with_source_chapters(vec![chapter.clone()]);
-        let (results, matches) =
-            reader.scan_search_matches(&regex::Regex::new("Alpha beta").unwrap());
+        let results = reader.scan_search_matches(&regex::Regex::new("Alpha beta").unwrap());
 
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].content_index, 0);
         assert_eq!(results[0].source_start, 0);
         assert_eq!(results[0].source_end, "Alpha beta".chars().count());
-        let ranges = &matches[&results[0].line];
-        let line = &chapter.text_lines[results[0].line];
+        let row = results[0].first_row();
+        let ranges: Vec<_> = results[0]
+            .per_row
+            .iter()
+            .filter_map(|&(range_row, start, end)| (range_row == row).then_some((start, end)))
+            .collect();
+        let line = &chapter.text_lines[row];
         let highlighted: String = ranges
             .iter()
             .map(|&(start, end)| {
@@ -10836,28 +10910,119 @@ mod tests {
             .source_map
             .row_for_offset(chapter.source_map.source_text.find("gamma delta").unwrap());
         let reader = reader_with_source_chapters(vec![chapter]);
-        let (results, matches) =
-            reader.scan_search_matches(&regex::Regex::new("gamma delta").unwrap());
+        let results = reader.scan_search_matches(&regex::Regex::new("gamma delta").unwrap());
 
         assert_eq!(results.len(), 1);
-        assert_eq!(results[0].line, first_row);
-        assert!(matches.contains_key(&first_row));
-        assert!(matches.contains_key(&(first_row + 1)));
-        assert_eq!(results[0].ranges, matches[&first_row]);
+        assert_eq!(results[0].first_row(), first_row);
+        assert_eq!(results[0].last_row(), first_row + 1);
+        assert_eq!(results[0].per_row.len(), 2);
         assert!(results[0].preview.contains("gamma delta"));
+        assert!(!results[0].preview.contains("gamma\ndelta"));
+    }
+
+    #[test]
+    fn search_navigation_counts_multi_row_hits_once() {
+        let mut reader = make_test_reader((0..12).map(|n| format!("row {n}")).collect());
+        let hits = vec![
+            SearchResult {
+                preview: "three row hit".into(),
+                content_index: 0,
+                source_start: 0,
+                source_end: 10,
+                per_row: vec![(2, 0, 2), (3, 0, 3), (4, 0, 2)],
+            },
+            SearchResult {
+                preview: "next hit".into(),
+                content_index: 0,
+                source_start: 20,
+                source_end: 24,
+                per_row: vec![(8, 0, 4)],
+            },
+        ];
+        reader
+            .state
+            .borrow_mut()
+            .ui_state
+            .replace_search_results(hits);
+        reader.state.borrow_mut().reading_state.row = 2;
+
+        reader.search_next();
+
+        let state = reader.state.borrow();
+        assert_eq!(state.ui_state.selected_search_result, 1);
+        assert_eq!(state.reading_state.row, 8);
+        assert_eq!(state.ui_state.message.as_deref(), Some("Match 2/2"));
+    }
+
+    #[test]
+    fn search_navigation_distinguishes_hits_with_the_same_anchor_row() {
+        let chapter = tts_fixture("<p>foo foo</p>", 80, TypographyOptions::default());
+        let reader_results = reader_with_source_chapters(vec![chapter])
+            .scan_search_matches(&regex::Regex::new("foo").unwrap());
+        assert_eq!(reader_results.len(), 2);
+        assert_eq!(reader_results[0].first_row(), reader_results[1].first_row());
+
+        let mut reader = make_test_reader(vec!["foo foo".into()]);
+        reader
+            .state
+            .borrow_mut()
+            .ui_state
+            .replace_search_results(reader_results);
+        reader.search_next();
+        assert_eq!(reader.state.borrow().ui_state.selected_search_result, 1);
+        assert_eq!(
+            reader.state.borrow().ui_state.message.as_deref(),
+            Some("Match 2/2")
+        );
+        reader
+            .state
+            .borrow_mut()
+            .ui_state
+            .open_window(crate::models::WindowType::Search);
+        reader.jump_to_selected_search_result();
+        assert_eq!(reader.state.borrow().ui_state.selected_search_result, 1);
+        assert_eq!(
+            reader.state.borrow().ui_state.active_window,
+            crate::models::WindowType::Reader
+        );
+        reader.search_next();
+        assert_eq!(reader.state.borrow().ui_state.selected_search_result, 0);
+    }
+
+    #[test]
+    fn search_next_resynchronizes_after_manual_scroll() {
+        let mut reader = make_test_reader((0..12).map(|n| format!("row {n}")).collect());
+        let hit = |row| SearchResult {
+            preview: format!("hit {row}"),
+            content_index: 0,
+            source_start: row,
+            source_end: row + 1,
+            per_row: vec![(row, 0, 1)],
+        };
+        reader
+            .state
+            .borrow_mut()
+            .ui_state
+            .replace_search_results(vec![hit(1), hit(5), hit(9)]);
+        reader.state.borrow_mut().reading_state.row = 7;
+
+        reader.search_next();
+
+        let state = reader.state.borrow();
+        assert_eq!(state.ui_state.selected_search_result, 2);
+        assert_eq!(state.reading_state.row, 9);
+        assert_eq!(state.ui_state.message.as_deref(), Some("Match 3/3"));
     }
 
     #[test]
     fn source_search_matches_word_split_by_rendered_hyphen() {
         let chapter = source_selection_fixture();
         let reader = reader_with_source_chapters(vec![chapter]);
-        let (results, matches) =
-            reader.scan_search_matches(&regex::Regex::new("characteristically").unwrap());
+        let results = reader.scan_search_matches(&regex::Regex::new("characteristically").unwrap());
 
         assert_eq!(results.len(), 1);
-        assert_eq!(matches.len(), 2);
-        assert!(matches.contains_key(&results[0].line));
-        assert!(matches.contains_key(&(results[0].line + 1)));
+        assert_eq!(results[0].per_row.len(), 2);
+        assert_eq!(results[0].last_row(), results[0].first_row() + 1);
     }
 
     #[test]
@@ -10868,8 +11033,7 @@ mod tests {
             TypographyOptions::default(),
         );
         let reader = reader_with_source_chapters(vec![chapter]);
-        let (results, _) =
-            reader.scan_search_matches(&regex::Regex::new(r"(?i)foo-\d{3}").unwrap());
+        let results = reader.scan_search_matches(&regex::Regex::new(r"(?i)foo-\d{3}").unwrap());
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].preview, "One FOO-123 marker.");
     }
@@ -10878,9 +11042,9 @@ mod tests {
     fn source_search_skips_zero_length_matches() {
         let chapter = tts_fixture("<p>abc x</p>", 80, TypographyOptions::default());
         let reader = reader_with_source_chapters(vec![chapter]);
-        let (results, matches) = reader.scan_search_matches(&regex::Regex::new("x*").unwrap());
+        let results = reader.scan_search_matches(&regex::Regex::new("x*").unwrap());
         assert_eq!(results.len(), 1);
-        assert_eq!(matches.len(), 1);
+        assert_eq!(results[0].per_row.len(), 1);
     }
 
     #[test]
@@ -10888,10 +11052,13 @@ mod tests {
         let chapter = tts_fixture("<p>甲乙 café 丙</p>", 80, TypographyOptions::default());
         let line = chapter.text_lines[0].clone();
         let reader = reader_with_source_chapters(vec![chapter]);
-        let (results, matches) = reader.scan_search_matches(&regex::Regex::new("café").unwrap());
+        let results = reader.scan_search_matches(&regex::Regex::new("café").unwrap());
         let expected_start = line.chars().position(|ch| ch == 'c').unwrap();
         assert_eq!(results.len(), 1);
-        assert_eq!(matches[&0], vec![(expected_start, expected_start + 4)]);
+        assert_eq!(
+            results[0].per_row,
+            vec![(0, expected_start, expected_start + 4)]
+        );
     }
 
     fn read_request_line(stream: TcpStream) -> (TcpStream, String) {

@@ -1,7 +1,7 @@
 //! Integration-style snapshot tests that drive `Reader<TestBackend>` through
 //! synthetic key events and snapshot the rendered 80x24 screen with insta.
 
-use super::{READING_JUMP_MIN_THRESHOLD_ROWS, Reader, SettingItem};
+use super::{READING_JUMP_MIN_THRESHOLD_ROWS, Reader, SearchResult, SettingItem};
 use crate::config::Config;
 use crate::models::ReadingState;
 use crate::settings::{CfgDefaultKeymaps, Settings};
@@ -159,6 +159,24 @@ fn search_highlight_and_match_counter() {
     type_str(&mut reader, "Preface");
     press(&mut reader, KeyCode::Enter);
     press(&mut reader, KeyCode::Enter);
+    insta::assert_snapshot!(reader.terminal.backend());
+}
+
+#[test]
+fn multi_row_search_hit_counter_and_layout() {
+    let mut reader = test_reader();
+    reader
+        .state
+        .borrow_mut()
+        .ui_state
+        .replace_search_results(vec![SearchResult {
+            preview: "multi-row fixture hit".into(),
+            content_index: 0,
+            source_start: 0,
+            source_end: 12,
+            per_row: vec![(0, 0, 3), (1, 0, 3), (2, 0, 3)],
+        }]);
+    reader.draw().expect("failed to draw multi-row search hit");
     insta::assert_snapshot!(reader.terminal.backend());
 }
 

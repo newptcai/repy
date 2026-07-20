@@ -187,13 +187,14 @@ impl Board {
             })
             .collect();
 
-        // The line holding the currently selected search hit gets a distinct
-        // style so n/p navigation is easy to follow.
-        let current_hit_line: Option<usize> = state
+        // Keep the selected hit's exact projected ranges separate so every
+        // touched row is styled, without promoting other hits on that row.
+        let current_hit_ranges = state
             .ui_state
             .search_results
             .get(state.ui_state.selected_search_result)
-            .map(|result| result.line);
+            .map(|result| result.per_row.as_slice())
+            .unwrap_or(&[]);
 
         // Keep annotation markers outside the paragraph that contains the
         // book text. Prepending the marker as a span makes it participate in
@@ -263,7 +264,7 @@ impl Board {
                         .ui_state
                         .search_matches
                         .get(&line_num)
-                        .map(|ranges| ranges.clone())
+                        .cloned()
                         .unwrap_or_default();
                     if let Some(extra) = visual_match_ranges.get(line_num - start_line) {
                         merged.extend(extra.iter().copied());
@@ -276,6 +277,12 @@ impl Board {
                     } else {
                         Some(combined_search_ranges.as_slice())
                     };
+                let current_ranges: Vec<(usize, usize)> = current_hit_ranges
+                    .iter()
+                    .filter_map(|&(row, start, end)| (row == line_num).then_some((start, end)))
+                    .collect();
+                let current_ranges_arg =
+                    (!current_ranges.is_empty()).then_some(current_ranges.as_slice());
 
                 // Check for TTS character-level underline on this line
                 let tts_col_range = state.ui_state.tts_underline_ranges.get(&line_num);
@@ -292,7 +299,7 @@ impl Board {
                             .get(&line_num)
                             .map(|ranges| ranges.as_slice()),
                         search_ranges_arg,
-                        current_hit_line == Some(line_num),
+                        current_ranges_arg,
                         theme,
                     );
                     // Apply underline to the character range within the spans
@@ -309,7 +316,7 @@ impl Board {
                             .get(&line_num)
                             .map(|ranges| ranges.as_slice()),
                         search_ranges_arg,
-                        current_hit_line == Some(line_num),
+                        current_ranges_arg,
                         theme,
                     )
                     .into_iter()
@@ -476,7 +483,7 @@ impl Board {
         formatting: &[InlineStyle],
         highlight_ranges: Option<&[HighlightRange]>,
         search_ranges: Option<&[(usize, usize)]>,
-        is_current_hit: bool,
+        current_search_ranges: Option<&[(usize, usize)]>,
         theme: &Theme,
     ) -> Vec<Span<'_>> {
         if line.is_empty() {
@@ -504,6 +511,12 @@ impl Board {
         }
 
         if let Some(ranges) = search_ranges {
+            for (start, end) in ranges {
+                points.push(*start);
+                points.push(*end);
+            }
+        }
+        if let Some(ranges) = current_search_ranges {
             for (start, end) in ranges {
                 points.push(*start);
                 points.push(*end);
@@ -539,7 +552,12 @@ impl Board {
                     .iter()
                     .any(|(range_start, range_end)| start >= *range_start && end <= *range_end)
             {
-                style = if is_current_hit {
+                let is_current = current_search_ranges.is_some_and(|current| {
+                    current
+                        .iter()
+                        .any(|(range_start, range_end)| start >= *range_start && end <= *range_end)
+                });
+                style = if is_current {
                     style
                         .fg(theme.search_current_fg)
                         .bg(theme.search_current_bg)
@@ -1108,7 +1126,7 @@ mod tests {
             &[],
             Some(&ranges),
             None,
-            false,
+            None,
             &theme,
         );
 
@@ -1140,7 +1158,7 @@ mod tests {
             &[],
             Some(&ranges),
             None,
-            false,
+            None,
             &theme,
         );
 
@@ -1164,7 +1182,7 @@ mod tests {
             &[],
             None,
             Some(&search_ranges),
-            false,
+            None,
             &theme,
         );
         let current = board.build_line_spans(
@@ -1174,7 +1192,7 @@ mod tests {
             &[],
             None,
             Some(&search_ranges),
-            true,
+            Some(&search_ranges),
             &theme,
         );
 
@@ -1189,6 +1207,31 @@ mod tests {
         assert_eq!(normal_hit.style.bg, Some(theme.search_bg));
         assert_eq!(current_hit.style.bg, Some(theme.search_current_bg));
         assert_ne!(normal_hit.style.bg, current_hit.style.bg);
+    }
+
+    #[test]
+    fn current_search_style_applies_only_to_selected_ranges_on_every_row() {
+        let board = Board::new();
+        let theme = Theme::for_color_theme(ColorTheme::Default);
+        let all_ranges = vec![(0, 2), (3, 5)];
+        let selected = vec![(3, 5)];
+
+        for row in 4..7 {
+            let spans = board.build_line_spans(
+                "ab cd",
+                row,
+                Style::default(),
+                &[],
+                None,
+                Some(&all_ranges),
+                Some(&selected),
+                &theme,
+            );
+            let other = spans.iter().find(|span| span.content == "ab").unwrap();
+            let current = spans.iter().find(|span| span.content == "cd").unwrap();
+            assert_eq!(other.style.bg, Some(theme.search_bg));
+            assert_eq!(current.style.bg, Some(theme.search_current_bg));
+        }
     }
 
     #[test]
@@ -1209,7 +1252,7 @@ mod tests {
             &[],
             Some(&ranges),
             None,
-            false,
+            None,
             &theme,
         );
 

@@ -1,6 +1,6 @@
 # Improvement 10 — Multi-row search hits as first-class ranges
 
-Status: todo
+Status: done
 
 Follow the "Codex Improvement Tasks" section of AGENTS.md for process rules
 (tests, checks, commit, status update).
