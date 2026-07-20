@@ -656,6 +656,9 @@ pub struct SearchResult {
     pub line: usize,
     pub ranges: Vec<(usize, usize)>,
     pub preview: String,
+    pub content_index: usize,
+    pub source_start: usize,
+    pub source_end: usize,
 }
 
 pub struct DictionaryResult {
@@ -7517,31 +7520,115 @@ where
         }
     }
 
-    /// Scan all loaded lines for `regex`, returning results and per-line
-    /// byte-range matches.
+    /// Scan canonical chapter source for `regex`, returning one result per
+    /// source hit and character-column highlight ranges for every touched row.
     fn scan_search_matches(
         &self,
         regex: &Regex,
     ) -> (Vec<SearchResult>, HashMap<usize, Vec<(usize, usize)>>) {
         let mut results = Vec::new();
         let mut matches_map: HashMap<usize, Vec<(usize, usize)>> = HashMap::new();
-        if let Some(lines) = self.board.lines() {
-            for (line_index, line) in lines.iter().enumerate() {
-                let ranges: Vec<(usize, usize)> = regex
-                    .find_iter(line)
-                    .map(|mat| (mat.start(), mat.end()))
-                    .collect();
-                if !ranges.is_empty() {
-                    results.push(SearchResult {
-                        line: line_index,
-                        ranges: ranges.clone(),
-                        preview: line.trim().to_string(),
-                    });
-                    matches_map.insert(line_index, ranges);
+        for (content_index, chapter) in self.chapter_text_structures.iter().enumerate() {
+            let Some(&chapter_start) = self.content_start_rows.get(content_index) else {
+                continue;
+            };
+            let source_map = &chapter.source_map;
+            let mut byte_cursor = 0;
+            let mut char_cursor = 0;
+            for mat in regex.find_iter(&source_map.source_text) {
+                char_cursor += source_map.source_text[byte_cursor..mat.start()]
+                    .chars()
+                    .count();
+                let source_start = char_cursor;
+                let source_end = source_start
+                    + source_map.source_text[mat.start()..mat.end()]
+                        .chars()
+                        .count();
+                byte_cursor = mat.end();
+                char_cursor = source_end;
+                // `regex::find_iter` advances after empty matches, but empty
+                // source ranges cannot produce a useful rendered highlight.
+                if mat.is_empty() {
+                    continue;
                 }
+                let first_row = source_map.row_for_offset(source_start);
+                let last_row = source_map.row_for_offset(source_end - 1);
+                let mut first_ranges = Vec::new();
+
+                for local_row in first_row..=last_row {
+                    let Some(&(row_start, row_end)) = source_map.row_spans.get(local_row) else {
+                        continue;
+                    };
+                    let overlap_start = source_start.max(row_start as usize);
+                    let overlap_end = source_end.min(row_end as usize);
+                    if overlap_start >= overlap_end {
+                        continue;
+                    }
+                    let Some(rendered_row) = chapter.text_lines.get(local_row) else {
+                        continue;
+                    };
+                    let start_col = source_map.col_at(
+                        local_row,
+                        rendered_row,
+                        overlap_start,
+                        SourceOffsetBias::Start,
+                    );
+                    let end_col = source_map.col_at(
+                        local_row,
+                        rendered_row,
+                        overlap_end - 1,
+                        SourceOffsetBias::End,
+                    );
+                    if start_col >= end_col {
+                        continue;
+                    }
+                    let range = (start_col, end_col);
+                    if local_row == first_row {
+                        first_ranges.push(range);
+                    }
+                    matches_map
+                        .entry(chapter_start + local_row)
+                        .or_default()
+                        .push(range);
+                }
+
+                results.push(SearchResult {
+                    line: chapter_start + first_row,
+                    ranges: first_ranges,
+                    preview: Self::search_preview(source_map, source_start, source_end),
+                    content_index,
+                    source_start,
+                    source_end,
+                });
             }
         }
         (results, matches_map)
+    }
+
+    fn search_preview(source_map: &SourceMap, start: usize, end: usize) -> String {
+        let chars: Vec<char> = source_map.source_text.chars().collect();
+        let mut preview_start = start.min(chars.len());
+        let mut preview_end = end.min(chars.len());
+        for _ in 0..3 {
+            while preview_start > 0 && chars[preview_start - 1].is_whitespace() {
+                preview_start -= 1;
+            }
+            while preview_start > 0 && !chars[preview_start - 1].is_whitespace() {
+                preview_start -= 1;
+            }
+            while preview_end < chars.len() && chars[preview_end].is_whitespace() {
+                preview_end += 1;
+            }
+            while preview_end < chars.len() && !chars[preview_end].is_whitespace() {
+                preview_end += 1;
+            }
+        }
+        chars[preview_start..preview_end]
+            .iter()
+            .collect::<String>()
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
     }
 
     /// Re-run the search as the query is typed. Invalid (possibly partial)
@@ -10708,6 +10795,103 @@ mod tests {
             reader.get_selected_source_text(start, global_end),
             "ending.\nSecond"
         );
+    }
+
+    #[test]
+    fn source_search_projects_justified_phrase_to_rendered_columns() {
+        let chapter = source_selection_fixture();
+        let reader = reader_with_source_chapters(vec![chapter.clone()]);
+        let (results, matches) =
+            reader.scan_search_matches(&regex::Regex::new("Alpha beta").unwrap());
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].content_index, 0);
+        assert_eq!(results[0].source_start, 0);
+        assert_eq!(results[0].source_end, "Alpha beta".chars().count());
+        let ranges = &matches[&results[0].line];
+        let line = &chapter.text_lines[results[0].line];
+        let highlighted: String = ranges
+            .iter()
+            .map(|&(start, end)| {
+                line.chars()
+                    .skip(start)
+                    .take(end - start)
+                    .collect::<String>()
+            })
+            .collect();
+        assert_eq!(
+            highlighted.split_whitespace().collect::<Vec<_>>().join(" "),
+            "Alpha beta"
+        );
+        assert!(
+            highlighted.contains("  "),
+            "expected justified gap: {highlighted:?}"
+        );
+    }
+
+    #[test]
+    fn source_search_matches_across_wrap_once_and_highlights_both_rows() {
+        let chapter = source_selection_fixture();
+        let first_row = chapter
+            .source_map
+            .row_for_offset(chapter.source_map.source_text.find("gamma delta").unwrap());
+        let reader = reader_with_source_chapters(vec![chapter]);
+        let (results, matches) =
+            reader.scan_search_matches(&regex::Regex::new("gamma delta").unwrap());
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].line, first_row);
+        assert!(matches.contains_key(&first_row));
+        assert!(matches.contains_key(&(first_row + 1)));
+        assert_eq!(results[0].ranges, matches[&first_row]);
+        assert!(results[0].preview.contains("gamma delta"));
+    }
+
+    #[test]
+    fn source_search_matches_word_split_by_rendered_hyphen() {
+        let chapter = source_selection_fixture();
+        let reader = reader_with_source_chapters(vec![chapter]);
+        let (results, matches) =
+            reader.scan_search_matches(&regex::Regex::new("characteristically").unwrap());
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(matches.len(), 2);
+        assert!(matches.contains_key(&results[0].line));
+        assert!(matches.contains_key(&(results[0].line + 1)));
+    }
+
+    #[test]
+    fn source_search_preserves_regex_and_case_insensitive_matching() {
+        let chapter = tts_fixture(
+            "<p>One FOO-123 marker.</p>",
+            80,
+            TypographyOptions::default(),
+        );
+        let reader = reader_with_source_chapters(vec![chapter]);
+        let (results, _) =
+            reader.scan_search_matches(&regex::Regex::new(r"(?i)foo-\d{3}").unwrap());
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].preview, "One FOO-123 marker.");
+    }
+
+    #[test]
+    fn source_search_skips_zero_length_matches() {
+        let chapter = tts_fixture("<p>abc x</p>", 80, TypographyOptions::default());
+        let reader = reader_with_source_chapters(vec![chapter]);
+        let (results, matches) = reader.scan_search_matches(&regex::Regex::new("x*").unwrap());
+        assert_eq!(results.len(), 1);
+        assert_eq!(matches.len(), 1);
+    }
+
+    #[test]
+    fn source_search_uses_character_columns_for_non_ascii_text() {
+        let chapter = tts_fixture("<p>甲乙 café 丙</p>", 80, TypographyOptions::default());
+        let line = chapter.text_lines[0].clone();
+        let reader = reader_with_source_chapters(vec![chapter]);
+        let (results, matches) = reader.scan_search_matches(&regex::Regex::new("café").unwrap());
+        let expected_start = line.chars().position(|ch| ch == 'c').unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(matches[&0], vec![(expected_start, expected_start + 4)]);
     }
 
     fn read_request_line(stream: TcpStream) -> (TcpStream, String) {

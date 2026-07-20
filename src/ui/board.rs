@@ -149,7 +149,7 @@ impl Board {
         let cursor_pos = state.ui_state.visual_cursor;
         let formatting = &text_structure.formatting;
 
-        // Build per-line byte-range lists that overlay the visual-mode
+        // Build per-line character-range lists that overlay the visual-mode
         // `/`-search matches on top of the existing reader-mode search matches.
         // Visual-mode matches are stored in char coordinates and may span
         // multiple lines, so we slice them down to each visible line.
@@ -505,8 +505,8 @@ impl Board {
 
         if let Some(ranges) = search_ranges {
             for (start, end) in ranges {
-                points.push(byte_to_char_col(line, *start));
-                points.push(byte_to_char_col(line, *end));
+                points.push(*start);
+                points.push(*end);
             }
         }
 
@@ -535,11 +535,9 @@ impl Board {
             }
 
             if let Some(ranges) = search_ranges
-                && ranges.iter().any(|(range_start, range_end)| {
-                    let range_start = byte_to_char_col(line, *range_start);
-                    let range_end = byte_to_char_col(line, *range_end);
-                    start >= range_start && end <= range_end
-                })
+                && ranges
+                    .iter()
+                    .any(|(range_start, range_end)| start >= *range_start && end <= *range_end)
             {
                 style = if is_current_hit {
                     style
@@ -908,12 +906,6 @@ impl Board {
         let idx = row.min(self.char_prefix_sums.len().saturating_sub(1));
         self.char_prefix_sums.get(idx).copied().unwrap_or(0)
     }
-}
-
-fn byte_to_char_col(line: &str, byte_idx: usize) -> usize {
-    line.char_indices()
-        .take_while(|(idx, _)| *idx < byte_idx)
-        .count()
 }
 
 fn char_col_to_byte(line: &str, char_col: usize) -> usize {

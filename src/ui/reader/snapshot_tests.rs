@@ -153,6 +153,16 @@ fn search_flow() {
 }
 
 #[test]
+fn search_highlight_and_match_counter() {
+    let mut reader = test_reader();
+    press_char(&mut reader, '/');
+    type_str(&mut reader, "Preface");
+    press(&mut reader, KeyCode::Enter);
+    press(&mut reader, KeyCode::Enter);
+    insta::assert_snapshot!(reader.terminal.backend());
+}
+
+#[test]
 fn internal_link_preview() {
     let mut reader = test_reader();
     press_char(&mut reader, '/');
