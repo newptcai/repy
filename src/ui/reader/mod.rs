@@ -29,7 +29,8 @@ use crate::logging;
 use crate::models::{
     BookIdentity, BookMetadata, CHAPTER_BREAK_MARKER, Direction as AppDirection, Highlight,
     HighlightColor, HighlightRange, LibraryEntry, LibraryItem, LibrarySortMode, LinkEntry,
-    ReadingState, ReadingStatistics, ScannedBook, SearchData, TextStructure, TocEntry, WindowType,
+    ReadingState, ReadingStatistics, ScannedBook, SearchData, SourceMap, SourceOffsetBias,
+    TextStructure, TocEntry, WindowType,
 };
 use crate::opds;
 use crate::parser::TypographyOptions;
@@ -7164,6 +7165,98 @@ where
         Some((content_index, source_map.offset_for_row(local_row)))
     }
 
+    /// Translate an inclusive rendered selection endpoint into a chapter-local
+    /// source offset. End endpoints are returned as exclusive slice bounds.
+    fn source_endpoint_for_position(
+        &self,
+        position: (usize, usize),
+        bias: SourceOffsetBias,
+    ) -> Option<(usize, usize)> {
+        let (row, col) = position;
+        let content_index = self.content_index_for_row(row)?;
+        let chapter_start = *self.content_start_rows.get(content_index)?;
+        let chapter = self.chapter_text_structures.get(content_index)?;
+        let local_row = row.saturating_sub(chapter_start);
+        let rendered_row = chapter.text_lines.get(local_row)?;
+        let offset = chapter
+            .source_map
+            .offset_at(local_row, rendered_row, col, bias);
+
+        if bias == SourceOffsetBias::End {
+            let span_end = chapter
+                .source_map
+                .row_spans
+                .get(local_row)
+                .map_or(chapter.source_map.source_len as usize, |&(_, end)| {
+                    end as usize
+                });
+            Some((content_index, offset.saturating_add(1).min(span_end)))
+        } else {
+            Some((content_index, offset))
+        }
+    }
+
+    fn source_text_slice(source_map: &SourceMap, start: usize, end: usize) -> &str {
+        let source_len = source_map.source_len as usize;
+        let start = start.min(source_len);
+        let end = end.clamp(start, source_len);
+        let byte_at = |offset: usize| {
+            source_map
+                .source_text
+                .char_indices()
+                .nth(offset)
+                .map_or(source_map.source_text.len(), |(byte, _)| byte)
+        };
+        &source_map.source_text[byte_at(start)..byte_at(end)]
+    }
+
+    /// Extract selected text from canonical chapter source rather than the
+    /// wrapped display grid. Cross-chapter selections use one newline per
+    /// chapter boundary.
+    fn get_selected_source_text(&self, start: (usize, usize), end: (usize, usize)) -> String {
+        let (start, end) = if start <= end {
+            (start, end)
+        } else {
+            (end, start)
+        };
+        let Some((start_index, start_offset)) =
+            self.source_endpoint_for_position(start, SourceOffsetBias::Start)
+        else {
+            return String::new();
+        };
+        let Some((end_index, end_offset)) =
+            self.source_endpoint_for_position(end, SourceOffsetBias::End)
+        else {
+            return String::new();
+        };
+        if start_index > end_index {
+            return String::new();
+        }
+
+        if start_index == end_index {
+            let source_map = &self.chapter_text_structures[start_index].source_map;
+            return Self::source_text_slice(source_map, start_offset, end_offset).to_string();
+        }
+
+        (start_index..=end_index)
+            .map(|content_index| {
+                let source_map = &self.chapter_text_structures[content_index].source_map;
+                let chapter_start = if content_index == start_index {
+                    start_offset
+                } else {
+                    0
+                };
+                let chapter_end = if content_index == end_index {
+                    end_offset
+                } else {
+                    source_map.source_len as usize
+                };
+                Self::source_text_slice(source_map, chapter_start, chapter_end)
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
     /// Restore a persisted position using canonical source coordinates first,
     /// followed by the downgrade-compatible legacy fields.
     fn restore_row(&self, saved: &ReadingState, current_textwidth: usize) -> usize {
@@ -8806,7 +8899,7 @@ where
             }
         };
 
-        let selected_text = self.board.get_selected_text_range(anchor, cursor);
+        let selected_text = self.get_selected_source_text(anchor, cursor);
         if !selected_text.is_empty() {
             let copied = self.set_clipboard_text(selected_text)?;
             let ui_state = &mut self.state.borrow_mut().ui_state;
@@ -8931,7 +9024,7 @@ where
             }
         };
 
-        let selected_text = self.board.get_selected_text_range(anchor, cursor);
+        let selected_text = self.get_selected_source_text(anchor, cursor);
         let word = selected_text.trim().to_string();
         if word.is_empty() {
             self.state
@@ -10280,8 +10373,12 @@ mod tests {
         Reader, TtsChunk, TypographyOptions, WikipediaSearchResponse, WikipediaSummaryResponse,
     };
     use crate::config::Config;
-    use crate::models::{LibraryItem, LibrarySortMode, ScannedBook, TextStructure, TocEntry};
-    use crate::settings::{CfgDefaultKeymaps, Settings};
+    use crate::css::StyledClasses;
+    use crate::models::{
+        LibraryItem, LibrarySortMode, ScannedBook, SourceOffsetBias, TextStructure, TocEntry,
+    };
+    use crate::parser::parse_html_with_styles_and_typography;
+    use crate::settings::{CfgDefaultKeymaps, LineSpacing, ParagraphStyle, Settings};
     use crate::state::State;
     use crate::ui::board::Board;
     use crate::ui::reader::{ApplicationState, MessageType};
@@ -10358,6 +10455,226 @@ mod tests {
             kosync_pull_rx: None,
             kosync_pull_is_manual: false,
         }
+    }
+
+    fn source_selection_fixture() -> TextStructure {
+        parse_html_with_styles_and_typography(
+            include_str!("../../../tests/fixtures/source-map-selection.html"),
+            Some(20),
+            None,
+            0,
+            &StyledClasses::default(),
+            None,
+            TypographyOptions {
+                paragraph_style: ParagraphStyle::Indented,
+                justify: true,
+                ..Default::default()
+            },
+        )
+        .unwrap()
+    }
+
+    fn reader_with_source_chapters(chapters: Vec<TextStructure>) -> Reader {
+        let mut content_start_rows = Vec::with_capacity(chapters.len());
+        let mut text_lines = Vec::new();
+        for chapter in &chapters {
+            content_start_rows.push(text_lines.len());
+            text_lines.extend(chapter.text_lines.iter().cloned());
+        }
+        let mut reader = make_test_reader(text_lines);
+        reader.content_start_rows = content_start_rows;
+        reader.chapter_text_structures = chapters;
+        reader
+    }
+
+    fn rendered_word_position(
+        chapter: &TextStructure,
+        needle: &str,
+    ) -> ((usize, usize), (usize, usize)) {
+        chapter
+            .text_lines
+            .iter()
+            .enumerate()
+            .find_map(|(row, line)| {
+                line.find(needle).map(|byte| {
+                    let start = line[..byte].chars().count();
+                    let end = start + needle.chars().count() - 1;
+                    ((row, start), (row, end))
+                })
+            })
+            .unwrap_or_else(|| panic!("{needle:?} not found in {:?}", chapter.text_lines))
+    }
+
+    #[test]
+    fn selected_source_text_collapses_justified_gap() {
+        let chapter = source_selection_fixture();
+        let (start, _) = rendered_word_position(&chapter, "Alpha");
+        let (_, end) = rendered_word_position(&chapter, "gamma");
+        assert_eq!(start.0, end.0, "fixture must keep phrase on one row");
+        let rendered_phrase: String = chapter.text_lines[start.0]
+            .chars()
+            .skip(start.1)
+            .take(end.1 - start.1 + 1)
+            .collect();
+        assert!(
+            rendered_phrase.contains("  "),
+            "fixture must justify a gap: {rendered_phrase:?}"
+        );
+
+        let reader = reader_with_source_chapters(vec![chapter]);
+        assert_eq!(
+            reader.get_selected_source_text(start, end),
+            "Alpha beta gamma"
+        );
+    }
+
+    #[test]
+    fn selected_source_text_removes_wrap_hyphen_and_newline() {
+        let chapter = source_selection_fixture();
+        let row = chapter
+            .text_lines
+            .iter()
+            .position(|line| line.trim_end().ends_with('-'))
+            .unwrap_or_else(|| panic!("fixture did not hyphenate: {:?}", chapter.text_lines));
+        let line = &chapter.text_lines[row];
+        let left = line
+            .split_whitespace()
+            .last()
+            .unwrap()
+            .trim_end_matches('-');
+        let right = chapter.text_lines[row + 1]
+            .split_whitespace()
+            .next()
+            .unwrap();
+        assert_eq!(format!("{left}{right}"), "characteristically");
+        let start_col = line
+            .char_indices()
+            .find(|(byte, _)| line[*byte..].starts_with(left))
+            .map(|(byte, _)| line[..byte].chars().count())
+            .unwrap();
+        let end_col = right.chars().count() - 1;
+
+        let reader = reader_with_source_chapters(vec![chapter]);
+        assert_eq!(
+            reader.get_selected_source_text((row, start_col), (row + 1, end_col)),
+            "characteristically"
+        );
+    }
+
+    #[test]
+    fn selected_source_text_excludes_first_line_indent() {
+        let chapter = source_selection_fixture();
+        let (_, alpha_end) = rendered_word_position(&chapter, "Alpha");
+        assert!(chapter.text_lines[alpha_end.0].starts_with("  Alpha"));
+
+        let reader = reader_with_source_chapters(vec![chapter]);
+        assert_eq!(
+            reader.get_selected_source_text((alpha_end.0, 0), alpha_end),
+            "Alpha"
+        );
+    }
+
+    #[test]
+    fn selected_source_text_maps_exact_single_word_endpoints() {
+        let chapter = source_selection_fixture();
+        let (start, end) = rendered_word_position(&chapter, "beta");
+        let rendered = &chapter.text_lines[start.0];
+        let source_start = chapter.source_map.source_text.find("beta").unwrap();
+        assert_eq!(
+            chapter
+                .source_map
+                .offset_at(start.0, rendered, start.1, SourceOffsetBias::Start),
+            source_start
+        );
+        assert_eq!(
+            chapter
+                .source_map
+                .offset_at(end.0, rendered, end.1, SourceOffsetBias::End),
+            source_start + "beta".chars().count() - 1
+        );
+
+        let reader = reader_with_source_chapters(vec![chapter]);
+        assert_eq!(reader.get_selected_source_text(start, end), "beta");
+    }
+
+    #[test]
+    fn selected_source_text_skips_typography_spacing_row() {
+        let chapter = parse_html_with_styles_and_typography(
+            include_str!("../../../tests/fixtures/source-map-selection.html"),
+            Some(20),
+            None,
+            0,
+            &StyledClasses::default(),
+            None,
+            TypographyOptions {
+                paragraph_style: ParagraphStyle::Indented,
+                line_spacing: LineSpacing::Double,
+                justify: true,
+            },
+        )
+        .unwrap();
+        let (start, _) = rendered_word_position(&chapter, "Alpha");
+        let spacing_row = chapter
+            .typography_spacing_rows
+            .iter()
+            .copied()
+            .filter(|&row| row > start.0)
+            .min()
+            .unwrap();
+        assert_eq!(
+            chapter.source_map.row_spans[spacing_row].0,
+            chapter.source_map.row_spans[spacing_row].1
+        );
+
+        let reader = reader_with_source_chapters(vec![chapter]);
+        assert_eq!(
+            reader.get_selected_source_text(start, (spacing_row, 0)),
+            "Alpha beta gamma"
+        );
+    }
+
+    #[test]
+    fn selected_source_text_joins_chapters_with_one_newline() {
+        let mut first = parse_html_with_styles_and_typography(
+            "<p>First chapter ending.</p>",
+            Some(40),
+            None,
+            0,
+            &StyledClasses::default(),
+            None,
+            TypographyOptions {
+                paragraph_style: ParagraphStyle::Indented,
+                justify: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let (start, _) = rendered_word_position(&first, "ending.");
+        let break_lines = crate::renderer::build_chapter_break(8, first.text_lines.len());
+        first.text_lines.extend(break_lines);
+        let second = parse_html_with_styles_and_typography(
+            "<p>Second chapter opening.</p>",
+            Some(40),
+            None,
+            first.text_lines.len(),
+            &StyledClasses::default(),
+            None,
+            TypographyOptions {
+                paragraph_style: ParagraphStyle::Indented,
+                justify: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let (_, end) = rendered_word_position(&second, "Second");
+        let second_start = first.text_lines.len();
+        let global_end = (second_start + end.0, end.1);
+
+        let reader = reader_with_source_chapters(vec![first, second]);
+        assert_eq!(
+            reader.get_selected_source_text(start, global_end),
+            "ending.\nSecond"
+        );
     }
 
     fn read_request_line(stream: TcpStream) -> (TcpStream, String) {

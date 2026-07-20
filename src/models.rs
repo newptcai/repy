@@ -437,6 +437,16 @@ pub struct SourceMap {
     pub normalization_version: i64,
 }
 
+/// How a rendered selection endpoint is projected when it lands on a
+/// layout-only character with no exact source character.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SourceOffsetBias {
+    /// Start endpoints advance to the next source character.
+    Start,
+    /// Inclusive end endpoints retreat to the preceding source character.
+    End,
+}
+
 impl SourceMap {
     /// Return the source offset at the start of `row`. Rows beyond the mapped
     /// parser output (for example, chapter-break padding) clamp to source end.
@@ -474,6 +484,107 @@ impl SourceMap {
                 || candidate.min(self.row_spans.len().saturating_sub(1)),
                 |(row, _)| row,
             )
+    }
+
+    /// Project a character column in `rendered_row` into this row's source
+    /// span. Offsets are character offsets, not UTF-8 byte offsets.
+    ///
+    /// `SourceOffsetBias::End` returns the source character corresponding to
+    /// an inclusive rendered endpoint. Callers should add one (and clamp to
+    /// the row span's end) before using it as an exclusive slice bound.
+    pub fn offset_at(
+        &self,
+        row: usize,
+        rendered_row: &str,
+        col: usize,
+        bias: SourceOffsetBias,
+    ) -> usize {
+        let Some(&(span_start, span_end)) = self.row_spans.get(row) else {
+            return self.source_len as usize;
+        };
+        let span_start = span_start as usize;
+        let span_end = (span_end as usize).min(self.source_len as usize);
+        if span_start >= span_end {
+            return span_start.min(self.source_len as usize);
+        }
+
+        let rendered: Vec<char> = rendered_row.chars().collect();
+        let source: Vec<char> = self
+            .source_text
+            .chars()
+            .skip(span_start)
+            .take(span_end - span_start)
+            .collect();
+        let mut rendered_index = 0usize;
+        let mut source_index = 0usize;
+        let mut previous_source = None;
+
+        while rendered_index < rendered.len() && source_index < source.len() {
+            let rendered_char = rendered[rendered_index];
+            let source_char = source[source_index];
+
+            if rendered_char.is_whitespace() && source_char.is_whitespace() {
+                let run_start = rendered_index;
+                while rendered
+                    .get(rendered_index)
+                    .is_some_and(|ch| ch.is_whitespace())
+                {
+                    rendered_index += 1;
+                }
+                if col < rendered_index {
+                    return if bias == SourceOffsetBias::Start && col > run_start {
+                        (span_start + source_index + 1).min(span_end)
+                    } else {
+                        span_start + source_index
+                    };
+                }
+                previous_source = Some(span_start + source_index);
+                source_index += 1;
+                continue;
+            }
+
+            if rendered_char == source_char {
+                if rendered_index == col {
+                    return span_start + source_index;
+                }
+                previous_source = Some(span_start + source_index);
+                rendered_index += 1;
+                source_index += 1;
+                continue;
+            }
+
+            if rendered_char.is_whitespace() || rendered_char == '-' {
+                if rendered_index == col {
+                    return match bias {
+                        SourceOffsetBias::Start => span_start + source_index,
+                        SourceOffsetBias::End => previous_source.unwrap_or(span_start),
+                    };
+                }
+                rendered_index += 1;
+                continue;
+            }
+
+            crate::logging::debug(format!(
+                "source-map drift at row {row}, rendered col {rendered_index}: {rendered_char:?} != source offset {}: {source_char:?}",
+                span_start + source_index
+            ));
+            return match bias {
+                SourceOffsetBias::Start => span_start + source_index,
+                SourceOffsetBias::End => previous_source.unwrap_or(span_start),
+            };
+        }
+
+        if col < rendered.len() {
+            return match bias {
+                SourceOffsetBias::Start => span_end,
+                SourceOffsetBias::End => previous_source.unwrap_or(span_start),
+            };
+        }
+
+        match bias {
+            SourceOffsetBias::Start => span_end,
+            SourceOffsetBias::End => previous_source.unwrap_or_else(|| span_end.saturating_sub(1)),
+        }
     }
 }
 
@@ -850,6 +961,48 @@ mod tests {
         assert_eq!(text_structure.formatting[0].n_letters, 5);
         assert_eq!(text_structure.links.len(), 1);
         assert_eq!(text_structure.links[0].url, "https://example.com");
+    }
+
+    #[test]
+    fn source_map_offset_at_absorbs_rendered_layout_artifacts() {
+        let map = SourceMap {
+            row_spans: vec![(0, 14), (14, 18)],
+            source_len: 18,
+            source_text: "alpha beta fixture".to_string(),
+            normalization_version: 1,
+        };
+        let rendered = "  alpha    beta fix-";
+
+        assert_eq!(map.offset_at(0, rendered, 0, SourceOffsetBias::Start), 0);
+        assert_eq!(map.offset_at(0, rendered, 2, SourceOffsetBias::Start), 0);
+        assert_eq!(map.offset_at(0, rendered, 6, SourceOffsetBias::End), 4);
+
+        // The first visible gap column maps to the real source space. Extra
+        // justification columns round forward/back according to endpoint use.
+        assert_eq!(map.offset_at(0, rendered, 7, SourceOffsetBias::Start), 5);
+        assert_eq!(map.offset_at(0, rendered, 8, SourceOffsetBias::Start), 6);
+        assert_eq!(map.offset_at(0, rendered, 10, SourceOffsetBias::End), 5);
+
+        assert_eq!(map.offset_at(0, rendered, 11, SourceOffsetBias::Start), 6);
+        assert_eq!(map.offset_at(0, rendered, 14, SourceOffsetBias::End), 9);
+        assert_eq!(map.offset_at(0, rendered, 19, SourceOffsetBias::Start), 14);
+        assert_eq!(map.offset_at(0, rendered, 19, SourceOffsetBias::End), 13);
+        assert_eq!(map.offset_at(1, "ture", 0, SourceOffsetBias::Start), 14);
+        assert_eq!(map.offset_at(1, "ture", 3, SourceOffsetBias::End), 17);
+    }
+
+    #[test]
+    fn source_map_offset_at_logs_drift_and_clamps_defensively() {
+        let map = SourceMap {
+            row_spans: vec![(0, 3)],
+            source_len: 3,
+            source_text: "abc".to_string(),
+            normalization_version: 1,
+        };
+
+        assert_eq!(map.offset_at(0, "axc", 1, SourceOffsetBias::Start), 1);
+        assert_eq!(map.offset_at(0, "axc", 1, SourceOffsetBias::End), 0);
+        assert_eq!(map.offset_at(9, "anything", 0, SourceOffsetBias::Start), 3);
     }
 
     #[test]

@@ -1,6 +1,6 @@
 # Improvement 07 — Clean selection text via SourceMap (yank + dictionary)
 
-Status: todo
+Status: done
 
 Follow the "Codex Improvement Tasks" section of AGENTS.md for process rules
 (tests, checks, commit, status update).
